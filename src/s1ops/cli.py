@@ -66,7 +66,7 @@ from s1ops.ledger.journal import (
 from s1ops.lint.lint import audit_probe_records, format_text, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
-from s1ops.monitor.backends import HttpSystemOneBackend
+from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
 from s1ops.monitor.runner import DeterministicMockBackend, check_reservation, run_batch
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
 
@@ -675,6 +675,9 @@ def _cmd_drift(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+_DEFAULT_MODEL = {"mock": "jev-1.13.0", "systemone": "jev-1.13.0", "openai": "gpt-6-luna"}
+
+
 def _probe_backend(args: argparse.Namespace):
     if args.backend == "mock":
         return DeterministicMockBackend(served_model=args.served_model or args.model)
@@ -683,7 +686,8 @@ def _probe_backend(args: argparse.Namespace):
     if args.usd_per_input_token is None:
         raise CliError(f"--backend {args.backend} needs --usd-per-input-token: the API reports tokens, not dollars")
     try:
-        return HttpSystemOneBackend(
+        live = HttpSystemOneBackend if args.backend == "systemone" else OpenAIDecisionsBackend
+        return live(
             usd_per_input_token=args.usd_per_input_token,
             base_url=args.base_url,
             timeout=args.timeout,
@@ -740,6 +744,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens)
 
     states = _load_jsonl_dicts(Path(args.states))
+    if args.model is None:
+        args.model = _DEFAULT_MODEL[args.backend]
     backend = _probe_backend(args)
     out_path = Path(args.output)
     ledger_path = Path(args.ledger)
@@ -1027,11 +1033,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_prb.add_argument("-o", "--output", required=True, help="probe records JSONL to write")
     p_prb.add_argument("--ledger", required=True, help="budget journal; created if absent")
     p_prb.add_argument("--cap-usd", type=float, default=1.00, help="hard spend cap; the run stops before a call whose worst-case cost would exceed it")
-    p_prb.add_argument("--model", default="jev-1.13.0", help="model_requested sent to the backend")
-    p_prb.add_argument("--backend", choices=["mock", "systemone"], default="mock", help="mock: offline deterministic answers; systemone: live POST /v1/systemone (needs the typesafe extra and TYPESAFE_API_KEY)")
+    p_prb.add_argument("--model", default=None, help="model_requested sent to the backend (default: jev-1.13.0; gpt-6-luna for --backend openai)")
+    p_prb.add_argument("--backend", choices=["mock", "systemone", "openai"], default="mock", help="mock: offline deterministic answers; systemone: live POST /v1/systemone (typesafe extra, TYPESAFE_API_KEY); openai: live POST /v1/decisions (openai extra, OPENAI_API_KEY)")
     p_prb.add_argument("--served-model", default=None, help="model_served the mock backend reports (defaults to --model); set it differently to simulate a silent upgrade")
     p_prb.add_argument("--usd-per-input-token", type=float, default=None, help="price per billable input token; required for a live backend, which reports tokens, not dollars")
-    p_prb.add_argument("--base-url", default=None, help="live API root (defaults to TYPESAFE_BASE_URL, then the SDK default)")
+    p_prb.add_argument("--base-url", default=None, help="live API root (defaults to TYPESAFE_BASE_URL or OPENAI_BASE_URL, then the SDK default)")
     p_prb.add_argument("--timeout", type=float, default=None, help="per-request timeout in seconds (defaults to the SDK's)")
     p_prb.add_argument("--max-retries", type=int, default=2, help="retries after a timeout, connection error, 408, 429 or 5xx; each attempt reserves and settles on its own")
     p_prb.add_argument("--worst-usd-per-token", type=float, default=2e-6, help="price used for each attempt's worst-case reservation")

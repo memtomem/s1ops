@@ -57,10 +57,15 @@
     - 타임아웃·연결 오류·408·429·5xx는 `--max-retries`까지 재시도, `Retry-After`/`retry-after-ms` 우선, 60초 초과 요청이면 재시도 중단. 최종 실패는 `model_served: null` + `error_code` 레코드
     - `run_batch`의 `min(측정, 예약)` 클램프 제거. `Ledger.settle`은 초과를 기록만 하고 다음 `reserve`에서 멈추므로, `run_batch`가 정산 직후 `ledger.overrun`을 확인해 그 레코드를 내보낸 뒤 `LedgerUnusable`
     - 레코드는 `on_record`로 즉시 기록·flush: 중간 정지 시 이미 비용을 낸 응답이 남음. `-o`가 원장·lock·입력과 같은 파일(심볼릭·하드링크·대소문자 무시 FS)이면 inode 비교로 거부
-  - [ ] **`OpenAIDecisionsBackend`** (후속 PR). 공식 가이드(developers.openai.com/api/docs/guides/decisions, 2026-10-06 public beta)가 저장소 가정과 다름:
-    - 요청 `input`(not `state`), `questions` 배열(1–400), `score`(`levels`: `label`+`description`, 2–10개) 지원 → `to_openai_decision`·`parse_wire_question`에 score 추가 필요
-    - 응답 `probabilities`는 `[{value, probability}]` 배열, predicate 답은 `probability`, `refusal` 답 타입 존재; usage는 `input_tokens`(+ 캐시 세부), 캐시 쓰기 과금·적중 할인이 있어 단일 단가로는 측정 비용이 근사
-    - **응답에 served model 필드가 있는지 문서에서 확인 못함** → 실제 응답 1건으로 확인한 뒤 시작. 없으면 무통보 모델 교체 감지가 불가
+  - [x] **`OpenAIDecisionsBackend`** (2026-10-25, 브랜치 `feat/openai-decisions-backend`, `s1 probe --backend openai`):
+    - 공식 SDK `openai`(extra `openai>=3.32,<4`: `decisions.create`는 3.26.0부터, `prompt_cache_options`는 3.32.0부터, 응답 필드는 3.26.0 이후 동일)를 SDK 재시도 없이 감쌈. SDK가 응답을 기본으로 검증하지 않으므로 `with_raw_response`로 원시 JSON을 받아 직접 검증
+    - served model: API reference와 SDK 타입 모두 `Decision.model: str "The model used."` — 원래 막혀 있던 조건은 문서로 해결. 예시 값이 별칭 `gpt-6-luna`라 실제로 스냅샷 이름을 주는지는 미확인(아래)
+    - prompt caching은 기본 켜짐(캐시 쓰기 과금, 적중 할인) → `prompt_cache_options={"mode": "explicit"}`에 breakpoint 없음으로 끔(문서: "the request does not use prompt caching"). `input_tokens × --usd-per-input-token`이 측정 비용, `cache_write_tokens > 0`이면 단가를 모르므로 `unknown`. state가 서버 캐시에 30분 남지 않음
+    - 응답: predicate `probability` → `p`; choice·score `probabilities` 배열은 항목 수 = 선택지/레벨 수이고 값 집합이 일치해야 dict로 바꿈(중복이 dict에서 유효한 분포로 접히지 않게); `refusal` → `error_code: "refusal"` 레코드(측정 정산, 재시도 없음)
+    - HTTP 오류의 usage는 SDK의 `e.body`(내부 `error` 객체만)가 아니라 전체 응답 JSON에서; 읽기 실패(HTML·깨진 UTF-8·미판독)는 usage 없음. `timeout=None`을 넘기면 SDK가 타임아웃을 끄므로 생략
+    - `to_openai_decision`: score(`levels`) 추가, noul `criteria`·맨 객체 instructions(문자열·input part 배열은 통과)·개수 범위 밖은 `ValueError`(이전엔 noul criteria를 조용히 버려 같은 `question_id`로 다른 질문을 보냄). `parse_wire_question`: OpenAI score `levels` 지원, 중복 choice `value`는 `ValueError`(이전엔 덮어씀 — lint `JL000`로도 보고됨). `run_batch`는 백엔드의 `check_question`으로 첫 예약 전에 거부
+    - 로그 필터를 전송 계층까지 확대(두 백엔드 공통): `httpx2`(INFO reason phrase), `httpcore2.*`(DEBUG 응답 헤더), `openai._base_client` 등 자식 로거. 테스트가 실제 요청 중 로그를 남긴 로거가 모두 목록에 있는지 확인(라이브러리 업그레이드 시 실패로 드러남)
+  - [ ] 실측(키 필요): `/v1/decisions` 응답의 `model`이 별칭인지 스냅샷인지, `input_tokens`와 `token_bound` 추정 차이
   - [ ] `--reserve-overhead-tokens` 기본값(현재 0): 서버 측 템플릿 토큰으로 측정이 예약을 넘으면 `LedgerUnusable`로 멈춤(안전한 실패). 라이브 실측 후 조정
 
 ---

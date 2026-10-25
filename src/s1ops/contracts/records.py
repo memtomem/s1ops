@@ -83,8 +83,13 @@ def _reject_constant(name: str) -> float:
 def _number(value: object, what: str, line: int) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RecordError(line, f"{what} must be a number, got {value!r}")
-    if not math.isfinite(value):
-        raise RecordError(line, f"{what} must be finite, got {value!r}")
+    try:
+        finite = math.isfinite(value)
+    except OverflowError:
+        # A JSON integer beyond the float range, such as 1 followed by 400 zeros.
+        finite = False
+    if not finite:
+        raise RecordError(line, f"{what} must be finite, got {value!r:.40}")
     return float(value)
 
 

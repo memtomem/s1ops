@@ -17,7 +17,7 @@ from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, ScoreQuestio
 from s1ops.contracts.records import read_records
 from s1ops.ledger.journal import BudgetExceeded, Ledger, LedgerUnusable, read as ledger_read, token_bound
 from s1ops.monitor import backends as backends_mod
-from s1ops.monitor.backends import HttpSystemOneBackend, retry_after_s
+from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend, retry_after_s
 from s1ops.monitor.runner import BackendError, BackendResponse, run_batch
 
 SECRET = "TOP_SECRET_STATE\nsecond line"
@@ -324,7 +324,7 @@ def test_http_error_usage_is_measured_and_stops_on_overrun(tmp_path: Path) -> No
 def test_refused_retry_still_records_the_paid_failure(tmp_path: Path) -> None:
     server = Server(httpx2.Response(503))
     journal = tmp_path / "journal.jsonl"
-    worst = (token_bound("s") + token_bound(json.dumps(NOUL.wire_dict()))) * 2e-6
+    worst = (token_bound("s") + token_bound(json.dumps(NOUL.wire_dict())) + HttpSystemOneBackend.reserve_overhead_tokens) * 2e-6
     emitted: list[dict] = []
     # The first reservation fits; after it is charged as `unknown`, the retry's does not.
     with Ledger(journal, cap_usd=worst * 1.5) as ledger:
@@ -584,7 +584,7 @@ def test_cli_live_without_extra_names_it(probe_files, capsys, monkeypatch) -> No
 
 
 def test_cli_budget_stop_keeps_paid_records(probe_files, live, capsys) -> None:
-    worst = (token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict()))) * 2e-6
+    worst = (token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict())) + HttpSystemOneBackend.reserve_overhead_tokens) * 2e-6
     live.replies = [ok({"type": "noul", "noul": 0.6}, tokens=400)]  # 4e-5 measured per request, below `worst`
     # The cap admits the first reservation; spent 4e-5 plus the next reservation exceeds it.
     cap = worst + 1e-5
@@ -741,6 +741,67 @@ def test_cli_mock_probe_unchanged(probe_files, capsys) -> None:
     summary = json.loads(capsys.readouterr().out)
     assert summary["n_records"] == 3 and summary["n_failed"] == 0
     assert {r.model_served for r in read_records(probe_files["out"])} == {"jev-9"}
+
+
+def _reserved(journal: Path) -> list[float]:
+    return [json.loads(line)["worst_usd"] for line in journal.read_text().splitlines() if json.loads(line).get("event") == "reserve"]
+
+
+@pytest.mark.parametrize("explicit, overhead", [(None, HttpSystemOneBackend.reserve_overhead_tokens), (0.0, 0.0), (50.0, 50.0)])
+def test_reservation_takes_the_backend_overhead_unless_given(tmp_path: Path, explicit, overhead) -> None:
+    journal = tmp_path / "journal.jsonl"
+    with Ledger(journal, cap_usd=1.0) as ledger:
+        run_batch(
+            [{"item_id": "i1", "state": "s"}],
+            {"q1": NOUL},
+            backend=backend(Server(ok({"type": "noul", "noul": 0.5}))),
+            ledger=ledger,
+            reserve_overhead_tokens=explicit,
+        )
+    estimate = token_bound("s") + token_bound(json.dumps(NOUL.wire_dict()))
+    assert _reserved(journal) == [pytest.approx((estimate + overhead) * 2e-6)]
+
+
+@pytest.mark.parametrize("extra, overhead", [((), HttpSystemOneBackend.reserve_overhead_tokens), (("--reserve-overhead-tokens", "0"), 0.0)])
+def test_cli_overhead_default_is_the_backends(probe_files, live, capsys, extra, overhead) -> None:
+    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", *extra) == 0
+    estimate = token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict()))
+    reserved = _reserved(probe_files["ledger"])
+    assert len(reserved) == 3 and all(r == pytest.approx((estimate + overhead) * 2e-6) for r in reserved)
+
+
+def test_measured_overhead_defaults() -> None:
+    # The values the docs advertise, from the 2026-10-25 measurement; a change here is a decision.
+    assert (HttpSystemOneBackend.reserve_overhead_tokens, OpenAIDecisionsBackend.reserve_overhead_tokens) == (300.0, 200.0)
+
+
+@pytest.mark.parametrize("overhead, stops", [(None, False), (0.0, True)])
+def test_measured_short_state_bill_fits_the_default_reservation(tmp_path: Path, overhead, stops) -> None:
+    # The measured short-state case: 287 tokens billed for a 71-token estimate. With the reservation
+    # priced at the real price, only the default overhead keeps it from overrunning.
+    state = "The package arrived with a cracked screen and the box was crushed."
+    question = NoulQuestion(instructions="Does the customer report a damaged item?")
+    server = Server(ok({"type": "noul", "noul": 0.9}, tokens=287))
+    b = HttpSystemOneBackend(usd_per_input_token=2e-6, api_key="k", base_url="https://api.test", transport=httpx2.MockTransport(server))
+    with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
+        call = lambda: run_batch(  # noqa: E731
+            [{"item_id": "i1", "state": state}], {"q1": question}, backend=b, ledger=ledger, reserve_overhead_tokens=overhead
+        )
+        if stops:
+            with pytest.raises(LedgerUnusable):
+                call()
+        else:
+            assert call()[0]["p"] == 0.9
+
+
+def test_mock_backend_has_no_overhead(tmp_path: Path) -> None:
+    from s1ops.monitor.runner import DeterministicMockBackend
+
+    journal = tmp_path / "journal.jsonl"
+    with Ledger(journal, cap_usd=1.0) as ledger:
+        run_batch([{"item_id": "i1", "state": "s" * 2000}], {"q1": NOUL}, backend=DeterministicMockBackend(), ledger=ledger)
+    estimate = token_bound("s" * 2000) + token_bound(json.dumps(NOUL.wire_dict()))
+    assert _reserved(journal) == [pytest.approx(estimate * 2e-6)]
 
 
 def test_budget_exceeded_before_first_call(tmp_path: Path) -> None:

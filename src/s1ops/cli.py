@@ -741,7 +741,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         raise CliError(f"{args.questions}: must be a JSON object mapping names to questions")
     if args.max_retries < 0:
         raise CliError("--max-retries must be >= 0")
-    check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens)
+    # None takes the backend's measured default inside run_batch; check an explicit value up front.
+    check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens or 0.0)
 
     states = _load_jsonl_dicts(Path(args.states))
     if args.model is None:
@@ -1041,7 +1042,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prb.add_argument("--timeout", type=float, default=None, help="per-request timeout in seconds (defaults to the SDK's)")
     p_prb.add_argument("--max-retries", type=int, default=2, help="retries after a timeout, connection error, 408, 429 or 5xx; each attempt reserves and settles on its own")
     p_prb.add_argument("--worst-usd-per-token", type=float, default=2e-6, help="price used for each attempt's worst-case reservation")
-    p_prb.add_argument("--reserve-overhead-tokens", type=float, default=0.0, help="tokens added to each reservation for server-side prompt overhead; a measured cost above the reservation stops the run")
+    p_prb.add_argument("--reserve-overhead-tokens", type=float, default=None, help="tokens added to each reservation for server-side prompt overhead (default: 300 systemone, 200 openai, 0 mock; measured per request); a measured cost above the reservation stops the run")
     p_prb.add_argument("--no-expand-probes", action="store_true", help="send only the questions as written, without twin and inverse probes")
     p_prb.set_defaults(func=_cmd_probe)
 

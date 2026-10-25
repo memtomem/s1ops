@@ -65,8 +65,18 @@
     - HTTP 오류의 usage는 SDK의 `e.body`(내부 `error` 객체만)가 아니라 전체 응답 JSON에서; 읽기 실패(HTML·깨진 UTF-8·미판독)는 usage 없음. `timeout=None`을 넘기면 SDK가 타임아웃을 끄므로 생략
     - `to_openai_decision`: score(`levels`) 추가, noul `criteria`·맨 객체 instructions(문자열·input part 배열은 통과)·개수 범위 밖은 `ValueError`(이전엔 noul criteria를 조용히 버려 같은 `question_id`로 다른 질문을 보냄). `parse_wire_question`: OpenAI score `levels` 지원, 중복 choice `value`는 `ValueError`(이전엔 덮어씀 — lint `JL000`로도 보고됨). `run_batch`는 백엔드의 `check_question`으로 첫 예약 전에 거부
     - 로그 필터를 전송 계층까지 확대(두 백엔드 공통): `httpx2`(INFO reason phrase), `httpcore2.*`(DEBUG 응답 헤더), `openai._base_client` 등 자식 로거. 테스트가 실제 요청 중 로그를 남긴 로거가 모두 목록에 있는지 확인(라이브러리 업그레이드 시 실패로 드러남)
-  - [ ] 실측(키 필요): `/v1/decisions` 응답의 `model`이 별칭인지 스냅샷인지, `input_tokens`와 `token_bound` 추정 차이
-  - [ ] `--reserve-overhead-tokens` 기본값(현재 0): 서버 측 템플릿 토큰으로 측정이 예약을 넘으면 `LedgerUnusable`로 멈춤(안전한 실패). 라이브 실측 후 조정
+  - [x] 실측 (2026-10-25, 합성 state, 질문 1개 `"Does the customer report a damaged item?"`, 요청 7건):
+
+    | state | 글자 | `token_bound` 추정 | `/v1/systemone` (jev-1.13.0) | `/v1/decisions` (gpt-6-luna) |
+    |---|---|---|---|---|
+    | 짧은 영문 | 68 | 71 | 287 | 169 |
+    | 긴 영문(×12) | 803 | 440 | 430 | 312 |
+    | 짧은 한글 | 36 | 98 | 304 | 179 |
+
+    - 청구 − 추정(관측): systemone +216 / −10 / +206, openai +98 / −128 / +81(표의 행 순서). 짧은 state에서만 모자라고 긴 state에선 남음 — `token_bound`의 글자당 상한(영문 0.5, 한글 2.0)이 실측(영문 ≈0.2, 한글 ≈0.65–0.8)보다 보수적이기 때문
+    - 영문 735자 증가에 두 API 모두 +143토큰(≈0.195토큰/자) → 나머지는 요청당 고정분: systemone ≈274, openai ≈156토큰. 이 고정분에서 질문 추정(38)을 빼면 state가 비었을 때의 부족분 외삽치 ≈236 / ≈118(관측치가 아니라 3개 표본·한 질문에서의 외삽)
+    - → `reserve_overhead_tokens` 백엔드 기본값: `HttpSystemOneBackend` 300, `OpenAIDecisionsBackend` 200(외삽치에 여유), mock 0. `run_batch(reserve_overhead_tokens=None)`과 CLI 기본값이 이를 씀. 예약 단가(`--worst-usd-per-token` 기본 2e-6)가 실제 단가(openai $1e-7)보다 훨씬 크면 이 값과 무관하게 초과가 없고, 예약 단가를 실제 단가에 가깝게 잡을 때 짧은 state의 매 요청 초과(`LedgerUnusable`)를 막음
+    - served model: `/v1/systemone`은 별칭을 실제 버전으로 풀어 돌려줌(`jev-latest` → `jev-1.14.0`) → 무통보 교체 감지 동작. `/v1/decisions`는 별칭 `gpt-6-luna`를 그대로 돌려줌 → 별칭 뒤 스냅샷 교체는 `model_served`로 보이지 않고 분포 drift로만 드러남
 
 ---
 

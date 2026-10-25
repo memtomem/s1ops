@@ -240,7 +240,7 @@ def run_batch(
     ledger: Ledger,
     model_requested: str = "jev-1.13.0",
     worst_usd_per_token: float = 2e-6,
-    reserve_overhead_tokens: float = 0.0,
+    reserve_overhead_tokens: float | None = None,
     probe_mode: bool = False,
     max_retries: int = 0,
     backoff_initial_s: float = 0.5,
@@ -252,7 +252,9 @@ def run_batch(
     """Run System 1 questions over a batch of states with strict `Ledger` reserve-then-settle.
 
     Each attempt reserves `(token_bound(state) + token_bound(question) + reserve_overhead_tokens) *
-    worst_usd_per_token`. A retryable `BackendError` is retried up to `max_retries` times, waiting the
+    worst_usd_per_token`. `reserve_overhead_tokens` defaults to the backend's own
+    `reserve_overhead_tokens` attribute (the server-side prompt tokens it bills per request), or 0.
+    A retryable `BackendError` is retried up to `max_retries` times, waiting the
     server's `Retry-After` or an exponential backoff; a requested wait above `max_retry_after_s` ends
     the retries instead. An item that still fails gets a no-answer record: `model_served: null` and its
     `error_code`. Each record is passed to `on_record` as soon as it exists, so a run that stops early
@@ -274,6 +276,8 @@ def run_batch(
         ]
 
     check_questions(work_questions, backend)
+    if reserve_overhead_tokens is None:
+        reserve_overhead_tokens = getattr(backend, "reserve_overhead_tokens", 0.0)
     check_reservation(worst_usd_per_token, reserve_overhead_tokens)
 
     records_out: list[dict[str, Any]] = []

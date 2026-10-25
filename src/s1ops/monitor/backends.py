@@ -190,6 +190,11 @@ class HttpSystemOneBackend:
     (output tokens are free). `transport` is an `httpx2` transport, for tests.
     """
 
+    # Measured 2026-10-25 on jev-1.13.0: a short state billed up to 216 input tokens more than
+    # `token_bound` estimated (about 236 extrapolated to an empty state); `run_batch` adds this to every
+    # reservation. docs/NEXT_STEPS_PLAN.md Track 2 has the table.
+    reserve_overhead_tokens = 300.0
+
     def __init__(
         self,
         *,
@@ -377,6 +382,11 @@ class OpenAIDecisionsBackend:
     The SDK does not validate responses by default, so the raw JSON is read and checked here.
     `http_client` is an `httpx2.Client`, for tests.
     """
+
+    # Measured 2026-10-25 on gpt-6-luna: a short state billed up to 98 input tokens more than
+    # `token_bound` estimated (about 118 extrapolated to an empty state); `run_batch` adds this to every
+    # reservation. docs/NEXT_STEPS_PLAN.md Track 2 has the table.
+    reserve_overhead_tokens = 200.0
 
     def __init__(
         self,

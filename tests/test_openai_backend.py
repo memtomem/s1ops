@@ -518,6 +518,15 @@ def test_cli_openai_without_extra_names_it(probe_files, capsys, monkeypatch) -> 
     assert "s1ops[openai]" in _one_line_error(capsys)
 
 
+def test_cli_openai_reservation_includes_its_overhead(probe_files, live, capsys) -> None:
+    from s1ops.ledger.journal import token_bound
+
+    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7", "--no-expand-probes") == 0
+    reserved = [json.loads(l)["worst_usd"] for l in probe_files["ledger"].read_text().splitlines() if json.loads(l).get("event") == "reserve"]
+    estimate = token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict()))
+    assert reserved == [pytest.approx((estimate + OpenAIDecisionsBackend.reserve_overhead_tokens) * 2e-6)]
+
+
 def test_cli_mock_and_systemone_keep_their_default_model(probe_files, capsys) -> None:
     assert probe(probe_files, "--no-expand-probes") == 0
     assert {json.loads(line)["model_requested"] for line in probe_files["out"].read_text().splitlines()} == {"jev-1.13.0"}

@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>s1ops · System 1 LLMOps Workbench</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --panel: #131b29;
+      --panel-alt: #182234;
+      --border: #25324a;
+      --text: #e6edf7;
+      --muted: #8ea0be;
+      --accent: #38bdf8;
+      --accent-soft: rgba(56, 189, 248, 0.14);
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --err: #f87171;
+      --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-badge {
+      background: var(--accent);
+      color: #06101e;
+      font-family: var(--mono);
+      font-weight: 700;
+      padding: 4px 9px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .meta-bar {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    nav.tabs {
+      display: flex;
+      gap: 4px;
+      padding: 0 24px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      overflow-x: auto;
+    }
+    nav.tabs button {
+      background: transparent;
+      color: var(--muted);
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 12px 16px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    nav.tabs button.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    main {
+      max-width: 1360px;
+      margin: 0 auto;
+      padding: 20px 24px 48px;
+    }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      gap: 16px;
+    }
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .card h2, .card h3 {
+      margin: 0 0 10px 0;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    .kpi {
+      font-family: var(--mono);
+      font-size: 22px;
+      font-weight: 700;
+      margin-top: 4px;
+    }
+    .sub {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-ok { background: rgba(52, 211, 153, 0.16); color: var(--ok); }
+    .badge-warn { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
+    .badge-err { background: rgba(248, 113, 113, 0.16); color: var(--err); }
+    .badge-info { background: var(--accent-soft); color: var(--accent); }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+    }
+    th {
+      color: var(--muted);
+      font-weight: 500;
+      font-size: 12px;
+    }
+    td.mono { font-family: var(--mono); }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 16px;
+      background: var(--panel-alt);
+      padding: 12px 16px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+    .control-group {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .control-group label {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    input[type="range"] { width: 160px; accent-color: var(--accent); }
+    select, input[type="number"] {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 6px 10px;
+      border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 12px;
+    }
+    .band-bar {
+      display: flex;
+      height: 26px;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 12px 0;
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .band-seg {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #06101e;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="brand-badge">s1ops</span>
+      <h1>System 1 Typed Decision LLMOps Workbench</h1>
+    </div>
+    <div class="meta-bar" id="overview-meta">Loading workspace...</div>
+  </header>
+
+  <nav class="tabs">
+    <button class="active" data-tab="tab-calib">1. Calibration &amp; Noise Floor</button>
+    <button data-tab="tab-policy">2. Threshold &amp; Escalation Simulator</button>
+    <button data-tab="tab-lint">3. Question Lint &amp; Probe Coherence</button>
+    <button data-tab="tab-slices">4. Slices &amp; Blind Label Audit</button>
+    <button data-tab="tab-compare">5. Shadow Compare &amp; Judge Audit</button>
+    <button data-tab="tab-drift">6. Drift &amp; Canary Monitor</button>
+  </nav>
+
+  <main>
+    <section id="tab-calib" class="tab-pane active">
+      <div id="calib-container">Loading calibration audit...</div>
+    </section>
+
+    <section id="tab-policy" class="tab-pane">
+      <div class="controls">
+        <div class="control-group">
+          <label>band_lo (Auto-FALSE below): <span id="lbl-tau-low">0.25</span></label>
+          <input type="range" id="inp-tau-low" min="0.05" max="0.90" step="0.05" value="0.25" />
+        </div>
+        <div class="control-group">
+          <label>band_hi (Auto-TRUE at/above): <span id="lbl-tau-high">0.75</span></label>
+          <input type="range" id="inp-tau-high" min="0.10" max="0.95" step="0.05" value="0.75" />
+        </div>
+        <div class="control-group">
+          <label>System 2 Escalation Cost ($/call)</label>
+          <input type="number" id="inp-cost-s2" value="0.004" step="0.001" min="0.0001" />
+        </div>
+        <div class="control-group">
+          <label>Error Budget (1 - Precision)</label>
+          <input type="number" id="inp-err-budget" value="0.10" step="0.02" min="0.01" max="0.50" />
+        </div>
+      </div>
+      <div id="policy-container">Loading policy simulation...</div>
+    </section>
+
+    <section id="tab-lint" class="tab-pane">
+      <div id="lint-container">Loading question lint and probe coherence...</div>
+    </section>
+
+    <section id="tab-slices" class="tab-pane">
+      <div id="slices-container">Loading slice discovery and blind label audit...</div>
+    </section>
+
+    <section id="tab-compare" class="tab-pane">
+      <div id="compare-container">Loading multi-backend shadow comparison...</div>
+    </section>
+
+    <section id="tab-drift" class="tab-pane">
+      <div id="drift-container">Loading production canary drift monitor...</div>
+    </section>
+  </main>
+
+
+  <script>
+    document.querySelectorAll("nav.tabs button").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("nav.tabs button").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+        btn.classList.add("active");
+        document.getElementById(btn.dataset.tab).classList.add("active");
+      });
+    });
+
+    function renderReliabilitySvg(binsRaw, binsCal) {
+      const size = 280, pad = 34;
+      const plot = size - pad * 2;
+      const toX = p => pad + p * plot;
+      const toY = p => pad + (1 - p) * plot;
+
+      let ptsRaw = [];
+      (binsRaw || []).forEach(b => {
+        if (b.n > 0) {
+          ptsRaw.push(`${toX(b.mean_score).toFixed(1)},${toY(b.observed).toFixed(1)}`);
+        }
+      });
+      let ptsCal = [];
+      (binsCal || []).forEach(b => {
+        if (b.n > 0) {
+          ptsCal.push(`${toX(b.mean_score).toFixed(1)},${toY(b.observed).toFixed(1)}`);
+        }
+      });
+
+      return `
+        <svg width="${size}" height="${size}" style="background:#0d1420;border:1px solid #25324a;border-radius:6px">
+          <line x1="${pad}" y1="${size-pad}" x2="${size-pad}" y2="${pad}" stroke="#475569" stroke-dasharray="4 4" />
+          ${ptsRaw.length > 1 ? `<polyline fill="none" stroke="#f87171" stroke-width="2" points="${ptsRaw.join(' ')}" />` : ''}
+          ${ptsCal.length > 1 ? `<polyline fill="none" stroke="#34d399" stroke-width="2.5" points="${ptsCal.join(' ')}" />` : ''}
+          <text x="${pad}" y="18" fill="#8ea0be" font-size="11" font-family="monospace">Red: Before | Green: After Fit</text>
+          <text x="${pad}" y="${size-10}" fill="#8ea0be" font-size="10" font-family="monospace">Predicted Probability →</text>
+        </svg>
+      `;
+    }
+
+    async function loadOverview() {
+      const res = await fetch("/api/overview");
+      const data = await res.json();
+      document.getElementById("overview-meta").textContent =
+        `Records: ${data.n_records} | Groups: ${data.n_groups} | Safe-v1 Redaction Active`;
+    }
+
+    async function loadAudit() {
+      const res = await fetch("/api/audit");
+      const data = await res.json();
+      const el = document.getElementById("calib-container");
+      if (!data.groups || data.groups.length === 0) {
+        el.innerHTML = `<div class="card">No labeled records found in workspace.</div>`;
+        return;
+      }
+      el.innerHTML = data.groups.map(g => {
+        const bef = g.before;
+        const aft = g.after || null;
+        const floor = g.ece_floor && g.ece_floor.mass ? g.ece_floor.mass : {mean: 0, p95: 0};
+        const tie = g.tie_mass || {max_tie_share: 0, max_tie_value: 0};
+        const rawBins = g.reliability ? g.reliability.mass : [];
+        const calBins = g.reliability_after ? g.reliability_after.mass : [];
+        const aboveFloor = bef.ece_mass > floor.p95;
+        return `
+          <div class="card">
+            <h3>Group: <span class="badge badge-info">${g.question_id}</span> ·
+              <span class="badge badge-info">${g.model_served}</span> ·
+              <span class="badge badge-ok">${g.primitive}</span> (n=${g.n})
+            </h3>
+            <div class="grid-3">
+              <div>
+                <div class="sub">Raw ECE (mass) vs Noise Floor (p95)</div>
+                <div class="kpi">${bef.ece_mass.toFixed(4)} <span class="sub">/ floor ${floor.p95.toFixed(4)}</span></div>
+                <span class="badge ${ aboveFloor ? 'badge-warn' : 'badge-ok' }">
+                  ${ aboveFloor ? `Miscalibrated (${g.direction || 'over-confident'})` : 'Within Binomial Noise Floor' }
+                </span>
+              </div>
+              <div>
+                <div class="sub">Calibrated ECE / Brier / LogLoss</div>
+                <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : bef.brier.toFixed(4)}</span></div>
+                <span class="sub">${g.fit ? `Fit: ${g.fit.method} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
+              </div>
+              <div>
+                <div class="sub">Tie-Mass / Rounding Detector</div>
+                <div class="kpi">${(tie.max_tie_share * 100).toFixed(1)}% <span class="sub">at p=${tie.max_tie_value.toFixed(3)}</span></div>
+                <span class="badge badge-info">Unique values: ${tie.unique_values}</span>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div>${renderReliabilitySvg(rawBins, calBins)}</div>
+              <div>
+                <table>
+                  <thead>
+                    <tr><th>Bin</th><th>n</th><th>Mean Score</th><th>Observed Rate</th><th>Gap</th></tr>
+                  </thead>
+                  <tbody>
+                    ${rawBins.map(b => `
+                      <tr>
+                        <td class="mono">[${b.lo.toFixed(2)}, ${b.hi.toFixed(2)}]</td>
+                        <td class="mono">${b.n}</td>
+                        <td class="mono">${b.mean_score.toFixed(3)}</td>
+                        <td class="mono">${b.observed.toFixed(3)}</td>
+                        <td class="mono">${b.gap.toFixed(3)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function loadPolicy() {
+      const low = parseFloat(document.getElementById("inp-tau-low").value);
+      const high = parseFloat(document.getElementById("inp-tau-high").value);
+      const costS2 = parseFloat(document.getElementById("inp-cost-s2").value);
+      const budget = parseFloat(document.getElementById("inp-err-budget").value);
+      document.getElementById("lbl-tau-low").textContent = low.toFixed(2);
+      document.getElementById("lbl-tau-high").textContent = high.toFixed(2);
+
+      const url = `/api/simulate-policy?tau_low=${low}&tau_high=${high}&cost_sys2=${costS2}&error_budget=${budget}`;
+      const res = await fetch(url);
+      if (!res.ok) return;
+      const d = await res.json();
+      const b = d.active_band;
+      const t = d.tuned_threshold;
+      const escPct = (b.escalation_rate * 100).toFixed(1);
+      const autoPct = (100 - b.escalation_rate * 100).toFixed(1);
+
+      document.getElementById("policy-container").innerHTML = `
+        <div class="card">
+          <h3>Active Escalation Band ${b.band} on ${d.group.question_id} (${d.group.model_served})</h3>
+          <div class="band-bar">
+            <div class="band-seg" style="width:${autoPct}%;background:#34d399">System 1 Auto (${autoPct}%)</div>
+            <div class="band-seg" style="width:${escPct}%;background:#fbbf24">Escalate to System 2 (${escPct}%)</div>
+          </div>
+          <div class="grid-3">
+            <div>
+              <div class="sub">Hybrid System 1+2 Accuracy</div>
+              <div class="kpi">${(b.accuracy * 100).toFixed(2)}%</div>
+              <span class="sub">F1: ${b.f1.toFixed(3)}</span>
+            </div>
+            <div>
+              <div class="sub">Total Batch Cost (${b.n} items)</div>
+              <div class="kpi">$${b.cost_usd.toFixed(4)}</div>
+              <span class="sub">Escalated: ${b.escalated} / ${b.n}</span>
+            </div>
+            <div>
+              <div class="sub">Error-Budget Threshold (budget ≤ ${(budget*100).toFixed(0)}%)</div>
+              <div class="kpi">${t.threshold !== null ? 'τ = ' + t.threshold.toFixed(3) : 'Delegate All'}</div>
+              <span class="badge ${t.threshold !== null ? 'badge-ok' : 'badge-warn'}">
+                ${t.threshold !== null ? 'Feasible' : 'No threshold meets error budget'}
+              </span>
+            </div>
+          </div>
+          <h3>Pareto Frontier (Cost vs F1)</h3>
+          <table>
+            <thead>
+              <tr><th>Band [lo, hi)</th><th>Hybrid Accuracy</th><th>F1</th><th>Escalation Rate</th><th>Batch Cost ($)</th></tr>
+            </thead>
+            <tbody>
+              ${d.pareto_frontier.map(p => `
+                <tr>
+                  <td class="mono">${p.band}</td>
+                  <td class="mono">${(p.accuracy * 100).toFixed(2)}%</td>
+                  <td class="mono">${p.f1.toFixed(3)}</td>
+                  <td class="mono">${(p.escalation_rate * 100).toFixed(1)}%</td>
+                  <td class="mono">$${p.cost_usd.toFixed(4)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
+      document.getElementById(id).addEventListener("input", loadPolicy);
+    });
+
+    async function loadLint() {
+      const res = await fetch("/api/lint");
+      const d = await res.json();
+      const el = document.getElementById("lint-container");
+      const probes = d.probe_audit || [];
+      el.innerHTML = `
+        <div class="card">
+          <h3>Static Question Lint Diagnostics (${d.n_findings} findings)</h3>
+          <table>
+            <thead>
+              <tr><th>Rule</th><th>Severity</th><th>Question</th><th>Question ID</th><th>Message</th><th>Fix</th></tr>
+            </thead>
+            <tbody>
+              ${(d.findings || []).map(f => `
+                <tr>
+                  <td class="mono"><span class="badge ${f.severity === 'error' ? 'badge-err' : 'badge-warn'}">${f.rule}</span></td>
+                  <td class="mono">${f.severity}</td>
+                  <td class="mono">${f.question || '(file)'}</td>
+                  <td class="mono">${f.question_id || '-'}</td>
+                  <td>${f.message}</td>
+                  <td class="sub">${f.fix}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <h3>Probe Coherence Audit (Noul vs Yes/No Twin &amp; Polarity Inverse Sum)</h3>
+          <table>
+            <thead>
+              <tr><th>Probe Question</th><th>Model Served</th><th>n</th><th>Mean Twin Gap</th><th>Twin Flip Rate</th><th>Mean Inverse Error |p+p_inv-1|</th></tr>
+            </thead>
+            <tbody>
+              ${probes.map(p => `
+                <tr>
+                  <td class="mono">${p.probe_question}</td>
+                  <td class="mono">${p.model_served}</td>
+                  <td class="mono">${p.n_states}</td>
+                  <td class="mono">${p.mean_twin_gap !== null ? p.mean_twin_gap.toFixed(4) : 'N/A'}</td>
+                  <td class="mono">${p.twin_flip_rate !== null ? (p.twin_flip_rate * 100).toFixed(1) + '%' : 'N/A'}</td>
+                  <td class="mono">${p.mean_inverse_error !== null ? p.mean_inverse_error.toFixed(4) : 'N/A'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function loadSlicesAndLabels() {
+      const [sRes, lRes] = await Promise.all([fetch("/api/slices"), fetch("/api/labelaudit")]);
+      const sData = await sRes.json();
+      const lData = await lRes.json();
+      const slices = sData.answerability || [];
+      const errSlices = sData.error_slices || [];
+
+      document.getElementById("slices-container").innerHTML = `
+        <div class="grid-2">
+          <div class="card">
+            <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
+            <table>
+              <thead>
+                <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${slices[0] ? slices[0].null_kind : 'majority'})</th><th>Answerable</th></tr>
+              </thead>
+              <tbody>
+                ${slices.map(m => `
+                  <tr>
+                    <td class="mono">${m.slice}</td>
+                    <td class="mono">${m.n}</td>
+                    <td class="mono">${(m.accuracy * 100).toFixed(1)}% [${(m.ci[0]*100).toFixed(1)}%, ${(m.ci[1]*100).toFixed(1)}%]</td>
+                    <td class="mono">${(m.null_accuracy * 100).toFixed(1)}%</td>
+                    <td><span class="badge ${m.answerable ? 'badge-ok' : 'badge-warn'}">${m.answerable ? 'ANSWERABLE' : 'BELOW NULL CI'}</span></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div class="card">
+            <h3>Benjamini-Hochberg FDR Error Slices (q ≤ 0.10)</h3>
+            <table>
+              <thead>
+                <tr><th>Feature</th><th>Slice n</th><th>Slice Err</th><th>Rest Err</th><th>Odds Ratio</th><th>q-value</th><th>Verdict</th></tr>
+              </thead>
+              <tbody>
+                ${errSlices.map(e => `
+                  <tr>
+                    <td class="mono">${e.feature}</td>
+                    <td class="mono">${e.slice_n}</td>
+                    <td class="mono">${(e.slice_error_rate * 100).toFixed(1)}%</td>
+                    <td class="mono">${(e.rest_error_rate * 100).toFixed(1)}%</td>
+                    <td class="mono">${e.odds_ratio.toFixed(2)}</td>
+                    <td class="mono">${e.q_value.toFixed(4)}</td>
+                    <td><span class="badge ${e.significant ? 'badge-err' : 'badge-ok'}">${e.significant ? 'SIGNIFICANT' : 'ns'}</span></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Blind Label Audit: Top Calibrated Disagreement Candidates (Safe-v1 Body-Free)</h3>
+          <table>
+            <thead>
+              <tr><th>Rank</th><th>Dataset</th><th>Item ID</th><th>Question ID</th><th>Given Label</th><th>Model Predicted</th><th>Disagreement Margin</th></tr>
+            </thead>
+            <tbody>
+              ${(lData.top_flags || []).map(f => `
+                <tr>
+                  <td class="mono">#${f.rank}</td>
+                  <td class="mono">${f.dataset || '-'}</td>
+                  <td class="mono">${f.item_id}</td>
+                  <td class="mono">${f.question_id}</td>
+                  <td class="mono"><span class="badge badge-warn">${f.label}</span></td>
+                  <td class="mono"><span class="badge badge-ok">${f.predicted}</span></td>
+                  <td class="mono">${f.score.toFixed(4)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function loadCompare() {
+      const res = await fetch("/api/compare");
+      const d = await res.json();
+      const qs = d.shadow ? (d.shadow.questions || []) : [];
+      const j = d.judge;
+
+      let shadowHtml = qs.map(q => `
+        <div class="card">
+          <h3>Shadow Comparison: <span class="badge badge-info">${q.question_id}</span> (${q.primitive}, n=${q.n})</h3>
+          <div class="grid-3">
+            <div>
+              <div class="sub">${q.primary_model} vs ${q.shadow_model} Accuracy</div>
+              <div class="kpi">${q.primary_accuracy !== null ? (q.primary_accuracy*100).toFixed(1)+'%' : 'N/A'} → ${q.shadow_accuracy !== null ? (q.shadow_accuracy*100).toFixed(1)+'%' : 'N/A'}</div>
+              <span class="sub">Mean |Δp| / TVD: ${q.mean_distance.toFixed(4)}</span>
+            </div>
+            <div>
+              <div class="sub">Decision Flip Rate</div>
+              <div class="kpi">${(q.flip_rate * 100).toFixed(2)}%</div>
+              <span class="badge ${q.replaceable ? 'badge-ok' : 'badge-warn'}">${q.replaceable ? 'Replaceable' : 'Exceeds Flip/Drop Guard'}</span>
+            </div>
+            <div>
+              <div class="sub">McNemar Exact Test (Holm Adjusted)</div>
+              <div class="kpi">p_holm = ${q.mcnemar ? q.mcnemar.p_holm.toFixed(4) : 'N/A'}</div>
+              <span class="sub">${q.mcnemar ? `Discordant wins: ${q.mcnemar.a_only} vs ${q.mcnemar.b_only}` : ''}</span>
+            </div>
+          </div>
+        </div>
+      `).join('');
+
+      let judgeHtml = '';
+      if (j && j.overall) {
+        judgeHtml = `
+          <div class="card">
+            <h3>Rubric Judge Audit (Quadratic-Weighted κ = ${j.overall.weighted_kappa.toFixed(3)}, Pass/Fail Agreement = ${(j.overall.pass_agreement*100).toFixed(1)}%)</h3>
+            <table>
+              <thead>
+                <tr><th>Criterion</th><th>n</th><th>Exact Match</th><th>Within ±1</th><th>Weighted κ</th><th>Bias (Judge - Human)</th><th>Passes Bar</th></tr>
+              </thead>
+              <tbody>
+                ${Object.entries(j.by_criterion).map(([c, st]) => `
+                  <tr>
+                    <td class="mono">${c}</td>
+                    <td class="mono">${st.n}</td>
+                    <td class="mono">${(st.exact*100).toFixed(1)}%</td>
+                    <td class="mono">${(st.within_one*100).toFixed(1)}%</td>
+                    <td class="mono">${st.weighted_kappa.toFixed(3)}</td>
+                    <td class="mono">${st.bias >= 0 ? '+' : ''}${st.bias.toFixed(3)}</td>
+                    <td><span class="badge ${st.passes_bar ? 'badge-ok' : 'badge-warn'}">${st.passes_bar ? 'PASS' : 'BELOW BAR'}</span></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
+
+      document.getElementById("compare-container").innerHTML = shadowHtml + judgeHtml;
+    }
+
+    async function loadDrift() {
+      const res = await fetch("/api/drift");
+      const d = await res.json();
+      const qs = d.questions || [];
+      if (qs.length === 0) {
+        document.getElementById("drift-container").innerHTML = `<div class="card">No canary drift records found.</div>`;
+        return;
+      }
+      document.getElementById("drift-container").innerHTML = qs.map(q => {
+        const badgeCls = q.status === 'CRITICAL' ? 'badge-err' : (q.status === 'WARN' ? 'badge-warn' : 'badge-ok');
+        const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${q.status}</span> ${a}</div>`).join('');
+        return `
+          <div class="card">
+            <h3>Drift Monitor: <span class="badge badge-info">${q.question_id}</span> (${q.primitive}, ref n=${q.n_ref} vs cur n=${q.n_cur})
+              · <span class="badge ${badgeCls}">${q.status}</span>
+            </h3>
+            <div style="margin-bottom:12px;">${alertsHtml}</div>
+            <div class="grid-3">
+              <div>
+                <div class="sub">Population Stability Index (PSI) &amp; JSD</div>
+                <div class="kpi">PSI = ${q.psi.toFixed(4)}</div>
+                <span class="sub">JS Divergence: ${q.js_divergence.toFixed(4)}</span>
+              </div>
+              <div>
+                <div class="sub">Served Model Lineage (Ref → Cur)</div>
+                <div class="kpi">${q.ref_models.join(',')} → ${q.cur_models.join(',')}</div>
+                <span class="badge ${q.model_drift_detected ? 'badge-err' : 'badge-ok'}">
+                  ${q.model_drift_detected ? `Model Drift (${q.model_mismatch_count_cur} mismatches)` : 'Lineage Stable'}
+                </span>
+              </div>
+              <div>
+                <div class="sub">Median Probability (p50) &amp; Latency Shift</div>
+                <div class="kpi">${q.quantiles_ref.p50.toFixed(3)} → ${q.quantiles_cur.p50.toFixed(3)}</div>
+                <span class="sub">p95 Latency: ${q.latency_ref.p95_ms || '-'} ms → ${q.latency_cur.p95_ms || '-'} ms</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    loadOverview();
+    loadAudit();
+    loadPolicy();
+    loadLint();
+    loadSlicesAndLabels();
+    loadCompare();
+    loadDrift();
+  </script>
+</body>
+</html>
+

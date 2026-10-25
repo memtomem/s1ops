@@ -11,6 +11,10 @@ from s1ops.contracts.records import SCHEMAS, read_records
 SUM_TOLERANCE = 0.02
 
 
+class CompareInputError(ValueError):
+    """The primary and shadow records cannot be paired or are not valid records."""
+
+
 @dataclass(frozen=True)
 class Disagreement:
     dataset: str | None
@@ -42,22 +46,22 @@ def _finite_number(x: object) -> bool:
 
 def validate(record: dict) -> None:
     if record.get("schema") not in SCHEMAS:
-        raise ValueError(f"not a valid record: schema={record.get('schema')!r}")
+        raise CompareInputError(f"not a valid record: schema={record.get('schema')!r}")
     kind = record.get("primitive")
     if kind == "noul":
         p = record.get("p")
         if not _finite_number(p) or not 0.0 <= p <= 1.0:
-            raise ValueError(f"noul p must be a number in [0, 1], got {p!r}")
+            raise CompareInputError(f"noul p must be a number in [0, 1], got {p!r}")
     elif kind in ("choice", "score"):
         dist = record.get("probabilities")
         if not isinstance(dist, dict) or not dist or any(not _finite_number(v) or v < 0 for v in dist.values()):
-            raise ValueError(f"{kind} probabilities must be a non-empty map of finite non-negative numbers")
+            raise CompareInputError(f"{kind} probabilities must be a non-empty map of finite non-negative numbers")
         if abs(sum(dist.values()) - 1.0) > SUM_TOLERANCE:
-            raise ValueError(f"{kind} probabilities sum to {sum(dist.values()):.4f}, outside 1 ± {SUM_TOLERANCE}")
+            raise CompareInputError(f"{kind} probabilities sum to {sum(dist.values()):.4f}, outside 1 ± {SUM_TOLERANCE}")
         if kind == "choice" and record.get("choice") not in dist:
-            raise ValueError(f"choice {record.get('choice')!r} is not one of its probability labels")
+            raise CompareInputError(f"choice {record.get('choice')!r} is not one of its probability labels")
     else:
-        raise ValueError(f"unknown primitive {kind!r}")
+        raise CompareInputError(f"unknown primitive {kind!r}")
 
 
 def compare(primary: dict, shadow: dict) -> Disagreement:
@@ -65,7 +69,7 @@ def compare(primary: dict, shadow: dict) -> Disagreement:
     validate(shadow)
     for key in ("dataset", "item_id", "question_id", "primitive"):
         if primary.get(key) != shadow.get(key):
-            raise ValueError(f"{key} differs: {primary.get(key)!r} vs {shadow.get(key)!r}")
+            raise CompareInputError(f"{key} differs: {primary.get(key)!r} vs {shadow.get(key)!r}")
     kind = primary["primitive"]
     label = primary.get("label") if primary.get("label") is not None else shadow.get("label")
     if kind == "noul":
@@ -147,7 +151,7 @@ def compare_records(
         for r in rows:
             k = (r.get("dataset"), r["item_id"], r["question_id"])
             if k in idx:
-                raise ValueError(f"duplicate record key {k}")
+                raise CompareInputError(f"duplicate record key {k}")
             idx[k] = r
         return idx
 

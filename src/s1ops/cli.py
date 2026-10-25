@@ -67,7 +67,7 @@ from s1ops.lint.lint import audit_probe_records, format_text, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.backends import HttpSystemOneBackend
-from s1ops.monitor.runner import DeterministicMockBackend, run_batch
+from s1ops.monitor.runner import DeterministicMockBackend, check_reservation, run_batch
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
 
 EXIT_OK = 0
@@ -737,8 +737,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         raise CliError(f"{args.questions}: must be a JSON object mapping names to questions")
     if args.max_retries < 0:
         raise CliError("--max-retries must be >= 0")
-    if args.reserve_overhead_tokens < 0:
-        raise CliError("--reserve-overhead-tokens must be >= 0")
+    check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens)
 
     states = _load_jsonl_dicts(Path(args.states))
     backend = _probe_backend(args)
@@ -746,15 +745,20 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     ledger_path = Path(args.ledger)
     written = 0
     failed = 0
+    lost = False
     try:
         with Ledger(ledger_path, cap_usd=args.cap_usd) as ledger:
             others = [ledger_path, lock_path(ledger_path), Path(args.states), Path(args.questions)]
             with _open_output_apart(out_path, others) as fh:
 
                 def write(rec: dict[str, Any]) -> None:
-                    nonlocal written, failed
-                    fh.write(json.dumps(rec, sort_keys=True) + "\n")
-                    fh.flush()
+                    nonlocal written, failed, lost
+                    try:
+                        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+                        fh.flush()
+                    except OSError:
+                        lost = True
+                        raise
                     written += 1
                     failed += rec["model_served"] is None
 
@@ -772,9 +776,11 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                 )
     # Outside both `with` blocks, so a second failure while closing the output cannot replace this message.
     except (BudgetExceeded, ValueError, OSError) as e:
-        if os.environ.get("S1_DEBUG") or not written:
+        if os.environ.get("S1_DEBUG") or not (written or lost):
             raise
         message = _os_error_message(e) if isinstance(e, OSError) else str(e)
+        if lost:
+            message += f"; the record of an already settled request was not written to {out_path}"
         raise CliError(f"{message}; {written} records kept in {out_path}") from None
     finally:
         close = getattr(backend, "close", None)

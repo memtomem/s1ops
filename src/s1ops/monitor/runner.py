@@ -18,6 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import time
 from typing import Any, Protocol
 
@@ -172,6 +173,17 @@ def check_questions(work_questions: Sequence[tuple[str, str, QuestionModel]]) ->
             raise ValueError(f"question {name!r}: {q.type} criteria is empty")
 
 
+def check_reservation(worst_usd_per_token: float, reserve_overhead_tokens: float) -> None:
+    """Reject reservation inputs that would collapse every reservation to the $1e-6 floor."""
+    for name, value, low in (
+        ("worst_usd_per_token", worst_usd_per_token, "> 0"),
+        ("reserve_overhead_tokens", reserve_overhead_tokens, ">= 0"),
+    ):
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        if not ok or value < 0 or (low == "> 0" and value == 0):
+            raise ValueError(f"{name} must be a finite number {low}, got {value!r}")
+
+
 def _settle_failure(ledger: Ledger, reservation: Reservation, error: BackendError) -> None:
     if error.usage_usd is not None:
         ledger.settle(reservation, error.usage_usd, outcome="measured")
@@ -251,6 +263,7 @@ def run_batch(
         ]
 
     check_questions(work_questions)
+    check_reservation(worst_usd_per_token, reserve_overhead_tokens)
 
     records_out: list[dict[str, Any]] = []
     for item in states:

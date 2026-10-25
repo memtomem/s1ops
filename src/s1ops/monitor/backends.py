@@ -45,13 +45,15 @@ def retry_after_s(headers: Mapping[str, str]) -> float | None:
     try:
         value = float(raw)
     except ValueError:
+        # This runs while the SDK error is being handled, so an escaping exception would chain to it
+        # and a traceback would print the server's body. An absurd offset raises OverflowError.
         try:
             when = parsedate_to_datetime(raw)
-        except (TypeError, ValueError):
+            if when.tzinfo is None:
+                when = when.replace(tzinfo=timezone.utc)
+            return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+        except (TypeError, ValueError, OverflowError):
             return None
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
     return value if math.isfinite(value) and value >= 0 else None
 
 

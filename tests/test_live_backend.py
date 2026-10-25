@@ -176,6 +176,7 @@ def test_retry_after_above_the_limit_ends_retries(tmp_path: Path) -> None:
         ({"retry-after": "-1"}, None),
         ({"retry-after": "nan"}, None),
         ({"retry-after": "not a date"}, None),
+        ({"retry-after": "Sun, 25 Oct 2026 12:00:00 +999999999999999999999999"}, None),
         ({}, None),
     ],
 )
@@ -357,7 +358,8 @@ def test_unsent_failure_is_charged_nothing(tmp_path: Path) -> None:
     assert outcomes(st) == ["unsent"] and st.spent_usd == 0
 
 
-def test_failed_settlement_sends_nothing_more(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("reached_journal", [False, True])
+def test_failed_settlement_sends_nothing_more(tmp_path: Path, monkeypatch, reached_journal) -> None:
     class Cheap:
         calls = 0
 
@@ -365,8 +367,15 @@ def test_failed_settlement_sends_nothing_more(tmp_path: Path, monkeypatch) -> No
             Cheap.calls += 1
             return BackendResponse(model_served="m", answer={"p": 0.5}, cost_usd=1e-7, latency_ms=1.0)
 
-    with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
+    journal = tmp_path / "journal.jsonl"
+    settles = []
+    with Ledger(journal, cap_usd=1.0) as ledger:
+        real = ledger.settle
+
         def broken(*a, **k):
+            settles.append(k["outcome"])
+            if reached_journal:
+                real(*a, **k)
             raise OSError("disk full")
 
         monkeypatch.setattr(ledger, "settle", broken)
@@ -378,7 +387,8 @@ def test_failed_settlement_sends_nothing_more(tmp_path: Path, monkeypatch) -> No
                 ledger=ledger,
                 max_retries=3,
             )
-    assert Cheap.calls == 1
+    assert Cheap.calls == 1 and settles == ["measured"]
+    assert outcomes(ledger_read(journal)) == (["measured"] if reached_journal else [])
 
 
 def test_empty_criteria_rejected_before_any_reservation(tmp_path: Path) -> None:
@@ -562,7 +572,8 @@ def test_cli_records_reach_disk_as_they_arrive(probe_files, live, capsys) -> Non
     assert len(probe_files["out"].read_text().splitlines()) == 3
 
 
-def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, capsys, monkeypatch) -> None:
+@pytest.mark.parametrize("ok_lines", [0, 1])
+def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, capsys, monkeypatch, ok_lines) -> None:
     import io
 
     real_fdopen = os.fdopen
@@ -571,7 +582,7 @@ def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, 
         lines = 0
 
         def flush(self):
-            if Full.lines >= 1:
+            if Full.lines >= ok_lines:
                 raise OSError(28, "No space left on device")
             Full.lines += 1
             super().flush()
@@ -583,7 +594,41 @@ def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, 
     monkeypatch.setattr("s1ops.cli.os.fdopen", fdopen)
     assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 1
     line = _one_line_error(capsys)
-    assert "No space left on device" in line and "records kept in" in line
+    assert "No space left on device" in line
+    assert "already settled request was not written" in line and f"{ok_lines} records kept in" in line
+
+
+def test_cli_overflowing_retry_after_never_prints_the_echoed_state(probe_files, live, capsys) -> None:
+    live.replies = [
+        httpx2.Response(
+            503,
+            json={"detail": SECRET},
+            headers={"retry-after": "Sun, 25 Oct 2026 12:00:00 +999999999999999999999999"},
+        )
+    ]
+    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", "--max-retries", "0") == 0
+    out = capsys.readouterr()
+    assert "TOP_SECRET" not in out.out + out.err
+    assert json.loads(out.out)["n_failed"] == 3
+
+
+@pytest.mark.parametrize(
+    "flag, value",
+    [
+        ("--worst-usd-per-token", "nan"),
+        ("--worst-usd-per-token", "-1"),
+        ("--worst-usd-per-token", "0"),
+        ("--reserve-overhead-tokens", "nan"),
+        ("--reserve-overhead-tokens", "-1"),
+        ("--reserve-overhead-tokens", "inf"),
+    ],
+)
+def test_cli_rejects_reservation_inputs_before_touching_files(probe_files, live, capsys, flag, value) -> None:
+    probe_files["out"].write_text("keep\n", encoding="utf-8")
+    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", flag, value) == 1
+    assert flag.lstrip("-").replace("-", "_") in _one_line_error(capsys)
+    assert live.bodies == [] and not probe_files["ledger"].exists()
+    assert probe_files["out"].read_text() == "keep\n"
 
 
 def test_cli_mock_probe_unchanged(probe_files, capsys) -> None:

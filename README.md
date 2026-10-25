@@ -42,7 +42,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 5. **Shadow & Judge Audit** — Noul `|Δp|` and Choice TVD, exact McNemar-Holm test, rubric quadratic-weighted κ and bias.
 6. **Drift Monitor & Runtime Gate** — PSI and Jensen-Shannon drift, silent `model_served` guard, sub-millisecond `DecisionGate`.
 
-**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` spans, and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is joined only locally, for the blind review sheet.
+**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` spans, and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is read into memory only, by `s1 labelaudit sheet` for blind review text and by `s1 probe`, which sends each state to the selected backend (a live API for `--backend systemone` or `openai`); state text is never written to records, ledgers, probe output or exports.
 
 ---
 
@@ -71,7 +71,7 @@ s1 demo s1-demo
 - `records_canary.jsonl`: 120 production canary records simulating distribution drift (`PSI > 0.25`) + silent backend upgrade on a third of traffic (`jev-1.13.0` → `jev-1.14.0-rc1`).
 - `probe_records.jsonl`: Noul vs Yes/No Choice twin & inverse polarity probes.
 - `features.jsonl`: Pre-declared slice tags (`answerable`, `unanswerable`, `adversarial_trap`, `lang`, `has_code`).
-- `states_local.jsonl`: Local-only synthetic item states for the blind review sheet.
+- `states_local.jsonl`: Synthetic item states for the blind review sheet and the probe runner.
 - `judge_grades.jsonl`: 90 paired rubric judge vs human grades across 3 criteria (`faithfulness`, `policy_compliance`, `tone`).
 - `fits.json` + `policy.json`: A compiled calibration fit and routing policy.
 

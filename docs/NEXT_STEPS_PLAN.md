@@ -74,3 +74,20 @@
     - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.escalated`) 수집 및 시각화 연동
   - [ ] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**:
     - Langfuse Annotation Queue에서 검수 완료된 항목을 가져와 로컬 골드셋 패치 → `s1 fit` → `s1 policy tune` 재컴파일 루프 자동화
+
+---
+
+### 후보: 로드 시 `policy_sha256` 대조
+
+- 현재 `load_policies`는 `policy.json`에 저장된 `policy_sha256`을 버리고 재계산하므로, 파일 내 필드 변조는 호출자가 `expected_policy_sha256`을 따로 넘기지 않는 한 감지되지 않습니다.
+- [ ] 저장된 지문과 재계산 지문을 로드 시 비교하고 불일치 시 `PolicyIntegrityError` (기존 파일 호환성: 지문 없는 행 처리 방침 결정 필요)
+
+---
+
+### 후보: 행 단위 입력 스키마 (features · probe · calibrated 분포)
+
+파일 단위 손상(깨진 JSON, 객체가 아닌 행, 필드 누락·타입 오류)은 CLI exit 1 / 웹 400으로 보고되지만, 아래 세 경우는 형식상 유효한 행이 계산 단계에서 터져 CLI 트레이스백 또는 웹 500이 됩니다(2026-10-25 리뷰에서 재현, 브랜치 이전부터 존재). 리뷰 라운드마다 새 모양의 잘못된 입력이 발견되므로, 개별 가드 추가보다 features 행과 probe 레코드의 스키마를 정의하는 쪽이 맞습니다.
+
+- [ ] **calibrated 분포 키 불일치** (`contracts/records.py:185`): `calib.probabilities` 키를 원본 `probabilities`의 클래스와 대조하지 않음. 원본 `{"yes","no"}` + calib `{"other","no"}` → `/api/slices`에서 `KeyError('yes')`. `parse_record`에서 `RecordError`로 거부해야 함
+- [ ] **probe 역할-프리미티브 호환성** (`lint/lint.py` `audit_probe_records`): `probe_role="twin"` 레코드가 `"yes"` 키를 가진 choice라고 가정. noul 레코드에 `twin` 태그 → `KeyError('probabilities')`. 역할별 프리미티브·필수 키 검증 필요
+- [ ] **features 행 식별자 타입** (`cli.py` `_cmd_slice`, `web/app.py` `api_slices`): `{"dataset": [], "item_id": "x", ...}` → dict 키 생성에서 `TypeError`. CLI·웹 공용 features 행 검증기 필요

@@ -1,7 +1,7 @@
 """Deterministic synthetic dataset generator for s1ops (`examples/data/`).
 
 Generates a complete, 100% offline System 1 evaluation workspace:
-- `questions.json`: System 1 questions (including intentional JL010/JL020/JL030/JL041 lint cases)
+- `questions.json`: System 1 questions (including intentional JL010/JL011/JL014/JL023 lint cases)
 - `records_train.jsonl`: 120 calibration fold records (`jev-1.13.0`)
 - `records.jsonl`: 160 held-out evaluation records (`jev-1.13.0`, calibrated via `fits.json`)
 - `records_kev.jsonl`: 160 paired shadow records (`kev-1.0`) for McNemar-Holm comparison

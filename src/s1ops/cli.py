@@ -11,7 +11,6 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import sys
 from pathlib import Path
 from typing import Any
@@ -745,7 +744,6 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 
     paths = generate_workspace(out, seed=args.seed)
     print(json.dumps(paths, indent=2, sort_keys=True))
-    print(f"next: s1 web --workspace {shlex.quote(str(out))}", file=sys.stderr)
     return 0
 
 

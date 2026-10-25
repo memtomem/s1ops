@@ -41,7 +41,7 @@ def test_demo_matches_generator(tmp_path: Path, capsys) -> None:
     paths = json.loads(stdout)
     assert sorted(Path(p).name for p in paths.values()) == sorted(p.name for p in out.iterdir())
     assert len(paths) == 11
-    assert stderr == f"next: s1 web --workspace {out}\n"
+    assert stderr == ""
 
     generate_workspace(tmp_path / "direct")
     assert _workspace(out) == _workspace(tmp_path / "direct")
@@ -54,12 +54,6 @@ def test_demo_seed_changes_the_data(tmp_path: Path, capsys) -> None:
     p_a = [r["p"] for r in _load(tmp_path / "a" / "records.jsonl")]
     p_b = [r["p"] for r in _load(tmp_path / "b" / "records.jsonl")]
     assert len(p_a) == len(p_b) and p_a != p_b
-
-
-def test_demo_next_step_quotes_the_path(tmp_path: Path, capsys) -> None:
-    out = tmp_path / "my demo"
-    assert cli_main(["demo", str(out)]) == 0
-    assert capsys.readouterr().err == f"next: s1 web --workspace '{out}'\n"
 
 
 def test_demo_accepts_existing_empty_directory(tmp_path: Path, capsys) -> None:

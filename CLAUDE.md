@@ -17,17 +17,17 @@ Design docs (in `docs/`, written in Korean; README is English):
 uv sync --all-extras                          # install (extras: langfuse, typesafe)
 uv run pytest                                 # full suite, fully offline, no API keys
 uv run pytest tests/test_drift_runner_and_gate.py::test_runtime_decision_gate_and_cli_web
-uv run python examples/make_synthetic.py      # seeded demo workspace -> examples/data/
+uv run s1 demo examples/data                  # seeded demo workspace (new or empty dir only)
 uv run s1 web --workspace examples/data --host 127.0.0.1 --port 8765
 ```
 
 The full end-to-end CLI pipeline over the demo workspace (lint → fit → apply → audit → policy tune → slice → labelaudit → compare/judge → drift → probe/gate → export) is spelled out in README's Quickstart §3; later steps consume `fits.json`/`policy.json` produced by earlier ones.
 
-No linter or type checker is configured in `pyproject.toml`. No remote or CI exists yet (Track 1 of the Phase 4 plan).
+No linter or type checker is configured in `pyproject.toml`. CI (`.github/workflows/ci.yml`) runs the locked suite on Python 3.11–3.13 and `scripts/release_check.py` on the built wheel and sdist; `release.yml` publishes by manual dispatch on a `vX.Y.Z` tag (procedure in `docs/NEXT_STEPS_PLAN.md` Track 1). The repository is private while the package is public, so package metadata must not name it.
 
 ## Architecture
 
-**Package layout.** `src/s1ops/` is the real package; `src/s1/__init__.py` is only a star-re-export alias so `import s1` works. Both `s1` and `s1ops` console scripts point at `s1ops.cli:main`, a single argparse file with every subcommand. `pytest` runs with `pythonpath = ["src", "."]`, which is why tests can `from examples.make_synthetic import generate_workspace` — tests build their fixture workspace into `tmp_path` with that generator rather than using checked-in data. `examples/data/` is gitignored output.
+**Package layout.** `src/s1ops/` is the real package; `src/s1/__init__.py` is only a star-re-export alias so `import s1` works. Both `s1` and `s1ops` console scripts point at `s1ops.cli:main`, a single argparse file with every subcommand. The demo generator lives in the package (`s1ops/demo.py`, behind `s1 demo`) so it works from `pip install`; tests build their fixture workspace into `tmp_path` with `from s1ops.demo import generate_workspace` rather than using checked-in data. Its `fitted_at`/`created_at` fields are wall-clock, so compare workspaces with those dropped. `pytest` runs with `pythonpath = ["src", "."]` so `tests/test_release_check.py` can import `scripts.release_check`. `examples/data/` is gitignored output.
 
 **Data flow.** `contracts/` defines everything else's inputs: `questions.py` (Noul/Choice/Score models, `question_id`, `/v1/decisions` conversion), `records.py` (strict `jev-record/1` / `s1-record/1` parser and grouping), `schemas.py` (`PolicyEntry`, `s1-policy/1`). `improve/calibrate.py` writes `fits.json`; `improve/policy.py` writes `policy.json`; `runtime/gate.py` (`DecisionGate`) loads both at runtime. `monitor/runner.py` defines the `Backend` protocol (only `DeterministicMockBackend` exists today) and runs probes under `ledger/journal.py`. `web/app.py` serves `web/static/index.html` and computes tab data from a workspace directory.
 

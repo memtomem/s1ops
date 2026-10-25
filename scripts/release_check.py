@@ -18,12 +18,16 @@ import sys
 import tarfile
 import tempfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TAG_REF = re.compile(r"refs/tags/v(\d+\.\d+\.\d+)")
 # Hatch adds these to every sdist on top of the configured include list.
 HATCH_FORCED = {".gitignore", "PKG-INFO"}
+# The repository is private while the package is public: metadata must not name it.
+# Drop this check (and `attestations: false` in release.yml) when the repository goes public.
+PRIVATE_REPO = "memtomem/s1ops"
 # Package data the installed wheel must carry; the web workbench fails without index.html.
 PACKAGE_DATA = ("s1ops/web/static/index.html", "s1ops/py.typed")
 
@@ -136,6 +140,25 @@ def check_install(artifact: Path, version: str) -> None:
         absent = [p for p, ok in zip(PACKAGE_DATA, present) if ok != "True"]
         if absent:
             raise CheckError(f"{artifact.name}: installed package lacks {absent}")
+        # The README quickstart starts from `s1 demo`, so it must work from the installed package.
+        demo = work / "demo"
+        _run([str(venv / "bin" / "s1"), "demo", str(demo)], work)
+        _run([str(venv / "bin" / "s1"), "lint", "check", str(demo / "questions.json")], work)
+
+
+def check_metadata(wheel: Path, sdist: Path, version: str) -> None:
+    """Neither the wheel METADATA nor the sdist PKG-INFO may name the private repository."""
+    with zipfile.ZipFile(wheel) as zf:
+        sources = {f"{wheel.name} METADATA": zf.read(f"s1ops-{version}.dist-info/METADATA").decode()}
+    with tarfile.open(sdist) as tar:
+        member = tar.extractfile(f"s1ops-{version}/PKG-INFO")
+        if member is None:
+            raise CheckError(f"{sdist.name}: PKG-INFO is not a regular file")
+        sources[f"{sdist.name} PKG-INFO"] = member.read().decode()
+    for where, text in sources.items():
+        hits = [line for line in text.splitlines() if PRIVATE_REPO in line]
+        if hits:
+            raise CheckError(f"{where} names the private repository: {hits[:3]}")
 
 
 def check_dist(dist: Path) -> str:
@@ -146,6 +169,7 @@ def check_dist(dist: Path) -> str:
     if ([w.name for w in wheels], [s.name for s in sdists]) != expected:
         raise CheckError(f"{dist}: expected {expected}, found {[p.name for p in wheels + sdists]}")
     check_sdist_manifest(sdists[0], version, expected_sdist_files())
+    check_metadata(wheels[0], sdists[0], version)
     for artifact in (wheels[0], sdists[0]):
         check_install(artifact.resolve(), version)
     return version

@@ -731,6 +731,23 @@ def _cmd_gate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_demo(args: argparse.Namespace) -> int:
+    # Only a new or empty directory: the generated names include fits.json and policy.json,
+    # which a real workspace also holds, so nothing is ever overwritten.
+    out = Path(args.out_dir)
+    if out.exists() and not out.is_dir():
+        raise CliError(f"demo target is not a directory: {out}")
+    if out.is_dir() and any(out.iterdir()):
+        raise CliError(f"demo target is not empty: {out} (remove it or choose a new directory)")
+
+    from s1ops.demo import generate_workspace
+
+    paths = generate_workspace(out, seed=args.seed)
+    print(json.dumps(paths, indent=2, sort_keys=True))
+    print(f"next: s1 web --workspace {out}", file=sys.stderr)
+    return 0
+
+
 def _cmd_web(args: argparse.Namespace) -> int:
     if not Path(args.workspace).is_dir():
         raise CliError(f"workspace directory not found: {args.workspace}")
@@ -962,6 +979,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_lr.add_argument("path", help="journal with a partial trailing write")
     p_lr.add_argument("-o", "--output", required=True, help="recovered journal to write")
     p_led.set_defaults(func=_cmd_ledger)
+
+    # demo
+    p_demo = sub.add_parser("demo", help="Write a seeded synthetic demo workspace", **_FMT)
+    p_demo.add_argument("out_dir", help="directory to create, or an existing empty one")
+    p_demo.add_argument("--seed", type=int, default=42, help="random seed for the generated data")
+    p_demo.set_defaults(func=_cmd_demo)
 
     # web
     p_web = sub.add_parser("web", help="Launch local System 1 LLMOps Web Workbench (127.0.0.1)", **_FMT)

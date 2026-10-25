@@ -1,10 +1,11 @@
-"""Deterministic synthetic dataset generator for s1ops (`examples/data/`).
+"""Deterministic synthetic demo workspace generator, behind `s1 demo`.
 
 Generates a complete, 100% offline System 1 evaluation workspace:
 - `questions.json`: System 1 questions (including intentional JL010/JL011/JL014/JL023 lint cases)
 - `records_train.jsonl`: 120 calibration fold records (`jev-1.13.0`)
 - `records.jsonl`: 160 held-out evaluation records (`jev-1.13.0`, calibrated via `fits.json`)
 - `records_kev.jsonl`: 160 paired shadow records (`kev-1.0`) for McNemar-Holm comparison
+- `records_canary.jsonl`: 120 canary records with distribution drift and a silent `model_served` upgrade
 - `probe_records.jsonl`: Noul/Choice twin & inverse coherence probes (`probe_role`: `noul`, `twin`, `inverse`)
 - `features.jsonl`: per-item slice & feature tags (answerability + BH-FDR error slice mining)
 - `states_local.jsonl`: local-only synthetic item states for blind review sheet generation
@@ -379,10 +380,3 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
         "policy": str(policy_path),
         "judge_grades": str(judge_path),
     }
-
-
-if __name__ == "__main__":
-    target = Path(__file__).parent / "data"
-    paths = generate_workspace(target)
-    print(json.dumps(paths, indent=2, sort_keys=True))
-

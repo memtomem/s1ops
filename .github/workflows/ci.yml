@@ -41,7 +41,7 @@ jobs:
         # examples/data/ is generated, not checked in. The demo set contains deliberate
         # warnings, so this runs without --strict and fails only on errors.
         run: |
-          uv run --locked python examples/make_synthetic.py
+          uv run --locked s1 demo examples/data
           uv run --locked s1 lint check examples/data/questions.json
 
   package:

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import io
 import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
 
-from scripts.release_check import CheckError, check_sdist_manifest, check_version
+from scripts.release_check import CheckError, check_metadata, check_sdist_manifest, check_version
 from s1ops import __version__
 
 EXPECTED = {"PKG-INFO", ".gitignore", "README.md", "src/s1/__init__.py", "src/s1ops/__init__.py"}
@@ -64,3 +65,28 @@ def test_version_guard_rejects_ref(ref: str) -> None:
 
 def test_version_guard_accepts_matching_tag() -> None:
     assert check_version(f"refs/tags/v{__version__}") == __version__
+
+
+def _dists(tmp_path: Path, wheel_meta: str, pkg_info: str) -> tuple[Path, Path]:
+    wheel = tmp_path / f"s1ops-{__version__}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as zf:
+        zf.writestr(f"s1ops-{__version__}.dist-info/METADATA", wheel_meta)
+    sdist = tmp_path / f"s1ops-{__version__}.tar.gz"
+    with tarfile.open(sdist, "w:gz") as tar:
+        info = tarfile.TarInfo(f"s1ops-{__version__}/PKG-INFO")
+        info.size = len(pkg_info.encode())
+        tar.addfile(info, io.BytesIO(pkg_info.encode()))
+    return wheel, sdist
+
+
+def test_metadata_without_repo_passes(tmp_path: Path) -> None:
+    check_metadata(*_dists(tmp_path, "Name: s1ops\n", "Name: s1ops\n"), __version__)
+
+
+@pytest.mark.parametrize("where", ["wheel", "sdist"])
+def test_metadata_naming_private_repo_fails(tmp_path: Path, where: str) -> None:
+    leak = "Project-URL: Repository, https://github.com/memtomem/s1ops\n"
+    wheel_meta, pkg_info = (leak, "Name: s1ops\n") if where == "wheel" else ("Name: s1ops\n", leak)
+    with pytest.raises(CheckError, match="names the private repository") as exc:
+        check_metadata(*_dists(tmp_path, wheel_meta, pkg_info), __version__)
+    assert ("METADATA" if where == "wheel" else "PKG-INFO") in str(exc.value)

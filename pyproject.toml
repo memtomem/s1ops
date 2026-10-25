@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "Pandas Studio" }]
+authors = [{ name = "DAPADA Inc. and s1ops contributors", email = "contact@dapada.co.kr" }]
 keywords = ["llmops", "calibration", "classification", "decision-models", "drift", "evaluation"]
 classifiers = [
     "Development Status :: 3 - Alpha",

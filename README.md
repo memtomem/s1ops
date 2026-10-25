@@ -2,7 +2,7 @@
 
 > **The dedicated System 1 LLMOps SDK for sub-100ms reflexive inference (`noul` / `choice` / `score`).**
 >
-> **Repository**: `memtomem/s1ops` (private) · **PyPI**: `s1ops` (not yet published) · **Python**: `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
+> **Repository**: `memtomem/s1ops` (private) · **PyPI**: `s1ops` (name reserved: 0.0.1 is an empty, yanked placeholder; first functional release 0.2.0) · **Python**: `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
 
 `s1ops` is an offline-first, vendor-neutral evaluation, calibration, threshold compilation, blind label audit, and observability platform purpose-built for **Typed Decision Models (System 1)**:
 - **TypeSafe `/v1/systemone`**: `jev-1.13.0`, `kev-1.0`, `laya`, `von` (`noul`, `choice`, `score`)

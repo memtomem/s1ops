@@ -18,6 +18,8 @@
 - **목표**: 로컬 Git 저장소(`/Users/pdstudio/Work/s1ops`)를 `memtomem/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
 - **세부 작업**:
   - [x] 비공개 저장소 `memtomem/s1ops` 생성 및 `main` Push (2026-10-25). `origin`은 SSH alias `git@github.com-memtomem:memtomem/s1ops.git`; `gh` 활성 계정이 `tsdata`이므로 `gh` 호출은 `GH_TOKEN=$(gh auth token --user memtomem)`로 실행
+  - [x] PyPI·TestPyPI 이름 확보 (2026-10-25): 코드 없는 `s1ops 0.0.1`을 올리고 두 곳 모두 yank. pip는 yank된 버전을 건너뛰지만 `uv`는 고정하지 않은 `s1ops`에도 0.0.1을 고르므로, 0.2.0 전까지 uv 사용자는 빈 패키지를 받음
+  - [ ] 릴리스는 토큰 대신 GitHub Actions trusted publishing으로 전환 (PyPI·TestPyPI 각각 publisher 등록)
   - [ ] `.github/workflows/ci.yml` 추가:
     - `uv sync --all-extras`
     - `uv run pytest -v` (100% 오프라인 무의존성 검증)

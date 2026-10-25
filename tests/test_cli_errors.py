@@ -309,3 +309,13 @@ def test_fit_min_n_warns_instead_of_skipping(ws, tmp_path: Path, capsys) -> None
     assert cli_main(["fit", ws["records_train"], "-o", str(out), "--min-n", "10000"]) == 0
     (fit,) = load_fits(out)
     assert any("warning threshold 10000" in w for w in fit.warnings)
+
+
+def test_integer_beyond_float_range_is_a_record_error(tmp_path: Path, capsys) -> None:
+    row = '{"schema": "s1-record/1", "item_id": "i", "question_id": "q-1", "primitive": "noul", '
+    row += '"model_requested": "m", "model_served": "m", "p": 1' + "0" * 400 + "}"
+    path = tmp_path / "records.jsonl"
+    path.write_text(row + "\n", encoding="utf-8")
+    assert cli_main(["audit", str(path)]) == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert len(err) == 1 and err[0].startswith("s1: line 1: p must be finite")

@@ -136,7 +136,7 @@ def _openai_instructions(instructions: Any) -> str | list[Any]:
     if (
         isinstance(instructions, list)
         and instructions
-        and all(isinstance(part, dict) and part.get("type") in INSTRUCTION_PARTS for part in instructions)
+        and all(isinstance(part, dict) and isinstance(part.get("type"), str) and part["type"] in INSTRUCTION_PARTS for part in instructions)
     ):
         return instructions
     raise ValueError(f"OpenAI Decisions takes string instructions or a list of {sorted(INSTRUCTION_PARTS)} parts")

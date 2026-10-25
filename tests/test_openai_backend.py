@@ -125,7 +125,7 @@ def test_duplicate_openai_choice_values_are_refused(tmp_path: Path) -> None:
 def test_instruction_parts_pass_through_and_bare_objects_do_not() -> None:
     parts = [{"type": "input_text", "text": "Is this billing?"}, {"type": "input_json", "data": {"amount": 3}}]
     assert to_openai_decision("q", NoulQuestion(instructions=parts))["instructions"] == parts
-    for bad in ([], [{"type": "image"}], ["plain"]):
+    for bad in ([], [{"type": "image"}], ["plain"], [{"type": []}], [{"type": {}}]):
         with pytest.raises(ValueError, match="string instructions or a list"):
             to_openai_decision("q", NoulQuestion(instructions=bad))
 
@@ -229,6 +229,7 @@ PRED = {"type": "predicate", "probability": 0.5}
         (NOUL, {"model": "m", "answers": [{"name": "other", **PRED}], "usage": usage(9)}, "invalid_response", "measured"),
         (NOUL, {"model": SECRET + " x", "answers": [{"name": "q", **PRED}], "usage": usage(9)}, "invalid_response", "measured"),
         (NOUL, {"model": "m", "answers": [{"name": "q", "type": "predicate", "probability": 2}], "usage": usage(9)}, "invalid_response", "measured"),
+        (NOUL, {"model": "m", "answers": [{"name": "q", "type": "predicate", "probability": 10**400}], "usage": usage(9)}, "invalid_response", "measured"),
         (
             CHOICE,
             {"model": "m", "usage": usage(9), "answers": [{"name": "q", "type": "choice", "choice": True, "confidence": 0.5,

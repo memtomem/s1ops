@@ -63,7 +63,7 @@
     - prompt caching은 기본 켜짐(캐시 쓰기 과금, 적중 할인) → `prompt_cache_options={"mode": "explicit"}`에 breakpoint 없음으로 끔(문서: "the request does not use prompt caching"). `input_tokens × --usd-per-input-token`이 측정 비용, `cache_write_tokens > 0`이면 단가를 모르므로 `unknown`. state가 서버 캐시에 30분 남지 않음
     - 응답: predicate `probability` → `p`; choice·score `probabilities` 배열은 항목 수 = 선택지/레벨 수이고 값 집합이 일치해야 dict로 바꿈(중복이 dict에서 유효한 분포로 접히지 않게); `refusal` → `error_code: "refusal"` 레코드(측정 정산, 재시도 없음)
     - HTTP 오류의 usage는 SDK의 `e.body`(내부 `error` 객체만)가 아니라 전체 응답 JSON에서; 읽기 실패(HTML·깨진 UTF-8·미판독)는 usage 없음. `timeout=None`을 넘기면 SDK가 타임아웃을 끄므로 생략
-    - `to_openai_decision`: score(`levels`) 추가, noul `criteria`·구조화 instructions·개수 범위 밖은 `ValueError`(이전엔 noul criteria를 조용히 버려 같은 `question_id`로 다른 질문을 보냄). `parse_wire_question`: OpenAI score `levels` 지원, 중복 choice `value`는 `ValueError`(이전엔 덮어씀 — lint `JL000`로도 보고됨). `run_batch`는 백엔드의 `check_question`으로 첫 예약 전에 거부
+    - `to_openai_decision`: score(`levels`) 추가, noul `criteria`·맨 객체 instructions(문자열·input part 배열은 통과)·개수 범위 밖은 `ValueError`(이전엔 noul criteria를 조용히 버려 같은 `question_id`로 다른 질문을 보냄). `parse_wire_question`: OpenAI score `levels` 지원, 중복 choice `value`는 `ValueError`(이전엔 덮어씀 — lint `JL000`로도 보고됨). `run_batch`는 백엔드의 `check_question`으로 첫 예약 전에 거부
     - 로그 필터를 전송 계층까지 확대(두 백엔드 공통): `httpx2`(INFO reason phrase), `httpcore2.*`(DEBUG 응답 헤더), `openai._base_client` 등 자식 로거. 테스트가 실제 요청 중 로그를 남긴 로거가 모두 목록에 있는지 확인(라이브러리 업그레이드 시 실패로 드러남)
   - [ ] 실측(키 필요): `/v1/decisions` 응답의 `model`이 별칭인지 스냅샷인지, `input_tokens`와 `token_bound` 추정 차이
   - [ ] `--reserve-overhead-tokens` 기본값(현재 0): 서버 측 템플릿 토큰으로 측정이 예약을 넘으면 `LedgerUnusable`로 멈춤(안전한 실패). 라이브 실측 후 조정

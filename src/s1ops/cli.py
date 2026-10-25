@@ -58,6 +58,7 @@ from s1ops.improve.slices import mine_error_slices, slice_report
 from s1ops.ledger.journal import (
     BudgetExceeded,
     Ledger,
+    lock_path,
     migrate as ledger_migrate,
     read as ledger_read,
     recover as ledger_recover,
@@ -65,7 +66,8 @@ from s1ops.ledger.journal import (
 from s1ops.lint.lint import audit_probe_records, format_text, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
-from s1ops.monitor.runner import DeterministicMockBackend, run_batch
+from s1ops.monitor.backends import HttpSystemOneBackend
+from s1ops.monitor.runner import DeterministicMockBackend, check_reservation, run_batch
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
 
 EXIT_OK = 0
@@ -673,6 +675,58 @@ def _cmd_drift(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _probe_backend(args: argparse.Namespace):
+    if args.backend == "mock":
+        return DeterministicMockBackend(served_model=args.served_model or args.model)
+    if args.served_model is not None:
+        raise CliError("--served-model applies only to --backend mock")
+    if args.usd_per_input_token is None:
+        raise CliError(f"--backend {args.backend} needs --usd-per-input-token: the API reports tokens, not dollars")
+    try:
+        return HttpSystemOneBackend(
+            usd_per_input_token=args.usd_per_input_token,
+            base_url=args.base_url,
+            timeout=args.timeout,
+        )
+    except ImportError as e:
+        raise CliError(str(e)) from None
+
+
+def _open_output_apart(path: Path, others: list[Path]):
+    """Open `path` for writing, refusing if it is the same file as any of `others`.
+
+    Compares file identity, not names: a symlink, a hard link or a case-insensitive filesystem can
+    make two names one file. Nothing is truncated: the caller truncates when the first record
+    arrives, so a run that fails before any request keeps the previous output.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        created = True
+    except FileExistsError:
+        fd = os.open(path, os.O_WRONLY)
+        created = False
+    try:
+        st = os.fstat(fd)
+        for other in others:
+            try:
+                ost = os.stat(other)
+            except FileNotFoundError:
+                continue
+            if (ost.st_dev, ost.st_ino) == (st.st_dev, st.st_ino):
+                if created:
+                    os.unlink(path)
+                raise CliError(f"--output {path} is the same file as {other}")
+    except BaseException:
+        os.close(fd)
+        raise
+    return os.fdopen(fd, "w", encoding="utf-8")
+
+
+def _os_error_message(e: OSError) -> str:
+    return f"{e.filename}: {e.strerror}" if e.filename else str(e)
+
+
 def _cmd_probe(args: argparse.Namespace) -> int:
     q_doc = _read_json(Path(args.questions))
     if isinstance(q_doc, dict) and "questions" in q_doc and isinstance(q_doc["questions"], dict):
@@ -681,31 +735,69 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         q_map = {k: v for k, v in q_doc.items() if isinstance(v, dict) and "type" in v}
     else:
         raise CliError(f"{args.questions}: must be a JSON object mapping names to questions")
+    if args.max_retries < 0:
+        raise CliError("--max-retries must be >= 0")
+    check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens)
 
     states = _load_jsonl_dicts(Path(args.states))
-    backend = DeterministicMockBackend(served_model=args.served_model or args.model)
-    with Ledger(args.ledger, cap_usd=args.cap_usd) as ledger:
-        recs = run_batch(
-            states,
-            q_map,
-            backend=backend,
-            ledger=ledger,
-            model_requested=args.model,
-            probe_mode=not args.no_expand_probes,
-        )
-
+    backend = _probe_backend(args)
     out_path = Path(args.output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as fh:
-        for r in recs:
-            fh.write(json.dumps(r, sort_keys=True) + "\n")
+    ledger_path = Path(args.ledger)
+    written = 0
+    failed = 0
+    lost = False
+    try:
+        with Ledger(ledger_path, cap_usd=args.cap_usd) as ledger:
+            others = [ledger_path, lock_path(ledger_path), Path(args.states), Path(args.questions)]
+            with _open_output_apart(out_path, others) as fh:
+
+                def write(rec: dict[str, Any]) -> None:
+                    nonlocal written, failed, lost
+                    try:
+                        if not written:
+                            fh.truncate(0)
+                        fh.write(json.dumps(rec, sort_keys=True) + "\n")
+                        fh.flush()
+                    except OSError:
+                        lost = True
+                        raise
+                    written += 1
+                    failed += rec["model_served"] is None
+
+                run_batch(
+                    states,
+                    q_map,
+                    backend=backend,
+                    ledger=ledger,
+                    model_requested=args.model,
+                    worst_usd_per_token=args.worst_usd_per_token,
+                    reserve_overhead_tokens=args.reserve_overhead_tokens,
+                    probe_mode=not args.no_expand_probes,
+                    max_retries=args.max_retries,
+                    on_record=write,
+                )
+                if not written:
+                    fh.truncate(0)
+    # Outside both `with` blocks, so a second failure while closing the output cannot replace this message.
+    except (BudgetExceeded, ValueError, OSError) as e:
+        if os.environ.get("S1_DEBUG") or not (written or lost):
+            raise
+        message = _os_error_message(e) if isinstance(e, OSError) else str(e)
+        if lost:
+            message += f"; the record of an already settled request was not written to {out_path}"
+        raise CliError(f"{message}; {written} records kept in {out_path}") from None
+    finally:
+        close = getattr(backend, "close", None)
+        if close is not None:
+            close()
 
     st = ledger_read(args.ledger)
     print(
         json.dumps(
             {
                 "output": str(out_path),
-                "n_records": len(recs),
+                "n_records": written,
+                "n_failed": failed,
                 "spent_usd": round(st.spent_usd, 8),
                 "cap_usd": args.cap_usd,
             },
@@ -936,7 +1028,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_prb.add_argument("--ledger", required=True, help="budget journal; created if absent")
     p_prb.add_argument("--cap-usd", type=float, default=1.00, help="hard spend cap; the run stops before a call whose worst-case cost would exceed it")
     p_prb.add_argument("--model", default="jev-1.13.0", help="model_requested sent to the backend")
+    p_prb.add_argument("--backend", choices=["mock", "systemone"], default="mock", help="mock: offline deterministic answers; systemone: live POST /v1/systemone (needs the typesafe extra and TYPESAFE_API_KEY)")
     p_prb.add_argument("--served-model", default=None, help="model_served the mock backend reports (defaults to --model); set it differently to simulate a silent upgrade")
+    p_prb.add_argument("--usd-per-input-token", type=float, default=None, help="price per billable input token; required for a live backend, which reports tokens, not dollars")
+    p_prb.add_argument("--base-url", default=None, help="live API root (defaults to TYPESAFE_BASE_URL, then the SDK default)")
+    p_prb.add_argument("--timeout", type=float, default=None, help="per-request timeout in seconds (defaults to the SDK's)")
+    p_prb.add_argument("--max-retries", type=int, default=2, help="retries after a timeout, connection error, 408, 429 or 5xx; each attempt reserves and settles on its own")
+    p_prb.add_argument("--worst-usd-per-token", type=float, default=2e-6, help="price used for each attempt's worst-case reservation")
+    p_prb.add_argument("--reserve-overhead-tokens", type=float, default=0.0, help="tokens added to each reservation for server-side prompt overhead; a measured cost above the reservation stops the run")
     p_prb.add_argument("--no-expand-probes", action="store_true", help="send only the questions as written, without twin and inverse probes")
     p_prb.set_defaults(func=_cmd_probe)
 
@@ -1011,7 +1110,7 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as e:
         if debug:
             raise
-        return _fail(f"{e.filename}: {e.strerror}" if e.filename else str(e))
+        return _fail(_os_error_message(e))
     except (ValueError, PolicyIntegrityError, BudgetExceeded) as e:
         # ValueError covers RecordError, FitError, LedgerCorrupt and json.JSONDecodeError.
         if debug:

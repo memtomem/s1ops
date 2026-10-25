@@ -18,7 +18,7 @@
 - **목표**: 로컬 Git 저장소(`/Users/pdstudio/Work/s1ops`)를 `memtomem/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
 - **세부 작업**:
   - [x] 비공개 저장소 `memtomem/s1ops` 생성 및 `main` Push (2026-10-25). `origin`은 SSH alias `git@github.com-memtomem:memtomem/s1ops.git`; `gh` 활성 계정이 `tsdata`이므로 `gh` 호출은 `GH_TOKEN=$(gh auth token --user memtomem)`로 실행
-  - [x] PyPI·TestPyPI 이름 확보 (2026-10-25): 코드 없는 `s1ops 0.0.1`을 올리고 두 곳 모두 yank. pip는 yank된 버전을 건너뛰지만 `uv`는 고정하지 않은 `s1ops`에도 0.0.1을 고르므로, 0.2.0 전까지 uv 사용자는 빈 패키지를 받음
+  - [x] PyPI·TestPyPI 이름 확보 (2026-10-25): 코드 없는 `s1ops 0.0.1`을 올리고 두 곳 모두 yank. pip는 yank된 버전을 건너뛰지만 `uv`는 고정하지 않은 `s1ops`에도 0.0.1을 고르므로, 첫 실제 릴리스 전까지 uv 사용자는 빈 패키지를 받음
   - [x] `.github/workflows/ci.yml` 추가 (2026-10-25, PR #2 run 40169216043 녹색: 3.11–3.13 각 92 passed, `package` job `release_check: dist ok`):
     - Python 3.11–3.13 매트릭스 (`eval/judge.py`가 쓰는 `cohen_kappa_score(replace_undefined_by=...)`가 scikit-learn 1.9부터 있고, 1.9는 Python 3.11 이상 필요), `uv sync --all-extras --locked` (lock이 낡으면 실패)
     - `uv run pytest -v` (100% 오프라인 무의존성 검증)
@@ -33,7 +33,7 @@
     - GitHub environment `testpypi`, `pypi` 생성
     - TestPyPI·PyPI의 **기존** `s1ops` 프로젝트(yank된 0.0.1이 있으므로 pending publisher가 아님) → Manage → Publishing에서 GitHub publisher 추가: owner `memtomem`, repository `s1ops`, workflow `release.yml`, environment `testpypi` / `pypi`
   - 릴리스 절차: `vX.Y.Z` 태그 push → `GH_TOKEN=$(gh auth token --user memtomem) gh workflow run release.yml --ref vX.Y.Z -f index=testpypi` (`--ref`는 태그 이름도 받음). TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
-  - [x] 첫 실제 릴리스(0.2.0) 준비 (2026-10-25 소유자 결정: 패키지만 먼저 공개, 저장소는 비공개 유지):
+  - [x] 첫 실제 릴리스 준비 (2026-10-25 소유자 결정: 패키지만 먼저 공개, 저장소는 비공개 유지. 버전은 0.2.0 대신 0.0.2로 결정. `v0.2.0` 태그로 한 TestPyPI 시도는 publisher 불일치로 업로드 전에 실패해 아무것도 공개되지 않음):
     - 데모 생성기를 패키지로 옮겨 `s1 demo OUT_DIR [--seed N]` 추가 (새 디렉터리나 빈 디렉터리에만 씀, `--force` 없음). `release_check.py`가 wheel·sdist 설치본에서 `s1 demo` + lint까지 실행
     - README를 PyPI용으로 재작성: `pip install s1ops` → `s1 demo` → 파이프라인. 저장소·`docs/` 링크, Mermaid, `$...$` 수식 제거 (PyPI는 렌더링하지 않음)
     - `[project.urls]` 제거, `release_check.py`가 METADATA·PKG-INFO에 `memtomem/s1ops`가 없는지 검사

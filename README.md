@@ -42,7 +42,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 5. **Shadow & Judge Audit** — Noul `|Δp|` and Choice TVD, exact McNemar-Holm test, rubric quadratic-weighted κ and bias.
 6. **Drift Monitor & Runtime Gate** — PSI and Jensen-Shannon drift, silent `model_served` guard, sub-millisecond `DecisionGate`.
 
-**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` spans, and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is read by two commands only: `s1 labelaudit sheet` writes the flagged items' state text into the review sheet, which is meant for a human reviewer, and `s1 probe` sends each state to the selected backend (a live API for `--backend systemone` or `openai`). State text is never written to records, ledgers, probe output or exports.
+**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` spans, and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is read by two commands only: `s1 labelaudit sheet` writes the state text of every item under review (the top-ranked flags plus random controls) into the review sheet, which is meant for a human reviewer, and `s1 probe` sends each state to the selected backend (a live API for `--backend systemone` or `openai`). State text is never written to records, ledgers, probe output or exports.
 
 ---
 

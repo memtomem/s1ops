@@ -80,6 +80,11 @@ def parse_wire_question(raw: dict[str, Any]) -> QuestionModel:
     if not isinstance(raw, dict):
         raise ValueError("question must be a JSON object")
     kind = raw.get("type")
+    openai_form = kind == "predicate" or (kind == "choice" and "choices" in raw and "criteria" not in raw) or (
+        kind == "score" and "levels" in raw and "criteria" not in raw
+    )
+    if openai_form and "instructions" not in raw:
+        raise ValueError(f"{kind} question is missing 'instructions'")
     if kind == "predicate":
         extra = set(raw) - {"type", "name", "instructions"}
         if extra:
@@ -121,6 +126,20 @@ def parse_wire_question(raw: dict[str, Any]) -> QuestionModel:
 
 CHOICES = (2, 255)
 LEVELS = (2, 10)
+INSTRUCTION_PARTS = frozenset({"input_text", "input_image", "input_json"})
+
+
+def _openai_instructions(instructions: Any) -> str | list[Any]:
+    """A string, or a list of `/v1/decisions` input parts; a bare object has no OpenAI form."""
+    if isinstance(instructions, str):
+        return instructions
+    if (
+        isinstance(instructions, list)
+        and instructions
+        and all(isinstance(part, dict) and part.get("type") in INSTRUCTION_PARTS for part in instructions)
+    ):
+        return instructions
+    raise ValueError(f"OpenAI Decisions takes string instructions or a list of {sorted(INSTRUCTION_PARTS)} parts")
 
 
 def _openai_level(level: Any) -> dict[str, Any]:
@@ -139,16 +158,15 @@ def _openai_level(level: Any) -> dict[str, Any]:
 def to_openai_decision(name: str, question: QuestionModel) -> dict[str, Any]:
     """Convert a question to OpenAI `/v1/decisions` wire format, or raise `ValueError` if it has none.
 
-    Nothing is dropped: a Noul with `criteria` (predicates have none), structured `instructions`, or
+    Nothing is dropped: a Noul with `criteria` (predicates have none), object `instructions`, or
     counts outside the API's limits are refused, since sending a different question under the same
     `question_id` would pool answers to two questions.
     """
-    if not isinstance(question.instructions, str):
-        raise ValueError("OpenAI Decisions takes string instructions")
+    instructions = _openai_instructions(question.instructions)
     if isinstance(question, NoulQuestion):
         if question.criteria is not None:
             raise ValueError("an OpenAI predicate has no criteria; fold them into the instructions")
-        return {"type": "predicate", "name": name, "instructions": question.instructions}
+        return {"type": "predicate", "name": name, "instructions": instructions}
     if isinstance(question, ChoiceQuestion):
         if not CHOICES[0] <= len(question.criteria) <= CHOICES[1]:
             raise ValueError(f"OpenAI choice takes {CHOICES[0]} to {CHOICES[1]} options, got {len(question.criteria)}")
@@ -158,10 +176,10 @@ def to_openai_decision(name: str, question: QuestionModel) -> dict[str, Any]:
             {"value": k, "description": d} if d is not None else {"value": k}
             for k, d in question.criteria.items()
         ]
-        return {"type": "choice", "name": name, "instructions": question.instructions, "choices": choices}
+        return {"type": "choice", "name": name, "instructions": instructions, "choices": choices}
     if isinstance(question, ScoreQuestion):
         if not LEVELS[0] <= len(question.criteria) <= LEVELS[1]:
             raise ValueError(f"OpenAI score takes {LEVELS[0]} to {LEVELS[1]} levels, got {len(question.criteria)}")
         levels = [_openai_level(level) for level in question.criteria]
-        return {"type": "score", "name": name, "instructions": question.instructions, "levels": levels}
+        return {"type": "score", "name": name, "instructions": instructions, "levels": levels}
     raise ValueError(f"unsupported question model: {type(question).__name__}")

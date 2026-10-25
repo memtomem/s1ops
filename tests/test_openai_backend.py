@@ -122,6 +122,31 @@ def test_duplicate_openai_choice_values_are_refused(tmp_path: Path) -> None:
     assert [(f.rule, f.message) for f in report.findings if f.severity == "error"] == [("JL000", "duplicate choice value 'A'")]
 
 
+def test_instruction_parts_pass_through_and_bare_objects_do_not() -> None:
+    parts = [{"type": "input_text", "text": "Is this billing?"}, {"type": "input_json", "data": {"amount": 3}}]
+    assert to_openai_decision("q", NoulQuestion(instructions=parts))["instructions"] == parts
+    for bad in ([], [{"type": "image"}], ["plain"]):
+        with pytest.raises(ValueError, match="string instructions or a list"):
+            to_openai_decision("q", NoulQuestion(instructions=bad))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"type": "predicate"},
+        {"type": "choice", "choices": [{"value": "a"}, {"value": "b"}]},
+        {"type": "score", "levels": [{"label": "a"}, {"label": "b"}]},
+    ],
+)
+def test_openai_form_without_instructions_is_a_lint_finding(tmp_path: Path, raw) -> None:
+    with pytest.raises(ValueError, match="missing 'instructions'"):
+        parse_wire_question(raw)
+    path = tmp_path / "questions.json"
+    path.write_text(json.dumps({"q": raw}), encoding="utf-8")
+    errors = [(f.rule, f.message) for f in lint_path(path).findings if f.severity == "error"]
+    assert errors == [("JL000", f"{raw['type']} question is missing 'instructions'")]
+
+
 def test_unsupported_question_is_refused_before_any_reservation(tmp_path: Path) -> None:
     server = Server(decision({"type": "predicate", "probability": 0.5}))
     journal = tmp_path / "journal.jsonl"
@@ -297,6 +322,19 @@ def test_error_with_top_level_usage_is_measured_and_overrun_stops(tmp_path: Path
     assert len(server.bodies) == 1 and outcomes(ledger_read(journal)) == ["measured"]
 
 
+@pytest.mark.parametrize("status", [200, 500])
+def test_absurd_token_counts_never_escape_as_overflow(tmp_path: Path, status) -> None:
+    body = {"model": "m", "answers": [{"name": "q", **PRED}], "usage": usage(10**400), "error": {"message": SECRET}}
+    server = Server(httpx2.Response(status, json=body))
+    with pytest.raises(BackendError) as info:
+        backend(server).infer("s", NOUL, model_requested="gpt-6-luna")
+    e = info.value
+    assert e.error_code == ("invalid_usage" if status == 200 else "http_500")
+    assert e.usage_usd is None and SECRET not in str(e) and e.__cause__ is None
+    assert e.__context__ is None or e.__suppress_context__
+    assert e.retryable is (status == 500)
+
+
 def test_429_waits_for_retry_after(tmp_path: Path) -> None:
     sleeps: list[float] = []
     server = Server(httpx2.Response(429, headers={"retry-after-ms": "300"}), decision(PRED))
@@ -385,6 +423,15 @@ def test_sdk_and_transport_logs_during_infer_never_carry_the_state(echo_url, cap
     assert SECRET not in caplog.text
     # The filter is scoped to the call: the same loggers still pass records outside it.
     assert [r.getMessage() for r in caplog.records if r.name in QUIET_LOGGERS] == ["outside any request"]
+
+
+def test_every_listed_logger_is_filtered_before_its_module_loads() -> None:
+    # httpcore2.http2 and httpcore2.socks exist only after a lazy import; they must already carry
+    # the filter, so that the import receives the filtered logger.
+    OpenAIDecisionsBackend(usd_per_input_token=PRICE, api_key="k")
+    assert {"httpcore2.http2", "httpcore2.socks"} <= set(QUIET_LOGGERS)
+    for name in QUIET_LOGGERS:
+        assert backends_mod._DROP_DURING_INFER in logging.getLogger(name).filters, name
 
 
 def test_every_logger_that_speaks_during_a_request_is_quieted(echo_url, caplog, monkeypatch) -> None:

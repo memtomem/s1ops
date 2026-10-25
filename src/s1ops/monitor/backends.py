@@ -68,6 +68,21 @@ def _quiet_sdk_logs() -> None:
         logging.getLogger(name).addFilter(_DROP_DURING_INFER)
 
 
+def _usd(tokens: int | None, usd_per_input_token: float) -> float | None:
+    """Tokens times the price, or `None` when the product is not a finite number of dollars.
+
+    A server-reported count can be any JSON integer; `10**400 * price` raises OverflowError, and this
+    can run while an SDK error is being handled, where an escaping exception chains to its server text.
+    """
+    if tokens is None:
+        return None
+    try:
+        usd = tokens * usd_per_input_token
+    except OverflowError:
+        return None
+    return usd if math.isfinite(usd) else None
+
+
 def _check_price(usd_per_input_token: object) -> float:
     if isinstance(usd_per_input_token, bool) or not (
         isinstance(usd_per_input_token, (int, float)) and math.isfinite(usd_per_input_token) and usd_per_input_token >= 0
@@ -204,7 +219,7 @@ class HttpSystemOneBackend:
             raise ValueError(f"TypeSafe client: {e}") from None
 
     def _usd(self, tokens: int | None) -> float | None:
-        return None if tokens is None else tokens * self.usd_per_input_token
+        return _usd(tokens, self.usd_per_input_token)
 
     def close(self) -> None:
         self._client.close()
@@ -390,7 +405,7 @@ class OpenAIDecisionsBackend:
             raise ValueError(f"OpenAI client: {e}") from None
 
     def _usd(self, tokens: int | None) -> float | None:
-        return None if tokens is None else tokens * self.usd_per_input_token
+        return _usd(tokens, self.usd_per_input_token)
 
     def check_question(self, question: QuestionModel) -> None:
         """Raise `ValueError` for a question `/v1/decisions` cannot take, before anything is reserved."""

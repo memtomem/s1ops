@@ -265,6 +265,15 @@ def test_overrun_reported_inside_an_sdk_rejected_body_still_stops(tmp_path: Path
     assert len(server.bodies) == 1 and ledger_read(journal).overruns
 
 
+def test_absurd_token_count_in_an_error_body_never_escapes(tmp_path: Path) -> None:
+    server = Server(httpx2.Response(503, json={"detail": SECRET, "usage": {"input_tokens": 10**400}}))
+    with pytest.raises(BackendError) as info:
+        backend(server).infer(SECRET, NOUL, model_requested="m")
+    e = info.value
+    assert (e.error_code, e.usage_usd, e.retryable) == ("http_503", None, True)
+    assert "TOP_SECRET" not in str(e) and e.__cause__ is None and e.__suppress_context__
+
+
 def test_overrun_on_the_last_request_stops_after_keeping_its_record(tmp_path: Path) -> None:
     server = Server(ok({"type": "noul", "noul": 0.9}, tokens=10**9))
     journal = tmp_path / "journal.jsonl"

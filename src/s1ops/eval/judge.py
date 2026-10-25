@@ -1,5 +1,6 @@
 """Rubric grader agreement audit against a reference judge (exact, within-1, quadratic κ, bias)."""
 
+import math
 import warnings
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
@@ -15,12 +16,16 @@ class Agreement:
     exact: float
     within_one: float
     weighted_kappa: float
+    """NaN when kappa is undefined (e.g. both graders give every item the same grade)."""
     bias: float
     pass_agreement: float | None = None
     passes_bar: bool = False
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        if math.isnan(self.weighted_kappa):
+            d["weighted_kappa"] = None  # NaN is not valid JSON
+        return d
 
 
 def agreement(

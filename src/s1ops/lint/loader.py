@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from s1ops.contracts._validation import pydantic_errors
 from s1ops.contracts.questions import (
     NoulQuestion,
     QuestionModel,
@@ -63,14 +64,6 @@ def _plain(node: object) -> object:
     return node
 
 
-def _pydantic_errors(error: ValidationError) -> list[str]:
-    out = []
-    for e in error.errors(include_url=False):
-        loc = ".".join(str(part) for part in e["loc"]) or "(root)"
-        out.append(f"{loc}: {e['msg']}")
-    return out
-
-
 def parse_question(name: str, raw: object, known_rules: frozenset[str]) -> QuestionSpec:
     if not isinstance(raw, dict):
         return QuestionSpec(name, None, errors=["a question must be a JSON object"])
@@ -106,13 +99,13 @@ def parse_question(name: str, raw: object, known_rules: frozenset[str]) -> Quest
             try:
                 inverse = NoulQuestion.model_validate({"type": "noul", **extension["inverse"]})
             except ValidationError as error:
-                errors.extend(f"{ext_key}.inverse.{e}" for e in _pydantic_errors(error))
+                errors.extend(f"{ext_key}.inverse.{e}" for e in pydantic_errors(error))
 
     question: QuestionModel | None = None
     try:
         question = parse_wire_question(body)
     except ValidationError as error:
-        errors.extend(_pydantic_errors(error))
+        errors.extend(pydantic_errors(error))
     except ValueError as error:
         errors.append(str(error))
     return QuestionSpec(name, question, ignore, inverse, errors, duplicates)

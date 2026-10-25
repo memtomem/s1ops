@@ -2,7 +2,7 @@
 
 > **The dedicated System 1 LLMOps SDK for sub-100ms reflexive inference (`noul` / `choice` / `score`).**
 >
-> **Repository**: `pandas-studio/s1ops` · **PyPI**: `s1ops` · **Python**: `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
+> **Repository**: `memtomem/s1ops` (private) · **PyPI**: `s1ops` (name reserved: 0.0.1 is an empty, yanked placeholder; first functional release 0.2.0) · **Python**: `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
 
 `s1ops` is an offline-first, vendor-neutral evaluation, calibration, threshold compilation, blind label audit, and observability platform purpose-built for **Typed Decision Models (System 1)**:
 - **TypeSafe `/v1/systemone`**: `jev-1.13.0`, `kev-1.0`, `laya`, `von` (`noul`, `choice`, `score`)
@@ -15,7 +15,7 @@
 
 - **[docs/ARCHITECTURE_AND_PLAN.md](docs/ARCHITECTURE_AND_PLAN.md)**: Full architecture blueprint, vendor-neutral data contracts (`s1-record/1`, `jev-calib-fit/2`, `s1-policy/1`, `safe-v1`), 6-tab Web Workbench specification, and Phase 1–3 implementation roadmap.
 - **[docs/REVIEW_AND_COMPARISON.md](docs/REVIEW_AND_COMPARISON.md)**: Comparative analysis against `Langfuse` & `Arize Phoenix`, empirical System 1 failure modes encoded as guardrails, and package/CLI naming & registry review (`s1ops` vs `reflex-ops` vs `fastloop`).
-- **[docs/NEXT_STEPS_PLAN.md](docs/NEXT_STEPS_PLAN.md)**: Phase 4 follow-up roadmap covering GitHub remote/CI setup, live HTTP backend adapters (`HttpSystemOneBackend` / `OpenAIDecisionsBackend`), `DecisionGate` `choice`/`score` extensions, and `@pandas-studio/sys1` TypeScript SDK integration.
+- **[docs/NEXT_STEPS_PLAN.md](docs/NEXT_STEPS_PLAN.md)**: Phase 4 follow-up roadmap covering GitHub remote/CI setup, live HTTP backend adapters (`HttpSystemOneBackend` / `OpenAIDecisionsBackend`), `DecisionGate` `choice`/`score` extensions, and `@memtomem/sys1` TypeScript SDK integration.
 
 ---
 
@@ -91,7 +91,7 @@ flowchart LR
 ### 1. Installation
 
 ```bash
-cd /Users/pdstudio/Work/s1ops
+git clone git@github.com:memtomem/s1ops.git && cd s1ops
 uv sync --all-extras
 ```
 
@@ -106,7 +106,7 @@ This creates a complete, seeded offline workspace in `examples/data/`:
 - `records_train.jsonl`: 120 calibration-fold records (`jev-1.13.0`).
 - `records.jsonl`: 160 held-out evaluation records (`jev-1.13.0`, with calibrated probabilities from `fits.json`, 6 planted gold-label errors, and a concentrated failure slice on `lang=ko_slang`).
 - `records_kev.jsonl`: 160 paired shadow records (`kev-1.0`) on the same items.
-- `records_canary.jsonl`: 160 production canary records simulating distribution drift (`PSI > 0.25`) + silent backend upgrade (`jev-1.13.0` → `jev-1.14.0-silent`).
+- `records_canary.jsonl`: 120 production canary records simulating distribution drift (`PSI > 0.25`) + silent backend upgrade on a third of traffic (`jev-1.13.0` → `jev-1.14.0-rc1`).
 - `probe_records.jsonl`: Noul vs Yes/No Choice twin & inverse polarity probes.
 - `features.jsonl`: Pre-declared slice tags (`answerable`, `unanswerable`, `adversarial_trap`, `lang`, `has_code`).
 - `judge_grades.jsonl`: 90 paired rubric judge vs human grades across 3 criteria (`faithfulness`, `policy_compliance`, `tone`).
@@ -179,22 +179,21 @@ Open `http://127.0.0.1:8765` to explore:
 
 ```python
 import s1
-from s1ops.eval.audit import audit_group
-from s1ops.improve.calibrate import fit_group, transform
 
 # 1. Define a question and compute its canonical wire-form question_id
 q = s1.NoulQuestion(instructions="Does the user message request a financial wire transfer?")
-qid = s1.question_id(q)  # -> 'q-5f55bd89056c234f'
+qid = s1.question_id(q)  # -> 'q-30076be2728be682'
 
-# 2. Load and strictly group decision records by (question_id, model_served, primitive)
-records = s1.read_records("examples/data/records.jsonl")
-selection = s1.select(records)
-group = selection.groups[0]
+# 2. Load and strictly group decision records by (question_id, model_served, primitive);
+#    the demo has one noul group per file
+train = s1.select(s1.read_records("examples/data/records_train.jsonl")).groups[0]
+group = s1.select(s1.read_records("examples/data/records.jsonl")).groups[0]
 
-# 3. Fit temperature scaling and audit before/after calibration with Monte Carlo noise floor
-fit = fit_group(group, method="temperature", split="cal")
-after_P = transform(fit.method, fit.primitive, fit.params, group.P)
-report = audit_group(group, bins=10, reps=500, after=after_P)
+# 3. Fit temperature scaling on the calibration fold, then audit the held-out fold
+#    before/after calibration against the Monte Carlo noise floor
+fit = s1.fit_group(train, method="temperature", split="cal")
+after_P = s1.transform(fit.method, fit.primitive, fit.params, group.P)
+report = s1.audit_group(group, bins=10, reps=500, after=after_P)
 print("Raw ECE (mass):", report["before"]["ece_mass"], "-> Calibrated:", report["after"]["ece_mass"])
 
 # 4. Sub-millisecond Runtime Gating (Phase 3 DecisionGate)
@@ -216,8 +215,22 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 - **Out-of-Sample & Model-Mismatch Enforcement (`s1 apply` & `DecisionGate`)**:
   - Attempting to apply a calibration fit to any `(dataset, item_id)` used during `s1 fit` exits with **code `2`**.
   - Attempting to apply a calibration fit or runtime `DecisionGate` to a record whose `model_served` differs from the fitted/compiled model exits with **code `3`** (`ModelServedMismatchError`).
-- **Cryptographic Policy Integrity (`policy_sha256`)**: `DecisionGate` verifies the canonical SHA-256 fingerprint of every `PolicyEntry` on load (`PolicyIntegrityError` on tampering).
+- **Policy Fingerprint (`policy_sha256`)**: every `PolicyEntry` carries a canonical SHA-256 fingerprint of its routing fields. Verification is opt-in: pass the expected fingerprint to `DecisionGate.evaluate_noul(expected_policy_sha256=...)` or `s1 gate --expected-sha256`, and a mismatch raises `PolicyIntegrityError`. Loading `policy.json` recomputes the fingerprint; it does not compare against the stored value.
 - **Reserve-Then-Settle Budget Ledger (`s1 ledger` & `s1 probe`)**: Uses exclusive `flock` on `<journal>.lock`, rejects hard-linked ledgers, and halts immediately if a measured cost exceeds its reservation (`LedgerUnusable`).
+
+---
+
+## CLI Exit Codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Usage error, missing or malformed input, no matching groups, `lint check --strict` findings, policy fingerprint mismatch, ledger error |
+| `2` | `s1 apply` refused an in-sample item (override with `--allow-in-sample`) |
+| `3` | `model_served` mismatch against the fit or policy (`s1 apply`, `s1 gate`) |
+| `4` | `s1 drift --fail-on-critical` found a `CRITICAL` question |
+
+Errors print a single `s1: <message>` line on stderr. When an input that another command produces is missing, the message names that command (for example `run \`s1 fit\` first`). Set `S1_DEBUG=1` to re-raise errors raised by the library, with their traceback; checks the CLI makes itself (a missing input file, an empty grades file) still print one line. A missing input path is an error everywhere, including `s1 ledger status`, except `s1 lint check`, which reports an unreadable questions file as a `JL000` finding in its normal (`--format json`) report.
 
 ---
 

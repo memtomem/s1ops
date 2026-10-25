@@ -4,10 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "s1ops"
-version = "0.1.0"
+version = "0.2.0"
 description = "The System 1 LLMOps platform — calibration, threshold compilation, blind label audit, and shadow drift for reflexive decision models."
 readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "DAPADA Inc. and s1ops contributors", email = "contact@dapada.co.kr" }]
+keywords = ["llmops", "calibration", "classification", "decision-models", "drift", "evaluation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
 dependencies = [
     "numpy>=1.26",
     "scipy>=1.11",
@@ -20,6 +36,10 @@ dependencies = [
 [project.optional-dependencies]
 langfuse = ["langfuse>=2.0"]
 typesafe = ["typesafe-sdk>=0.7.1,<0.8"]
+
+[project.urls]
+Repository = "https://github.com/memtomem/s1ops"
+Documentation = "https://github.com/memtomem/s1ops/tree/main/docs"
 
 [project.scripts]
 s1 = "s1ops.cli:main"

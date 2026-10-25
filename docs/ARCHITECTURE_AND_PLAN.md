@@ -3,8 +3,8 @@
 > [!IMPORTANT]
 > **핵심 설계 의사결정 (Resolved Design Decisions)**
 > 1. **포지셔닝 (벤더 중립 범용 System 1 LLMOps)**: `/v1/systemone` (`jev-1.13.0`, `kev-1.0`, `laya`, `von`), OpenAI Decisions (`/v1/decisions`, `gpt-6-luna`), 로컬 분류/리랭커 헤드 등 **정형 확률 분포(`noul` / `choice` / `score`)를 반환하는 모든 초저지연 의사결정 모델**을 지원합니다.
-> 2. **시각화 및 관제 연동 (익스포터 + 자체 로컬 웹 워크벤치)**: 기존 System 2 도구와의 통합을 위한 **Langfuse / Arize Phoenix (OpenInference `safe-v1`) 익스포터**와, System 1 전용 분석(Noise Floor 오버레이 Reliability Diagram, 임계값/에스컬레이션 밴드 비용 시뮬레이터, 문항 린트·프로브 일관성, 블라인드 라벨 감사, 백엔드 Shadow 비교)을 제공하는 **자체 5-탭 로컬 웹 UI (`s1 web`)**를 함께 제공합니다.
-> 3. **저장소 및 네이밍**: `pandas-studio/s1ops` (`/Users/pdstudio/Work/s1ops`), PyPI 패키지 `s1ops`, Python 임포트 `import s1ops` 및 `import s1`, 글로벌 CLI `s1` 및 `s1ops`.
+> 2. **시각화 및 관제 연동 (익스포터 + 자체 로컬 웹 워크벤치)**: 기존 System 2 도구와의 통합을 위한 **Langfuse / Arize Phoenix (OpenInference `safe-v1`) 익스포터**와, System 1 전용 분석(Noise Floor 오버레이 Reliability Diagram, 임계값/에스컬레이션 밴드 비용 시뮬레이터, 문항 린트·프로브 일관성, 블라인드 라벨 감사, 백엔드 Shadow 비교, 분포·모델 드리프트)을 제공하는 **자체 6-탭 로컬 웹 UI (`s1 web`)**를 함께 제공합니다.
+> 3. **저장소 및 네이밍**: `memtomem/s1ops` (비공개, `/Users/pdstudio/Work/s1ops`; 2026-10-25 `pandas-studio/s1ops` 계획에서 변경), PyPI 패키지 `s1ops`, Python 임포트 `import s1ops` 및 `import s1`, 글로벌 CLI `s1` 및 `s1ops`.
 > 4. **단계별 우선순위**: 외부 유료 API 호출 없이 100% 오프라인으로 재현·검증 가능한 **오프라인 성능 평가 · 개선 컴파일러 파이프라인 + 익스포터 + 로컬 웹 워크벤치 (Phase 1 MVP)**를 우선 완결하고, 이후 온라인 드리프트 수집기(Phase 2)와 런타임 정책 핫리로드(Phase 3)로 확장합니다.
 
 ---
@@ -40,7 +40,7 @@
 
 - **Mode A — `error_budget`**: 목표 오류 예산 `error_budget` (예: `0.10`) 및 선택적 Clopper-Pearson 유한표본 상한(`--use-cp-upper`) 하에서 동점 그룹(tie-group) 단위로 컴파일된 단일 임계값 `threshold` (`None` = 전량 위임).
 - **Mode B — `escalation_band`**: 이진 `noul` 게이트에서 $p < \text{band\_lo}$ (자동 거절/음성 확정), $p \ge \text{band\_hi}$ (자동 수용/양성 확정), $\text{band\_lo} \le p < \text{band\_hi}$ (System 2 LLM 또는 인간 검수 큐로 에스컬레이션).
-- **`policy_sha256`**: 핵심 정책 필드의 정규화 JSON SHA-256 앞 16자리 지문으로, 런타임 라우터(`decision-plane`)와 관제 스팬(`s1.policy_sha256`)에서 버전 일치 여부를 검증합니다.
+- **`policy_sha256`**: 핵심 정책 필드의 정규화 JSON SHA-256 앞 16자리 지문입니다. 관제 스팬(`s1.policy_sha256`)에 실려 런타임 라우터(`decision-plane`)가 버전을 대조할 수 있게 합니다. `s1ops` 자체의 검증은 opt-in으로, 호출자가 기대 지문을 넘길 때(`DecisionGate.evaluate_noul(expected_policy_sha256=...)`, `s1 gate --expected-sha256`)만 평가 시점에 비교합니다. `load_policies`는 저장된 지문을 재계산할 뿐 비교하지 않습니다.
 
 ---
 
@@ -109,10 +109,10 @@ s1ops/
 
 ### Phase 2: 온라인/카나리 드리프트 모니터 & 예산 안전 프로브 러너 (✅ 완료)
 - [x] **Rolling Distribution Drift (`s1 drift`, `src/s1ops/monitor/drift.py`)**: 운영/카나리 로그의 `(question_id, model_served, primitive)`별 예측 확률 분포 **PSI(Population Stability Index)**, **Jensen-Shannon Divergence (JSD)**, 분위수(`p10`/`p50`/`p90`) 이동, 엔트로피 드리프트, 에스컬레이션 밴드 유입률(`escalation_rate_delta`) 및 기권/실패율(`fail_rate_delta`) 급증 감지
-- [x] **Silent Model-Served Drift Alert**: 동일 `question_id`에서 기존 베이스라인 `model_served`가 사라지거나 신규 모델 버전(`unexpected_models_in_target`, 예: `jev-1.14.0-silent`)이 유입될 때 즉시 `CRITICAL` 경보 발생 (Exit Code 4 지원)
+- [x] **Silent Model-Served Drift Alert**: 동일 `question_id`에서 기존 베이스라인 `model_served`가 사라지거나 신규 모델 버전(`unexpected_models_in_target`, 예: `jev-1.14.0-rc1`)이 유입될 때 즉시 `CRITICAL` 경보 발생 (`--fail-on-critical` 시 Exit Code 4)
 - [x] **Budget-Guarded Probe & Batch Runner (`s1 probe`, `src/s1ops/monitor/runner.py`)**: `Ledger` (`reserve` → `settle`) 하에서 상한 예산(`cap_usd`)을 절대 초과하지 않고 Twin/Inverse 프로브를 자동 확장·실행하며 원문 `state`를 저장하지 않는(`safe-v1`) 실행기
 
 ### Phase 3: 런타임 `DecisionGate` 정책 평가기 & 6-탭 워크벤치 통합 (✅ 완료)
-- [x] **Sub-millisecond `DecisionGate` (`s1 gate`, `src/s1ops/runtime/gate.py`)**: `s1 policy tune`이 컴파일한 `policy.json` (`policy_sha256` 무결성 검증)과 `s1 fit`이 생성한 `fits.json`을 로드하여 런타임에서 즉각 사후 보정(`temperature` / `platt` / `isotonic`) + 임계값/에스컬레이션 밴드 라우팅(`ALLOW` / `BLOCK` / `ESCALATE`) 수행 및 `model_served` 불일치 시 즉시 차단(`ModelServedMismatchError`)
+- [x] **Sub-millisecond `DecisionGate` (`s1 gate`, `src/s1ops/runtime/gate.py`)**: `s1 policy tune`이 컴파일한 `policy.json` (`--expected-sha256` 지정 시 `policy_sha256` 대조)과 `s1 fit`이 생성한 `fits.json`을 로드하여 런타임에서 즉각 사후 보정(`temperature` / `platt` / `isotonic`) + 임계값/에스컬레이션 밴드 라우팅(`ALLOW` / `BLOCK` / `ESCALATE`) 수행 및 `model_served` 불일치 시 즉시 차단(`ModelServedMismatchError`)
 - [x] **6-탭 로컬 웹 워크벤치 확장 (`src/s1ops/web/`)**: 6번째 탭 **`6. Distribution & Model Drift`** 추가 및 `/api/drift` 연동
-- [ ] **Phase 4 후속 확장 계획**: 상세 명세 및 체크리스트는 **[docs/NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md)** 참고 (GitHub 원격/CI 설정, 라이브 HTTP 백엔드 어댑터, `DecisionGate` `choice`/`score` 확장, `@pandas-studio/sys1` TypeScript SDK 및 `agent-harness` 연동)
+- [ ] **Phase 4 후속 확장 계획**: 상세 명세 및 체크리스트는 **[docs/NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md)** 참고 (GitHub 원격/CI 설정, 라이브 HTTP 백엔드 어댑터, `DecisionGate` `choice`/`score` 확장, `@memtomem/sys1` TypeScript SDK 및 `agent-harness` 연동)

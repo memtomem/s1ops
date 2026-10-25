@@ -1,8 +1,8 @@
 """Zero-overhead runtime policy & calibration gate (`DecisionGate`).
 
 Loads compiled `fits.json` (`jev-calib-fit/2` / `s1-calib-fit/1`) and `policy.json`
-(`s1-policy/1`) artifacts, verifies `policy_sha256` and `model_served` at runtime,
-applies post-hoc calibration (`temperature` / `platt` / `isotonic`), and executes
+(`s1-policy/1`) artifacts, enforces `model_served` at runtime, checks `policy_sha256`
+against a caller-supplied expected fingerprint when one is given, applies post-hoc calibration (`temperature` / `platt` / `isotonic`), and executes
 `error_budget` or `escalation_band` routing in sub-millisecond time.
 """
 

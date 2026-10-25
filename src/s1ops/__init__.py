@@ -27,6 +27,19 @@ from s1ops.contracts.schemas import (
     load_policies,
     save_policies,
 )
+from s1ops.eval.audit import audit_group
+from s1ops.eval.compare import compare_records
+from s1ops.improve.calibrate import (
+    Fit,
+    FitError,
+    fit_for,
+    fit_group,
+    load_fits,
+    save_fits,
+    transform,
+)
+from s1ops.improve.policy import select_threshold
+from s1ops.lint.lint import lint_path
 from s1ops.monitor.drift import (
     DriftReport,
     audit_drift,
@@ -64,6 +77,17 @@ __all__ = [
     "PolicyEntry",
     "save_policies",
     "load_policies",
+    "Fit",
+    "FitError",
+    "fit_group",
+    "transform",
+    "load_fits",
+    "save_fits",
+    "fit_for",
+    "audit_group",
+    "compare_records",
+    "select_threshold",
+    "lint_path",
     "DriftReport",
     "audit_drift",
     "psi",

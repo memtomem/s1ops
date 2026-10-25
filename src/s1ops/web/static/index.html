@@ -265,6 +265,46 @@
 
 
   <script>
+    // Every server-derived string goes through esc() before it reaches innerHTML.
+    function esc(v) {
+      return String(v ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) {
+        let detail = `${res.status} ${res.statusText}`;
+        try {
+          const body = await res.json();
+          if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+        } catch (_) {}
+        throw new Error(detail);
+      }
+      return res.json();
+    }
+
+    // Kappa is null when undefined (both graders constant).
+    function fmtKappa(k) {
+      return k === null || k === undefined ? "N/A" : k.toFixed(3);
+    }
+
+    function showError(containerId, err) {
+      document.getElementById(containerId).innerHTML =
+        `<div class="card"><span class="badge badge-err">ERROR</span> ${esc(err.message)}</div>`;
+    }
+
+    function run(loader, containerId) {
+      return loader().catch(err => showError(containerId, err));
+    }
+
+    // Which tab each optional workspace file feeds; shown when the file is absent.
+    const FILE_TABS = {
+      "records.jsonl": "1-5", "fits.json": "1 (after-fit curve)", "questions.json": "3",
+      "probe_records.jsonl": "3 (probe audit)", "features.jsonl": "4 (feature slices)",
+      "records_kev.jsonl": "5 (shadow compare)", "judge_grades.jsonl": "5 (judge audit)",
+      "records_canary.jsonl": "6", "policy.json": "6 (escalation rate)",
+    };
+
     document.querySelectorAll("nav.tabs button").forEach(btn => {
       btn.addEventListener("click", () => {
         document.querySelectorAll("nav.tabs button").forEach(b => b.classList.remove("active"));
@@ -305,15 +345,15 @@
     }
 
     async function loadOverview() {
-      const res = await fetch("/api/overview");
-      const data = await res.json();
+      const data = await fetchJson("/api/overview");
+      const missing = (data.missing_files || []).map(f => `${f} (tab ${FILE_TABS[f] || "?"})`);
       document.getElementById("overview-meta").textContent =
-        `Records: ${data.n_records} | Groups: ${data.n_groups} | Safe-v1 Redaction Active`;
+        `Records: ${data.n_records} | Groups: ${data.n_groups} | Safe-v1 Redaction Active` +
+        (missing.length ? ` | Missing: ${missing.join(", ")}` : "");
     }
 
     async function loadAudit() {
-      const res = await fetch("/api/audit");
-      const data = await res.json();
+      const data = await fetchJson("/api/audit");
       const el = document.getElementById("calib-container");
       if (!data.groups || data.groups.length === 0) {
         el.innerHTML = `<div class="card">No labeled records found in workspace.</div>`;
@@ -329,22 +369,22 @@
         const aboveFloor = bef.ece_mass > floor.p95;
         return `
           <div class="card">
-            <h3>Group: <span class="badge badge-info">${g.question_id}</span> ·
-              <span class="badge badge-info">${g.model_served}</span> ·
-              <span class="badge badge-ok">${g.primitive}</span> (n=${g.n})
+            <h3>Group: <span class="badge badge-info">${esc(g.question_id)}</span> ·
+              <span class="badge badge-info">${esc(g.model_served)}</span> ·
+              <span class="badge badge-ok">${esc(g.primitive)}</span> (n=${g.n})
             </h3>
             <div class="grid-3">
               <div>
                 <div class="sub">Raw ECE (mass) vs Noise Floor (p95)</div>
                 <div class="kpi">${bef.ece_mass.toFixed(4)} <span class="sub">/ floor ${floor.p95.toFixed(4)}</span></div>
                 <span class="badge ${ aboveFloor ? 'badge-warn' : 'badge-ok' }">
-                  ${ aboveFloor ? `Miscalibrated (${g.direction || 'over-confident'})` : 'Within Binomial Noise Floor' }
+                  ${ aboveFloor ? `Miscalibrated (${esc(g.direction || 'over-confident')})` : 'Within Binomial Noise Floor' }
                 </span>
               </div>
               <div>
                 <div class="sub">Calibrated ECE / Brier / LogLoss</div>
                 <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : bef.brier.toFixed(4)}</span></div>
-                <span class="sub">${g.fit ? `Fit: ${g.fit.method} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
+                <span class="sub">${g.fit ? `Fit: ${esc(g.fit.method)} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
               </div>
               <div>
                 <div class="sub">Tie-Mass / Rounding Detector</div>
@@ -387,9 +427,7 @@
       document.getElementById("lbl-tau-high").textContent = high.toFixed(2);
 
       const url = `/api/simulate-policy?tau_low=${low}&tau_high=${high}&cost_sys2=${costS2}&error_budget=${budget}`;
-      const res = await fetch(url);
-      if (!res.ok) return;
-      const d = await res.json();
+      const d = await fetchJson(url);
       const b = d.active_band;
       const t = d.tuned_threshold;
       const escPct = (b.escalation_rate * 100).toFixed(1);
@@ -397,7 +435,7 @@
 
       document.getElementById("policy-container").innerHTML = `
         <div class="card">
-          <h3>Active Escalation Band ${b.band} on ${d.group.question_id} (${d.group.model_served})</h3>
+          <h3>Active Escalation Band ${esc(b.band)} on ${esc(d.group.question_id)} (${esc(d.group.model_served)})</h3>
           <div class="band-bar">
             <div class="band-seg" style="width:${autoPct}%;background:#34d399">System 1 Auto (${autoPct}%)</div>
             <div class="band-seg" style="width:${escPct}%;background:#fbbf24">Escalate to System 2 (${escPct}%)</div>
@@ -429,7 +467,7 @@
             <tbody>
               ${d.pareto_frontier.map(p => `
                 <tr>
-                  <td class="mono">${p.band}</td>
+                  <td class="mono">${esc(p.band)}</td>
                   <td class="mono">${(p.accuracy * 100).toFixed(2)}%</td>
                   <td class="mono">${p.f1.toFixed(3)}</td>
                   <td class="mono">${(p.escalation_rate * 100).toFixed(1)}%</td>
@@ -443,12 +481,11 @@
     }
 
     ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
-      document.getElementById(id).addEventListener("input", loadPolicy);
+      document.getElementById(id).addEventListener("input", () => run(loadPolicy, "policy-container"));
     });
 
     async function loadLint() {
-      const res = await fetch("/api/lint");
-      const d = await res.json();
+      const d = await fetchJson("/api/lint");
       const el = document.getElementById("lint-container");
       const probes = d.probe_audit || [];
       el.innerHTML = `
@@ -461,12 +498,12 @@
             <tbody>
               ${(d.findings || []).map(f => `
                 <tr>
-                  <td class="mono"><span class="badge ${f.severity === 'error' ? 'badge-err' : 'badge-warn'}">${f.rule}</span></td>
-                  <td class="mono">${f.severity}</td>
-                  <td class="mono">${f.question || '(file)'}</td>
-                  <td class="mono">${f.question_id || '-'}</td>
-                  <td>${f.message}</td>
-                  <td class="sub">${f.fix}</td>
+                  <td class="mono"><span class="badge ${f.severity === 'error' ? 'badge-err' : 'badge-warn'}">${esc(f.rule)}</span></td>
+                  <td class="mono">${esc(f.severity)}</td>
+                  <td class="mono">${esc(f.question || '(file)')}</td>
+                  <td class="mono">${esc(f.question_id || '-')}</td>
+                  <td>${esc(f.message)}</td>
+                  <td class="sub">${esc(f.fix)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -481,8 +518,8 @@
             <tbody>
               ${probes.map(p => `
                 <tr>
-                  <td class="mono">${p.probe_question}</td>
-                  <td class="mono">${p.model_served}</td>
+                  <td class="mono">${esc(p.probe_question)}</td>
+                  <td class="mono">${esc(p.model_served)}</td>
                   <td class="mono">${p.n_states}</td>
                   <td class="mono">${p.mean_twin_gap !== null ? p.mean_twin_gap.toFixed(4) : 'N/A'}</td>
                   <td class="mono">${p.twin_flip_rate !== null ? (p.twin_flip_rate * 100).toFixed(1) + '%' : 'N/A'}</td>
@@ -496,9 +533,7 @@
     }
 
     async function loadSlicesAndLabels() {
-      const [sRes, lRes] = await Promise.all([fetch("/api/slices"), fetch("/api/labelaudit")]);
-      const sData = await sRes.json();
-      const lData = await lRes.json();
+      const [sData, lData] = await Promise.all([fetchJson("/api/slices"), fetchJson("/api/labelaudit")]);
       const slices = sData.answerability || [];
       const errSlices = sData.error_slices || [];
 
@@ -508,12 +543,12 @@
             <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
             <table>
               <thead>
-                <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${slices[0] ? slices[0].null_kind : 'majority'})</th><th>Answerable</th></tr>
+                <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${esc(slices[0] ? slices[0].null_kind : 'majority')})</th><th>Answerable</th></tr>
               </thead>
               <tbody>
                 ${slices.map(m => `
                   <tr>
-                    <td class="mono">${m.slice}</td>
+                    <td class="mono">${esc(m.slice)}</td>
                     <td class="mono">${m.n}</td>
                     <td class="mono">${(m.accuracy * 100).toFixed(1)}% [${(m.ci[0]*100).toFixed(1)}%, ${(m.ci[1]*100).toFixed(1)}%]</td>
                     <td class="mono">${(m.null_accuracy * 100).toFixed(1)}%</td>
@@ -532,7 +567,7 @@
               <tbody>
                 ${errSlices.map(e => `
                   <tr>
-                    <td class="mono">${e.feature}</td>
+                    <td class="mono">${esc(e.feature)}</td>
                     <td class="mono">${e.slice_n}</td>
                     <td class="mono">${(e.slice_error_rate * 100).toFixed(1)}%</td>
                     <td class="mono">${(e.rest_error_rate * 100).toFixed(1)}%</td>
@@ -555,11 +590,11 @@
               ${(lData.top_flags || []).map(f => `
                 <tr>
                   <td class="mono">#${f.rank}</td>
-                  <td class="mono">${f.dataset || '-'}</td>
-                  <td class="mono">${f.item_id}</td>
-                  <td class="mono">${f.question_id}</td>
-                  <td class="mono"><span class="badge badge-warn">${f.label}</span></td>
-                  <td class="mono"><span class="badge badge-ok">${f.predicted}</span></td>
+                  <td class="mono">${esc(f.dataset || '-')}</td>
+                  <td class="mono">${esc(f.item_id)}</td>
+                  <td class="mono">${esc(f.question_id)}</td>
+                  <td class="mono"><span class="badge badge-warn">${esc(f.label)}</span></td>
+                  <td class="mono"><span class="badge badge-ok">${esc(f.predicted)}</span></td>
                   <td class="mono">${f.score.toFixed(4)}</td>
                 </tr>
               `).join('')}
@@ -570,17 +605,16 @@
     }
 
     async function loadCompare() {
-      const res = await fetch("/api/compare");
-      const d = await res.json();
+      const d = await fetchJson("/api/compare");
       const qs = d.shadow ? (d.shadow.questions || []) : [];
       const j = d.judge;
 
       let shadowHtml = qs.map(q => `
         <div class="card">
-          <h3>Shadow Comparison: <span class="badge badge-info">${q.question_id}</span> (${q.primitive}, n=${q.n})</h3>
+          <h3>Shadow Comparison: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, n=${q.n})</h3>
           <div class="grid-3">
             <div>
-              <div class="sub">${q.primary_model} vs ${q.shadow_model} Accuracy</div>
+              <div class="sub">${esc(q.primary_model)} vs ${esc(q.shadow_model)} Accuracy</div>
               <div class="kpi">${q.primary_accuracy !== null ? (q.primary_accuracy*100).toFixed(1)+'%' : 'N/A'} → ${q.shadow_accuracy !== null ? (q.shadow_accuracy*100).toFixed(1)+'%' : 'N/A'}</div>
               <span class="sub">Mean |Δp| / TVD: ${q.mean_distance.toFixed(4)}</span>
             </div>
@@ -602,7 +636,7 @@
       if (j && j.overall) {
         judgeHtml = `
           <div class="card">
-            <h3>Rubric Judge Audit (Quadratic-Weighted κ = ${j.overall.weighted_kappa.toFixed(3)}, Pass/Fail Agreement = ${(j.overall.pass_agreement*100).toFixed(1)}%)</h3>
+            <h3>Rubric Judge Audit (Quadratic-Weighted κ = ${fmtKappa(j.overall.weighted_kappa)}, Pass/Fail Agreement = ${(j.overall.pass_agreement*100).toFixed(1)}%)</h3>
             <table>
               <thead>
                 <tr><th>Criterion</th><th>n</th><th>Exact Match</th><th>Within ±1</th><th>Weighted κ</th><th>Bias (Judge - Human)</th><th>Passes Bar</th></tr>
@@ -610,11 +644,11 @@
               <tbody>
                 ${Object.entries(j.by_criterion).map(([c, st]) => `
                   <tr>
-                    <td class="mono">${c}</td>
+                    <td class="mono">${esc(c)}</td>
                     <td class="mono">${st.n}</td>
                     <td class="mono">${(st.exact*100).toFixed(1)}%</td>
                     <td class="mono">${(st.within_one*100).toFixed(1)}%</td>
-                    <td class="mono">${st.weighted_kappa.toFixed(3)}</td>
+                    <td class="mono">${fmtKappa(st.weighted_kappa)}</td>
                     <td class="mono">${st.bias >= 0 ? '+' : ''}${st.bias.toFixed(3)}</td>
                     <td><span class="badge ${st.passes_bar ? 'badge-ok' : 'badge-warn'}">${st.passes_bar ? 'PASS' : 'BELOW BAR'}</span></td>
                   </tr>
@@ -629,8 +663,7 @@
     }
 
     async function loadDrift() {
-      const res = await fetch("/api/drift");
-      const d = await res.json();
+      const d = await fetchJson("/api/drift");
       const qs = d.questions || [];
       if (qs.length === 0) {
         document.getElementById("drift-container").innerHTML = `<div class="card">No canary drift records found.</div>`;
@@ -638,11 +671,11 @@
       }
       document.getElementById("drift-container").innerHTML = qs.map(q => {
         const badgeCls = q.status === 'CRITICAL' ? 'badge-err' : (q.status === 'WARN' ? 'badge-warn' : 'badge-ok');
-        const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${q.status}</span> ${a}</div>`).join('');
+        const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${esc(q.status)}</span> ${esc(a)}</div>`).join('');
         return `
           <div class="card">
-            <h3>Drift Monitor: <span class="badge badge-info">${q.question_id}</span> (${q.primitive}, ref n=${q.n_ref} vs cur n=${q.n_cur})
-              · <span class="badge ${badgeCls}">${q.status}</span>
+            <h3>Drift Monitor: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, ref n=${q.n_ref} vs cur n=${q.n_cur})
+              · <span class="badge ${badgeCls}">${esc(q.status)}</span>
             </h3>
             <div style="margin-bottom:12px;">${alertsHtml}</div>
             <div class="grid-3">
@@ -653,7 +686,7 @@
               </div>
               <div>
                 <div class="sub">Served Model Lineage (Ref → Cur)</div>
-                <div class="kpi">${q.ref_models.join(',')} → ${q.cur_models.join(',')}</div>
+                <div class="kpi">${esc(q.ref_models.join(','))} → ${esc(q.cur_models.join(','))}</div>
                 <span class="badge ${q.model_drift_detected ? 'badge-err' : 'badge-ok'}">
                   ${q.model_drift_detected ? `Model Drift (${q.model_mismatch_count_cur} mismatches)` : 'Lineage Stable'}
                 </span>
@@ -669,13 +702,15 @@
       }).join('');
     }
 
-    loadOverview();
-    loadAudit();
-    loadPolicy();
-    loadLint();
-    loadSlicesAndLabels();
-    loadCompare();
-    loadDrift();
+    loadOverview().catch(err => {
+      document.getElementById("overview-meta").textContent = `Workspace error: ${err.message}`;
+    });
+    run(loadAudit, "calib-container");
+    run(loadPolicy, "policy-container");
+    run(loadLint, "lint-container");
+    run(loadSlicesAndLabels, "slices-container");
+    run(loadCompare, "compare-container");
+    run(loadDrift, "drift-container");
   </script>
 </body>
 </html>

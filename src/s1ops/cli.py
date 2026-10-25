@@ -10,13 +10,15 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
+from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
-from s1ops.contracts.records import read_records, select
+from s1ops.contracts.records import Selection, read_records, select
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -54,6 +56,7 @@ from s1ops.improve.policy import (
 )
 from s1ops.improve.slices import mine_error_slices, slice_report
 from s1ops.ledger.journal import (
+    BudgetExceeded,
     Ledger,
     migrate as ledger_migrate,
     read as ledger_read,
@@ -63,17 +66,124 @@ from s1ops.lint.lint import audit_probe_records, format_text, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.runner import DeterministicMockBackend, run_batch
-from s1ops.runtime.gate import DecisionGate
+from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
 
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_IN_SAMPLE = 2
+EXIT_MODEL_MISMATCH = 3
+EXIT_DRIFT_CRITICAL = 4
+
+
+class CliError(Exception):
+    """A user-facing failure: printed as one `s1: <message>` line, no traceback."""
+
+    def __init__(self, message: str, code: int = EXIT_ERROR) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _fail(message: str, code: int = EXIT_ERROR) -> int:
+    print(f"s1: {message}", file=sys.stderr)
+    return code
+
+
+class _Parser(argparse.ArgumentParser):
+    """Usage errors exit 1, so exit 2 stays reserved for the in-sample refusal."""
+
+    def error(self, message: str) -> None:  # type: ignore[override]
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_ERROR, f"s1: {message}\n")
+
+
+# Input arguments by dest name: (what it is, the command that produces it).
+# Output paths (`-o`, `labelaudit sheet --key`, `probe --ledger`) are deliberately absent.
+_INPUTS: dict[str, tuple[str, str | None]] = {
+    "records": ("records file", None),
+    "reference": ("reference records file", None),
+    "current": ("current records file", None),
+    "primary": ("primary records file", None),
+    "shadow": ("shadow records file", None),
+    "questions": ("questions file", None),
+    "grades": ("grades file", None),
+    "features": ("features file", None),
+    "states": ("states file", None),
+    "path": ("input file", None),
+    "fit": ("fits file", "s1 fit"),
+    "policy": ("policy file", "s1 policy tune"),
+    "sheet": ("review sheet", "s1 labelaudit sheet"),
+}
+
+
+def _require_file(value: str, what: str, producer: str | None) -> None:
+    p = Path(value)
+    if p.is_dir():
+        raise CliError(f"{what} is a directory: {p}")
+    if not p.exists():
+        hint = f" (run `{producer}` first)" if producer else ""
+        raise CliError(f"{what} not found: {p}{hint}")
+
+
+def _check_inputs(args: argparse.Namespace) -> None:
+    if getattr(args, "lint_cmd", None) == "check":
+        # lint reports an unreadable questions file as a JL000 finding in its own (--format json) report.
+        return
+    for dest, (what, producer) in _INPUTS.items():
+        value = getattr(args, dest, None)
+        if value is not None:
+            _require_file(value, what, producer)
+
+
+def _no_groups(args: argparse.Namespace, sel: Selection, records_path: str) -> CliError:
+    filters = [
+        f"--{name} {value}"
+        for name, value in (
+            ("question", getattr(args, "question", None)),
+            ("model", getattr(args, "model", None)),
+            ("split", getattr(args, "split", None)),
+        )
+        if value
+    ]
+    where = f" matching {' '.join(filters)}" if filters else ""
+    skipped = (
+        f"{len(sel.groups)} group(s) before filters; skipped {sel.no_response} without a response, "
+        f"{sel.unlabeled} unlabeled, {sel.other_split} in other splits"
+    )
+    return CliError(f"no labeled groups{where} in {records_path} ({skipped})")
+
+
+def _read_json(path: Path) -> Any:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise CliError(f"{path}: not valid JSON: {e}") from None
 
 
 def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
+    """Read a JSONL file, or a JSON array of objects; every row must be an object."""
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
         return []
-    if text.startswith("["):
-        return json.loads(text)
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    if text.lstrip().startswith("["):
+        rows = _read_json(path)
+        if not isinstance(rows, list):
+            raise CliError(f"{path}: expected a JSON array of objects")
+        for i, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise CliError(f"{path}: element {i}: expected a JSON object")
+        return rows
+    out: list[dict[str, Any]] = []
+    for n, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise CliError(f"{path}: line {n}: not valid JSON: {e}") from None
+        if not isinstance(row, dict):
+            raise CliError(f"{path}: line {n}: expected a JSON object")
+        out.append(row)
+    return out
 
 
 def _cmd_lint(args: argparse.Namespace) -> int:
@@ -130,8 +240,10 @@ def _cmd_audit(args: argparse.Namespace) -> int:
             after=after_P,
         )
         reports.append(rep)
+    if not reports:
+        raise _no_groups(args, sel, args.records)
     print(json.dumps({"groups": reports}, indent=2, sort_keys=True))
-    return 0 if reports else 1
+    return EXIT_OK
 
 
 def _cmd_fit(args: argparse.Namespace) -> int:
@@ -154,7 +266,7 @@ def _cmd_fit(args: argparse.Namespace) -> int:
         fits.append(f)
 
     if not fits:
-        return 1
+        raise _no_groups(args, sel, args.records)
     save_fits(fits, args.output)
     print(
         json.dumps(
@@ -194,24 +306,20 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         fit = fit_for(fits, rec.key)
         if fit is None:
             msg = refusal(fits, rec.key, rec.classes) or f"no fit for {rec.key}"
-            print(f"Refusing to apply fit: {msg}", file=sys.stderr)
-            if "model_served" in msg:
-                return 3
-            return 1
+            code = EXIT_MODEL_MISMATCH if "model_served" in msg else EXIT_ERROR
+            return _fail(f"refusing to apply fit: {msg}", code)
 
         err = refusal(fits, rec.key, rec.classes)
         if err is not None:
-            print(f"Refusing to apply fit: {err}", file=sys.stderr)
-            return 1
+            return _fail(f"refusing to apply fit: {err}")
 
         in_sample = rec.item in in_sample_map.get(fit.key, frozenset())
         if in_sample and not args.allow_in_sample:
-            print(
-                f"Refusing in-sample calibration apply on {rec.item}; "
+            return _fail(
+                f"refusing in-sample calibration apply on {rec.item}; "
                 "pass --allow-in-sample to override",
-                file=sys.stderr,
+                EXIT_IN_SAMPLE,
             )
-            return 2
 
         out_objs.append(apply_to_record(fit, rec, in_fit_sample=in_sample))
 
@@ -309,7 +417,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         )
 
     if not policies:
-        return 1
+        raise _no_groups(args, sel, args.records)
     save_policies(policies, args.output)
     print(
         json.dumps(
@@ -374,8 +482,9 @@ def _cmd_slice(args: argparse.Namespace) -> int:
 
 def _cmd_labelaudit(args: argparse.Namespace) -> int:
     if args.la_cmd == "estimate":
+        _require_file(args.key, "secret key", "s1 labelaudit sheet")
         form_text = Path(args.sheet).read_text(encoding="utf-8")
-        key_doc = json.loads(Path(args.key).read_text(encoding="utf-8"))
+        key_doc = _read_json(Path(args.key))
         scored = score_sheet(form_text, key_doc)
         est = estimate(
             scored["flag"]["reviewer_disagrees_with_label"],
@@ -415,7 +524,9 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
 
     states_rows = _load_jsonl_dicts(Path(args.states))
     states_map: dict[tuple[str | None, str], str] = {}
-    for row in states_rows:
+    for i, row in enumerate(states_rows, start=1):
+        if "item_id" not in row or "state" not in row:
+            raise CliError(f"{args.states}: row {i} is missing 'item_id' or 'state'")
         states_map[(row.get("dataset"), str(row["item_id"]))] = str(row["state"])
 
     options = args.options.split(",") if args.options else ["True", "False"]
@@ -450,11 +561,20 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 def _cmd_judge(args: argparse.Namespace) -> int:
     rows = _load_jsonl_dicts(Path(args.grades))
-    j_vals = [int(r["judge"]) for r in rows]
-    h_vals = [int(r["human"]) for r in rows]
+    if not rows:
+        raise CliError(f"no grade rows in {args.grades}")
+    for i, r in enumerate(rows, start=1):
+        if "judge" not in r or "human" not in r:
+            raise CliError(f"{args.grades}: row {i} is missing 'judge' or 'human'")
+        if not all(isinstance(r[k], int) and not isinstance(r[k], bool) and r[k] >= 0 for k in ("judge", "human")):
+            raise CliError(f"{args.grades}: row {i}: 'judge' and 'human' must be non-negative integers")
+    j_vals = [r["judge"] for r in rows]
+    h_vals = [r["human"] for r in rows]
     levels = max(max(j_vals), max(h_vals)) + 1
+    if levels < 2:
+        raise CliError(f"{args.grades}: every grade is 0; agreement needs grades on at least two levels")
     crit_tuples = [
-        (str(r.get("criterion", "default")), int(r["judge"]), int(r["human"]))
+        (str(r.get("criterion", "default")), r["judge"], r["human"])
         for r in rows
     ]
     overall = judge_agreement(j_vals, h_vals, levels=levels, pass_level=args.pass_level)
@@ -549,18 +669,18 @@ def _cmd_drift(args: argparse.Namespace) -> int:
     )
     print(json.dumps(rep, indent=2, sort_keys=True))
     if args.fail_on_critical and rep["summary"]["critical"] > 0:
-        return 1
-    return 0
+        return EXIT_DRIFT_CRITICAL
+    return EXIT_OK
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
-    q_doc = json.loads(Path(args.questions).read_text(encoding="utf-8"))
+    q_doc = _read_json(Path(args.questions))
     if isinstance(q_doc, dict) and "questions" in q_doc and isinstance(q_doc["questions"], dict):
         q_map = q_doc["questions"]
     elif isinstance(q_doc, dict):
         q_map = {k: v for k, v in q_doc.items() if isinstance(v, dict) and "type" in v}
     else:
-        raise ValueError("questions file must be a JSON object mapping names to questions")
+        raise CliError(f"{args.questions}: must be a JSON object mapping names to questions")
 
     states = _load_jsonl_dicts(Path(args.states))
     backend = DeterministicMockBackend(served_model=args.served_model or args.model)
@@ -598,17 +718,23 @@ def _cmd_probe(args: argparse.Namespace) -> int:
 
 def _cmd_gate(args: argparse.Namespace) -> int:
     gate = DecisionGate.from_files(args.policy, args.fit)
-    dec = gate.evaluate_noul(
-        question_id=args.question,
-        model_served=args.model,
-        p_raw=args.p,
-        expected_policy_sha256=args.expected_sha256,
-    )
+    try:
+        dec = gate.evaluate_noul(
+            question_id=args.question,
+            model_served=args.model,
+            p_raw=args.p,
+            expected_policy_sha256=args.expected_sha256,
+        )
+    except KeyError as e:
+        raise CliError(f"{e.args[0]} in {args.policy}") from None
     print(json.dumps(dec.as_dict(), indent=2, sort_keys=True))
     return 0
 
 
 def _cmd_web(args: argparse.Namespace) -> int:
+    if not Path(args.workspace).is_dir():
+        raise CliError(f"workspace directory not found: {args.workspace}")
+
     import uvicorn
 
     from s1ops.web.app import create_app
@@ -618,205 +744,230 @@ def _cmd_web(args: argparse.Namespace) -> int:
     return 0
 
 
+class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
+    """Show `(default: ...)` only when the default says something; argparse passes this per subparser."""
+
+    def _get_help_string(self, action: argparse.Action) -> str | None:
+        if action.default in (None, False, argparse.SUPPRESS):
+            return action.help
+        return super()._get_help_string(action)
+
+
+_FMT = {"formatter_class": _HelpFormatter}
+
+_H_QUESTION = "only the group with this question_id"
+_H_MODEL = "only the group with this model_served"
+_H_RECORDS = "decision records (jev-record/1 or s1-record/1 JSONL)"
+_H_OUTPUT = "output path"
+_H_FIT_IN = "fits.json from `s1 fit`"
+_H_POLICY_IN = "policy.json from `s1 policy tune`"
+_H_USE_CALIB = "use the calibrated probabilities written by `s1 apply` instead of the raw ones"
+_H_COST_S1 = "USD cost of one System 1 call"
+_H_COST_SYS2 = "USD cost of escalating one item to System 2 (LLM or human)"
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="s1",
         description="s1ops: Dedicated System 1 LLMOps CLI & Workbench",
+        **_FMT,
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     # lint
-    p_lint = sub.add_parser("lint", help="Static question lint & probe coherence")
+    p_lint = sub.add_parser("lint", help="Static question lint & probe coherence", **_FMT)
     sub_lint = p_lint.add_subparsers(dest="lint_cmd", required=True)
-    p_lc = sub_lint.add_parser("check", help="Lint a question specification file")
-    p_lc.add_argument("path")
-    p_lc.add_argument("--format", choices=["text", "json"], default="text")
-    p_lc.add_argument("--strict", action="store_true")
-    p_lc.add_argument("--ignore", action="append")
-    sub_lint.add_parser("rules", help="List JL000-JL060 rules")
-    p_lp = sub_lint.add_parser("probe-audit", help="Audit Noul/Choice twin & inverse coherence")
-    p_lp.add_argument("records")
+    p_lc = sub_lint.add_parser("check", help="Lint a question specification file", **_FMT)
+    p_lc.add_argument("path", help="questions JSON file")
+    p_lc.add_argument("--format", choices=["text", "json"], default="text", help="report format")
+    p_lc.add_argument("--strict", action="store_true", help="exit 1 on warnings as well as errors")
+    p_lc.add_argument("--ignore", action="append", help="rule id to suppress (repeatable); JL000/JL001/JL003/JL020 cannot be suppressed")
+    sub_lint.add_parser("rules", help="List JL000-JL060 rules", **_FMT)
+    p_lp = sub_lint.add_parser("probe-audit", help="Audit Noul/Choice twin & inverse coherence", **_FMT)
+    p_lp.add_argument("records", help="probe records JSONL from `s1 probe`")
     p_lint.set_defaults(func=_cmd_lint)
 
     # audit
-    p_aud = sub.add_parser("audit", help="Calibration & noise floor audit per group")
-    p_aud.add_argument("records")
-    p_aud.add_argument("--fit", default=None)
-    p_aud.add_argument("--question", default=None)
-    p_aud.add_argument("--model", default=None)
-    p_aud.add_argument("--split", default=None)
-    p_aud.add_argument("--bins", type=int, default=10)
-    p_aud.add_argument("--boot", type=int, default=200)
-    p_aud.add_argument("--seed", type=int, default=0)
+    p_aud = sub.add_parser("audit", help="Calibration & noise floor audit per group", **_FMT)
+    p_aud.add_argument("records", help=_H_RECORDS)
+    p_aud.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; adds an after-calibration report")
+    p_aud.add_argument("--question", default=None, help=_H_QUESTION)
+    p_aud.add_argument("--model", default=None, help=_H_MODEL)
+    p_aud.add_argument("--split", default=None, help="only records whose `split` field equals this")
+    p_aud.add_argument("--bins", type=int, default=10, help="reliability/ECE bins")
+    p_aud.add_argument("--boot", type=int, default=200, help="Monte Carlo replicates for the ECE noise floor and bootstrap CIs")
+    p_aud.add_argument("--seed", type=int, default=0, help="random seed")
     p_aud.set_defaults(func=_cmd_audit)
 
     # fit
-    p_fit = sub.add_parser("fit", help="Fit per-group post-hoc calibration (temp/platt/isotonic)")
-    p_fit.add_argument("records")
-    p_fit.add_argument("-o", "--output", required=True)
+    p_fit = sub.add_parser("fit", help="Fit per-group post-hoc calibration (temp/platt/isotonic)", **_FMT)
+    p_fit.add_argument("records", help=f"calibration-fold {_H_RECORDS}")
+    p_fit.add_argument("-o", "--output", required=True, help="fits.json to write")
     p_fit.add_argument(
         "--method",
         choices=["temperature", "platt", "isotonic"],
         default="temperature",
+        help="calibration map; platt and isotonic are noul-only",
     )
-    p_fit.add_argument("--question", default=None)
-    p_fit.add_argument("--model", default=None)
-    p_fit.add_argument("--split", default=None)
-    p_fit.add_argument("--min-n", type=int, default=30)
+    p_fit.add_argument("--question", default=None, help=_H_QUESTION)
+    p_fit.add_argument("--model", default=None, help=_H_MODEL)
+    p_fit.add_argument("--split", default=None, help="only records whose `split` field equals this; the fit is tagged `cal` when unset")
+    p_fit.add_argument("--min-n", type=int, default=30, help="groups with fewer labeled records are still fitted but get a small-sample warning")
     p_fit.set_defaults(func=_cmd_fit)
 
     # apply
-    p_app = sub.add_parser("apply", help="Apply calibration fit to held-out records")
-    p_app.add_argument("records")
-    p_app.add_argument("--fit", required=True)
-    p_app.add_argument("-o", "--output", required=True)
-    p_app.add_argument("--allow-in-sample", action="store_true")
+    p_app = sub.add_parser("apply", help="Apply calibration fit to held-out records", **_FMT)
+    p_app.add_argument("records", help=f"held-out {_H_RECORDS}")
+    p_app.add_argument("--fit", required=True, help=_H_FIT_IN)
+    p_app.add_argument("-o", "--output", required=True, help="calibrated records JSONL to write")
+    p_app.add_argument("--allow-in-sample", action="store_true", help="apply even to items the fit was trained on (otherwise exit 2); they are marked in_fit_sample")
     p_app.set_defaults(func=_cmd_apply)
 
     # policy
-    p_pol = sub.add_parser("policy", help="Threshold tuning & System 1->2 escalation compiler")
+    p_pol = sub.add_parser("policy", help="Threshold tuning & System 1->2 escalation compiler", **_FMT)
     sub_pol = p_pol.add_subparsers(dest="policy_cmd", required=True)
-    p_pt = sub_pol.add_parser("tune", help="Compile error-budget & escalation policy.json")
-    p_pt.add_argument("records")
-    p_pt.add_argument("-o", "--output", required=True)
-    p_pt.add_argument("--question", default=None)
-    p_pt.add_argument("--model", default=None)
-    p_pt.add_argument("--error-budget", type=float, default=0.10)
-    p_pt.add_argument("--use-cp-upper", action="store_true")
-    p_pt.add_argument("--cp-alpha", type=float, default=0.05)
-    p_pt.add_argument("--cost-s1", type=float, default=0.00004)
-    p_pt.add_argument("--cost-sys2", type=float, default=0.004)
-    p_pt.add_argument("--max-escalation", type=float, default=0.35)
-    p_pt.add_argument("--use-calib", action="store_true")
-    p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve")
-    p_pc.add_argument("records")
-    p_pc.add_argument("--question", default=None)
-    p_pc.add_argument("--model", default=None)
-    p_pc.add_argument("--cost-s1", type=float, default=0.00004)
-    p_pc.add_argument("--cost-sys2", type=float, default=0.004)
-    p_pc.add_argument("--use-calib", action="store_true")
+    p_pt = sub_pol.add_parser("tune", help="Compile error-budget & escalation policy.json", **_FMT)
+    p_pt.add_argument("records", help=_H_RECORDS)
+    p_pt.add_argument("-o", "--output", required=True, help="policy.json to write")
+    p_pt.add_argument("--question", default=None, help=_H_QUESTION)
+    p_pt.add_argument("--model", default=None, help=_H_MODEL)
+    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it")
+    p_pt.add_argument("--use-cp-upper", action="store_true", help="judge the budget against the Clopper-Pearson upper bound instead of the point estimate")
+    p_pt.add_argument("--cp-alpha", type=float, default=0.05, help="significance level of the Clopper-Pearson bound")
+    p_pt.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
+    p_pt.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
+    p_pt.add_argument("--max-escalation", type=float, default=0.35, help="largest fraction of items the noul escalation band may send to System 2")
+    p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
+    p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve", **_FMT)
+    p_pc.add_argument("records", help=_H_RECORDS)
+    p_pc.add_argument("--question", default=None, help=_H_QUESTION)
+    p_pc.add_argument("--model", default=None, help=_H_MODEL)
+    p_pc.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
+    p_pc.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
+    p_pc.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pol.set_defaults(func=_cmd_policy)
 
     # slice
-    p_sl = sub.add_parser("slice", help="Answerability decomposition & BH-FDR error slice mining")
+    p_sl = sub.add_parser("slice", help="Answerability decomposition & BH-FDR error slice mining", **_FMT)
     sub_sl = p_sl.add_subparsers(dest="slice_cmd", required=True)
-    p_sa = sub_sl.add_parser("answerable", help="Slice metrics vs majority & blind null")
-    p_sa.add_argument("records")
-    p_sa.add_argument("--features", default=None)
-    p_sa.add_argument("--question", default=None)
-    p_sa.add_argument("--model", default=None)
-    p_sa.add_argument("--min-n", type=int, default=10)
-    p_sm = sub_sl.add_parser("mine", help="Mine high-error feature slices with BH-FDR control")
-    p_sm.add_argument("records")
-    p_sm.add_argument("--features", required=True)
-    p_sm.add_argument("--question", default=None)
-    p_sm.add_argument("--model", default=None)
-    p_sm.add_argument("--fdr-q", type=float, default=0.10)
-    p_sm.add_argument("--min-support", type=int, default=5)
+    p_sa = sub_sl.add_parser("answerable", help="Slice metrics vs majority & blind null", **_FMT)
+    p_sa.add_argument("records", help=_H_RECORDS)
+    p_sa.add_argument("--features", default=None, help="features JSONL tagging each item with a `slice`; untagged items fall in `default`")
+    p_sa.add_argument("--question", default=None, help=_H_QUESTION)
+    p_sa.add_argument("--model", default=None, help=_H_MODEL)
+    p_sa.add_argument("--min-n", type=int, default=10, help="slices with fewer items are reported but never marked answerable")
+    p_sm = sub_sl.add_parser("mine", help="Mine high-error feature slices with BH-FDR control", **_FMT)
+    p_sm.add_argument("records", help=_H_RECORDS)
+    p_sm.add_argument("--features", required=True, help="features JSONL with pre-declared per-item feature tags")
+    p_sm.add_argument("--question", default=None, help=_H_QUESTION)
+    p_sm.add_argument("--model", default=None, help=_H_MODEL)
+    p_sm.add_argument("--fdr-q", type=float, default=0.10, help="Benjamini-Hochberg false discovery rate")
+    p_sm.add_argument("--min-support", type=int, default=5, help="minimum items in a feature slice to test it")
     p_sl.set_defaults(func=_cmd_slice)
 
     # labelaudit
-    p_la = sub.add_parser("labelaudit", help="Out-of-fold label disagreement & blind review sheets")
+    p_la = sub.add_parser("labelaudit", help="Out-of-fold label disagreement & blind review sheets", **_FMT)
     sub_la = p_la.add_subparsers(dest="la_cmd", required=True)
-    p_lar = sub_la.add_parser("rank", help="Rank candidate label errors by calibrated disagreement")
-    p_lar.add_argument("records")
-    p_lar.add_argument("--fit", default=None)
-    p_lar.add_argument("--top", type=int, default=20)
-    p_las = sub_la.add_parser("sheet", help="Generate blinded markdown review sheet + secret key")
-    p_las.add_argument("records")
-    p_las.add_argument("--states", required=True)
-    p_las.add_argument("--fit", default=None)
-    p_las.add_argument("-o", "--output", required=True)
-    p_las.add_argument("-k", "--key", required=True)
-    p_las.add_argument("--top", type=int, default=10)
-    p_las.add_argument("--controls", type=int, default=5)
-    p_las.add_argument("--options", default="True,False")
-    p_las.add_argument("--seed", type=int, default=0)
-    p_lae = sub_la.add_parser("estimate", help="Score completed blind sheet against secret key")
-    p_lae.add_argument("sheet")
-    p_lae.add_argument("--key", required=True)
+    p_lar = sub_la.add_parser("rank", help="Rank candidate label errors by calibrated disagreement", **_FMT)
+    p_lar.add_argument("records", help=_H_RECORDS)
+    p_lar.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; its temperatures rescale the disagreement score")
+    p_lar.add_argument("--top", type=int, default=20, help="candidates to print")
+    p_las = sub_la.add_parser("sheet", help="Generate blinded markdown review sheet + secret key", **_FMT)
+    p_las.add_argument("records", help=_H_RECORDS)
+    p_las.add_argument("--states", required=True, help="local-only states JSONL (`item_id`, `state`) to show reviewers; never written to records")
+    p_las.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; its temperatures rescale the disagreement score")
+    p_las.add_argument("-o", "--output", required=True, help="markdown review sheet to write")
+    p_las.add_argument("-k", "--key", required=True, help="secret answer key JSON to write; keep it away from reviewers")
+    p_las.add_argument("--top", type=int, default=10, help="flagged candidates on the sheet")
+    p_las.add_argument("--controls", type=int, default=5, help="random control items mixed in to measure baseline disagreement")
+    p_las.add_argument("--options", default="True,False", help="comma-separated answer options shown to reviewers")
+    p_las.add_argument("--seed", type=int, default=0, help="shuffle seed")
+    p_lae = sub_la.add_parser("estimate", help="Score completed blind sheet against secret key", **_FMT)
+    p_lae.add_argument("sheet", help="review sheet completed by the reviewer")
+    p_lae.add_argument("--key", required=True, help="secret key JSON from `s1 labelaudit sheet`")
     p_la.set_defaults(func=_cmd_labelaudit)
 
     # compare
-    p_cmp = sub.add_parser("compare", help="Multi-backend shadow comparison (McNemar-Holm)")
-    p_cmp.add_argument("primary")
-    p_cmp.add_argument("shadow")
+    p_cmp = sub.add_parser("compare", help="Multi-backend shadow comparison (McNemar-Holm)", **_FMT)
+    p_cmp.add_argument("primary", help=f"primary backend {_H_RECORDS}")
+    p_cmp.add_argument("shadow", help=f"shadow backend {_H_RECORDS} on the same items")
     p_cmp.set_defaults(func=_cmd_compare)
 
     # judge
-    p_jdg = sub.add_parser("judge", help="Rubric judge agreement & weighted kappa audit")
+    p_jdg = sub.add_parser("judge", help="Rubric judge agreement & weighted kappa audit", **_FMT)
     sub_jdg = p_jdg.add_subparsers(dest="judge_cmd", required=True)
-    p_ja = sub_jdg.add_parser("audit", help="Compute exact, within-1, weighted kappa, and bias")
-    p_ja.add_argument("grades")
-    p_ja.add_argument("--pass-level", type=int, default=3)
+    p_ja = sub_jdg.add_parser("audit", help="Compute exact, within-1, weighted kappa, and bias", **_FMT)
+    p_ja.add_argument("grades", help="JSONL rows with integer `judge` and `human` grades and an optional `criterion`")
+    p_ja.add_argument("--pass-level", type=int, default=3, help="grade at or above which an item counts as passing, for pass/fail agreement")
     p_jdg.set_defaults(func=_cmd_judge)
 
     # drift
-    p_drf = sub.add_parser("drift", help="Distribution PSI, quantile, and model_served drift detector")
-    p_drf.add_argument("reference")
-    p_drf.add_argument("current")
-    p_drf.add_argument("--policy", default=None)
-    p_drf.add_argument("--bins", type=int, default=10)
-    p_drf.add_argument("--raw-only", action="store_true")
-    p_drf.add_argument("--fail-on-critical", action="store_true")
+    p_drf = sub.add_parser("drift", help="Distribution PSI, quantile, and model_served drift detector", **_FMT)
+    p_drf.add_argument("reference", help=f"baseline {_H_RECORDS}")
+    p_drf.add_argument("current", help=f"current/canary {_H_RECORDS}")
+    p_drf.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; enables escalation-rate drift")
+    p_drf.add_argument("--bins", type=int, default=10, help="histogram bins for PSI and Jensen-Shannon")
+    p_drf.add_argument("--raw-only", action="store_true", help="compare raw probabilities even when records carry calibrated ones")
+    p_drf.add_argument("--fail-on-critical", action="store_true", help="exit 4 if any question is CRITICAL")
     p_drf.set_defaults(func=_cmd_drift)
 
     # probe
-    p_prb = sub.add_parser("probe", help="Budget-guarded System 1 probe & batch runner")
-    p_prb.add_argument("questions")
-    p_prb.add_argument("--states", required=True)
-    p_prb.add_argument("-o", "--output", required=True)
-    p_prb.add_argument("--ledger", required=True)
-    p_prb.add_argument("--cap-usd", type=float, default=1.00)
-    p_prb.add_argument("--model", default="jev-1.13.0")
-    p_prb.add_argument("--served-model", default=None)
-    p_prb.add_argument("--no-expand-probes", action="store_true")
+    p_prb = sub.add_parser("probe", help="Budget-guarded System 1 probe & batch runner", **_FMT)
+    p_prb.add_argument("questions", help="questions JSON file")
+    p_prb.add_argument("--states", required=True, help="local-only states JSONL; only state_sha256 reaches the output")
+    p_prb.add_argument("-o", "--output", required=True, help="probe records JSONL to write")
+    p_prb.add_argument("--ledger", required=True, help="budget journal; created if absent")
+    p_prb.add_argument("--cap-usd", type=float, default=1.00, help="hard spend cap; the run stops before a call whose worst-case cost would exceed it")
+    p_prb.add_argument("--model", default="jev-1.13.0", help="model_requested sent to the backend")
+    p_prb.add_argument("--served-model", default=None, help="model_served the mock backend reports (defaults to --model); set it differently to simulate a silent upgrade")
+    p_prb.add_argument("--no-expand-probes", action="store_true", help="send only the questions as written, without twin and inverse probes")
     p_prb.set_defaults(func=_cmd_probe)
 
     # gate
-    p_gte = sub.add_parser("gate", help="Evaluate runtime DecisionGate on a live System 1 output")
-    p_gte.add_argument("policy")
-    p_gte.add_argument("--fit", default=None)
-    p_gte.add_argument("--question", required=True)
-    p_gte.add_argument("--model", required=True)
-    p_gte.add_argument("--p", type=float, required=True)
-    p_gte.add_argument("--expected-sha256", default=None)
+    p_gte = sub.add_parser("gate", help="Evaluate runtime DecisionGate on a live System 1 output", **_FMT)
+    p_gte.add_argument("policy", help=_H_POLICY_IN)
+    p_gte.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; calibrates --p when the policy was compiled with --use-calib")
+    p_gte.add_argument("--question", required=True, help="question_id of the live call")
+    p_gte.add_argument("--model", required=True, help="model_served of the live call; a mismatch with the policy exits 3")
+    p_gte.add_argument("--p", type=float, required=True, help="raw noul probability returned by the model")
+    p_gte.add_argument("--expected-sha256", default=None, help="expected policy_sha256; a mismatch exits 1")
     p_gte.set_defaults(func=_cmd_gate)
 
     # export
-    p_exp = sub.add_parser("export", help="Safe-v1 exporters for Langfuse and Arize Phoenix")
+    p_exp = sub.add_parser("export", help="Safe-v1 exporters for Langfuse and Arize Phoenix", **_FMT)
     sub_exp = p_exp.add_subparsers(dest="export_cmd", required=True)
-    p_el = sub_exp.add_parser("langfuse", help="Export safe-v1 Langfuse Dataset Run & Scores")
-    p_el.add_argument("records")
-    p_el.add_argument("-o", "--output", required=True)
-    p_el.add_argument("--policy", default=None)
-    p_el.add_argument("--run-name", default="s1ops-eval")
-    p_ep = sub_exp.add_parser("phoenix", help="Export safe-v1 OpenInference spans JSONL")
-    p_ep.add_argument("records")
-    p_ep.add_argument("-o", "--output", required=True)
-    p_ep.add_argument("--policy", default=None)
-    p_ep.add_argument("--run-name", default="s1ops-eval")
+    p_el = sub_exp.add_parser("langfuse", help="Export safe-v1 Langfuse Dataset Run & Scores", **_FMT)
+    p_el.add_argument("records", help=_H_RECORDS)
+    p_el.add_argument("-o", "--output", required=True, help="Langfuse export JSON to write")
+    p_el.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; routes each record with the compiled threshold or band instead of a fixed 0.5")
+    p_el.add_argument("--run-name", default="s1ops-eval", help="dataset run name")
+    p_ep = sub_exp.add_parser("phoenix", help="Export safe-v1 OpenInference spans JSONL", **_FMT)
+    p_ep.add_argument("records", help=_H_RECORDS)
+    p_ep.add_argument("-o", "--output", required=True, help="OpenInference spans JSONL to write")
+    p_ep.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; routes with the compiled threshold or band and adds s1.policy_sha256, s1.threshold, s1.band_lo, s1.band_hi")
+    p_ep.add_argument("--run-name", default="s1ops-eval", help="run name attribute")
     p_exp.set_defaults(func=_cmd_export)
 
     # ledger
-    p_led = sub.add_parser("ledger", help="Reserve-then-settle budget ledger operations")
+    p_led = sub.add_parser("ledger", help="Reserve-then-settle budget ledger operations", **_FMT)
     sub_led = p_led.add_subparsers(dest="ledger_cmd", required=True)
-    p_ls = sub_led.add_parser("status", help="Inspect ledger USD balances")
-    p_ls.add_argument("path")
-    p_lm = sub_led.add_parser("migrate", help="Migrate legacy ledger to reserve/settle journal")
-    p_lm.add_argument("path")
-    p_lm.add_argument("-o", "--output", required=True)
-    p_lm.add_argument("--acknowledge-lost-reservations", action="store_true")
-    p_lr = sub_led.add_parser("recover", help="Recover journal from trailing partial write")
-    p_lr.add_argument("path")
-    p_lr.add_argument("-o", "--output", required=True)
+    p_ls = sub_led.add_parser("status", help="Inspect ledger USD balances", **_FMT)
+    p_ls.add_argument("path", help="ledger journal")
+    p_lm = sub_led.add_parser("migrate", help="Migrate legacy ledger to reserve/settle journal", **_FMT)
+    p_lm.add_argument("path", help="legacy ledger")
+    p_lm.add_argument("-o", "--output", required=True, help="new journal to create; must not exist")
+    p_lm.add_argument("--acknowledge-lost-reservations", action="store_true", help="required: a legacy ledger cannot show reservations lost before migration")
+    p_lr = sub_led.add_parser("recover", help="Recover journal from trailing partial write", **_FMT)
+    p_lr.add_argument("path", help="journal with a partial trailing write")
+    p_lr.add_argument("-o", "--output", required=True, help="recovered journal to write")
     p_led.set_defaults(func=_cmd_ledger)
 
     # web
-    p_web = sub.add_parser("web", help="Launch local System 1 LLMOps Web Workbench (127.0.0.1)")
-    p_web.add_argument("--workspace", default=".")
-    p_web.add_argument("--host", default="127.0.0.1")
-    p_web.add_argument("--port", type=int, default=8765)
+    p_web = sub.add_parser("web", help="Launch local System 1 LLMOps Web Workbench (127.0.0.1)", **_FMT)
+    p_web.add_argument("--workspace", default=".", help="directory holding records.jsonl, fits.json, policy.json, ...")
+    p_web.add_argument("--host", default="127.0.0.1", help="bind address")
+    p_web.add_argument("--port", type=int, default=8765, help="bind port")
     p_web.set_defaults(func=_cmd_web)
 
     return parser
@@ -825,7 +976,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    debug = bool(os.environ.get("S1_DEBUG"))
+    try:
+        _check_inputs(args)
+        return int(args.func(args))
+    except CliError as e:
+        return _fail(str(e), e.code)
+    except ModelServedMismatchError as e:
+        if debug:
+            raise
+        return _fail(str(e), EXIT_MODEL_MISMATCH)
+    except OSError as e:
+        if debug:
+            raise
+        return _fail(f"{e.filename}: {e.strerror}" if e.filename else str(e))
+    except (ValueError, PolicyIntegrityError, BudgetExceeded) as e:
+        # ValueError covers RecordError, FitError, LedgerCorrupt and json.JSONDecodeError.
+        if debug:
+            raise
+        return _fail(str(e))
 
 
 if __name__ == "__main__":

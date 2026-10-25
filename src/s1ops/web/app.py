@@ -1,11 +1,12 @@
 """FastAPI Local Web Workbench for s1ops.
 
-Serves a 5-tab interactive System 1 LLMOps console on `127.0.0.1`:
+Serves a 6-tab interactive System 1 LLMOps console on `127.0.0.1`:
 1. Calibration & Noise Floor Explorer (Reliability SVG + ECE Floor + Tie-Mass)
 2. Threshold & Escalation Band Simulator (Interactive band_lo / band_hi sliders + Pareto)
 3. Question Lint & Probe Coherence Inspector (JL000-JL060 + Noul/Choice & Inverse gap)
 4. Slice & Blind Label Audit Studio (BH-FDR error slices + Disagreement ranker)
 5. Multi-Backend Shadow Compare & Judge Audit (McNemar-Holm + Weighted Kappa)
+6. Distribution & Model Drift Monitor (PSI + JSD + silent `model_served` upgrade)
 """
 
 from __future__ import annotations
@@ -17,10 +18,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from s1ops import __version__
 from s1ops.contracts.records import GroupKey, Record, read_records, select
 from s1ops.contracts.schemas import load_policies
 from s1ops.eval.audit import audit_group
-from s1ops.eval.compare import compare_records
+from s1ops.eval.compare import CompareInputError, compare_records
 from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
 from s1ops.eval.metrics import top_label
@@ -46,21 +48,50 @@ from s1ops.monitor.drift import audit_drift
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run one input-reading or input-validation call; its `ValueError` becomes HTTP 400 naming `what`.
+
+    Every input error in s1ops is a ValueError (RecordError, FitError, JSONDecodeError, load_policies).
+    Wrap only the read of one file, never a computation, so a server bug stays a 500.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"{what}: {e}") from None
+
+
+_ONE_LEVEL = "every grade is 0; agreement needs grades on at least two levels"
+
+
+def _is_grade(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
 
 def _load_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Rows of a JSONL file or JSON array; a missing or empty file is no rows, a non-object row is an error."""
     if not path.exists():
         return []
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
+    text = path.read_text(encoding="utf-8")
+    if not text.strip():
         return []
-    if text.startswith("["):
+    if text.lstrip().startswith("["):
         data = json.loads(text)
-        return data if isinstance(data, list) else []
+        rows = data if isinstance(data, list) else []
+        for i, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ValueError(f"element {i}: expected a JSON object")
+        return rows
     out: list[dict[str, Any]] = []
-    for line in text.splitlines():
-        line = line.strip()
-        if line:
-            out.append(json.loads(line))
+    for n, line in enumerate(text.splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"line {n}: not valid JSON: {e}") from None
+        if not isinstance(row, dict):
+            raise ValueError(f"line {n}: expected a JSON object")
+        out.append(row)
     return out
 
 
@@ -77,6 +108,8 @@ def create_app(
 ) -> FastAPI:
     """Create the s1ops FastAPI application bound to a local workspace."""
     base = Path(workspace_dir) if workspace_dir else Path.cwd()
+    if not base.is_dir():
+        raise FileNotFoundError(f"workspace directory not found: {base}")
 
     def _resolve(explicit: str | Path | None, default_rel: str) -> Path:
         if explicit is not None:
@@ -100,18 +133,22 @@ def create_app(
     app = FastAPI(
         title="s1ops Workbench",
         description="System 1 Typed Decision Model LLMOps Workbench",
-        version="0.1.0",
+        version=__version__,
     )
 
     def _get_records(use_calib: bool = False) -> list[Record]:
         if not rec_file.exists():
             return []
-        return read_records(rec_file, use_calib=use_calib)
+        return _load_or_400(rec_file, read_records, rec_file, use_calib=use_calib)
 
     def _get_fits() -> list[Fit]:
         if not fit_file.exists():
             return []
-        return load_fits(fit_file)
+        return _load_or_400(fit_file, load_fits, fit_file)
+
+    def _select(records: list[Record]) -> Any:
+        # Duplicate (dataset, item_id) rows pass the per-line parser and fail here.
+        return _load_or_400(rec_file, select, records, allow_model_mismatch=True)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
@@ -123,6 +160,17 @@ def create_app(
         records = _get_records()
         fits = _get_fits()
         fit_keys: set[GroupKey] = {f.key for f in fits}
+        optional_files = {
+            "records": rec_file,
+            "compare_records": cmp_file,
+            "fits": fit_file,
+            "questions": q_file,
+            "probe_records": probe_file,
+            "features": feat_file,
+            "judge_grades": judge_file,
+            "records_canary": _resolve(None, "records_canary.jsonl"),
+            "policy": _resolve(None, "policy.json"),
+        }
         groups_map: dict[GroupKey, int] = {}
         calibrated_count = 0
         for r in records:
@@ -145,14 +193,10 @@ def create_app(
         return {
             "workspace": str(base),
             "files": {
-                "records": str(rec_file) if rec_file.exists() else None,
-                "compare_records": str(cmp_file) if cmp_file.exists() else None,
-                "fits": str(fit_file) if fit_file.exists() else None,
-                "questions": str(q_file) if q_file.exists() else None,
-                "probe_records": str(probe_file) if probe_file.exists() else None,
-                "features": str(feat_file) if feat_file.exists() else None,
-                "judge_grades": str(judge_file) if judge_file.exists() else None,
+                name: str(path) if path.exists() else None
+                for name, path in optional_files.items()
             },
+            "missing_files": [path.name for path in optional_files.values() if not path.exists()],
             "n_records": len(records),
             "n_calibrated_records": calibrated_count,
             "n_groups": len(groups),
@@ -169,7 +213,7 @@ def create_app(
         if not records:
             return {"groups": []}
         fits = _get_fits()
-        sel = select(records, allow_model_mismatch=True)
+        sel = _select(records)
         results: list[dict[str, Any]] = []
         for grp in sel.groups:
             if question_id and grp.question_id != question_id:
@@ -214,7 +258,7 @@ def create_app(
         if not records:
             raise HTTPException(status_code=404, detail="No records loaded")
 
-        sel = select(records, allow_model_mismatch=True)
+        sel = _select(records)
         chosen_grp = None
         for grp in sel.groups:
             if question_id and grp.question_id != question_id:
@@ -283,11 +327,14 @@ def create_app(
     def api_lint() -> dict[str, Any]:
         lint_dict: dict[str, Any] = {"findings": [], "counts": {}}
         if q_file.exists():
+            # lint_path reports an unreadable or malformed questions file as findings, not exceptions.
             res = lint_path(q_file)
             lint_dict = res.as_dict()
 
         probe_out: list[dict[str, Any]] = []
         if probe_file.exists():
+            # audit_probe_records only takes a path, so validate the file first and run the audit unwrapped.
+            _load_or_400(probe_file, read_records, probe_file)
             probe_out = audit_probe_records(probe_file)
 
         rules_catalog = [
@@ -315,7 +362,7 @@ def create_app(
         fdr_q: float = Query(default=0.10, ge=0.001, le=0.50),
     ) -> dict[str, Any]:
         records = _get_records(use_calib=True)
-        features_rows = _load_json_or_jsonl(feat_file)
+        features_rows = _load_or_400(feat_file, _load_json_or_jsonl, feat_file)
         features_by_item: dict[tuple[str | None, str], dict[str, Any]] = {}
         slice_by_item: dict[tuple[str | None, str], str] = {}
         for row in features_rows:
@@ -396,16 +443,30 @@ def create_app(
     def api_compare() -> dict[str, Any]:
         shadow_out: dict[str, Any] = {"questions": []}
         if rec_file.exists() and cmp_file.exists():
-            shadow_out = compare_records(rec_file, cmp_file)
+            primary = [r.raw for r in _get_records()]
+            shadow = [r.raw for r in _load_or_400(cmp_file, read_records, cmp_file)]
+            try:
+                shadow_out = compare_records(primary, shadow)
+            except CompareInputError as e:
+                raise HTTPException(status_code=400, detail=f"{rec_file.name} vs {cmp_file.name}: {e}") from None
 
-        judge_rows = _load_json_or_jsonl(judge_file)
+        # The judge file is optional: missing or empty means "judge": null, not an error.
+        judge_rows = _load_or_400(judge_file, _load_json_or_jsonl, judge_file)
         judge_out: dict[str, Any] | None = None
         if judge_rows:
-            j_vals = [int(r["judge"]) for r in judge_rows]
-            h_vals = [int(r["human"]) for r in judge_rows]
+            for i, r in enumerate(judge_rows, start=1):
+                if not all(_is_grade(r.get(k)) for k in ("judge", "human")):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{judge_file}: row {i}: 'judge' and 'human' must be non-negative integers",
+                    )
+            j_vals = [r["judge"] for r in judge_rows]
+            h_vals = [r["human"] for r in judge_rows]
             levels = max(max(j_vals), max(h_vals)) + 1
+            if levels < 2:
+                raise HTTPException(status_code=400, detail=f"{judge_file}: {_ONE_LEVEL}")
             crit_tuples = [
-                (str(r.get("criterion", "default")), int(r["judge"]), int(r["human"]))
+                (str(r.get("criterion", "default")), r["judge"], r["human"])
                 for r in judge_rows
             ]
             overall = judge_agreement(j_vals, h_vals, levels=levels, pass_level=3)
@@ -426,8 +487,10 @@ def create_app(
         pol_file = _resolve(None, "policy.json")
         if not rec_file.exists() or not canary_file.exists():
             return {"schema": "s1-drift-report/1", "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0}, "questions": []}
-        policies = load_policies(pol_file) if pol_file.exists() else None
-        return audit_drift(rec_file, canary_file, policies=policies)
+        policies = _load_or_400(pol_file, load_policies, pol_file) if pol_file.exists() else None
+        refs = _load_or_400(rec_file, read_records, rec_file, require_answer=True, use_calib=True)
+        curs = _load_or_400(canary_file, read_records, canary_file, require_answer=True, use_calib=True)
+        return audit_drift(refs, curs, policies=policies)
 
     return app
 

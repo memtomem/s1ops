@@ -31,7 +31,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 
 ## Architecture Overview
 
-**Inputs** (local files, 100% offline): `questions.json`; decision records `records.jsonl` / `records_canary.jsonl` (`jev-record/1`, `s1-record/1`); pre-declared slice features `features.jsonl`; an optional local state store `states_local.jsonl`.
+**Inputs** (local files; everything except a live probe runs offline): `questions.json`; decision records `records.jsonl` / `records_canary.jsonl` (`jev-record/1`, `s1-record/1`); pre-declared slice features `features.jsonl`; an optional local state store `states_local.jsonl`.
 
 **Core engine** (`import s1ops` / `import s1`):
 
@@ -42,7 +42,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 5. **Shadow & Judge Audit** — Noul `|Δp|` and Choice TVD, exact McNemar-Holm test, rubric quadratic-weighted κ and bias.
 6. **Drift Monitor & Runtime Gate** — PSI and Jensen-Shannon drift, silent `model_served` guard, sub-millisecond `DecisionGate`.
 
-**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` spans, and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is joined only locally, for the blind review sheet.
+**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` spans, and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is read by two commands only: `s1 labelaudit sheet` writes the state text of every item under review (the top-ranked flags plus random controls) into the review sheet, which is meant for a human reviewer, and `s1 probe` sends each state to the selected backend (a live API for `--backend systemone` or `openai`). State text is never written to records, ledgers, probe output or exports.
 
 ---
 
@@ -71,7 +71,7 @@ s1 demo s1-demo
 - `records_canary.jsonl`: 120 production canary records simulating distribution drift (`PSI > 0.25`) + silent backend upgrade on a third of traffic (`jev-1.13.0` → `jev-1.14.0-rc1`).
 - `probe_records.jsonl`: Noul vs Yes/No Choice twin & inverse polarity probes.
 - `features.jsonl`: Pre-declared slice tags (`answerable`, `unanswerable`, `adversarial_trap`, `lang`, `has_code`).
-- `states_local.jsonl`: Local-only synthetic item states for the blind review sheet.
+- `states_local.jsonl`: Synthetic item states for the blind review sheet and the probe runner.
 - `judge_grades.jsonl`: 90 paired rubric judge vs human grades across 3 criteria (`faithfulness`, `policy_compliance`, `tone`).
 - `fits.json` + `policy.json`: A compiled calibration fit and routing policy.
 
@@ -204,7 +204,7 @@ Errors print a single `s1: <message>` line on stderr. When an input that another
 
 ## Development
 
-From a source checkout (the sdist includes the test suite), all tests run 100% offline with zero network calls or API keys:
+From a source checkout (the sdist includes the test suite), all tests run without API keys or calls to external services (a few backend tests talk to an HTTP server on `127.0.0.1`):
 
 ```bash
 uv sync --all-extras

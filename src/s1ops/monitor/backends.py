@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import math
+import re
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -24,6 +25,8 @@ from s1ops.monitor.runner import BackendError, BackendResponse
 
 RETRY_STATUSES = frozenset({408, 429, *range(500, 600)})
 _NAME = "q"
+# `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
+_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 
 
 def retry_after_s(headers: Mapping[str, str]) -> float | None:
@@ -54,6 +57,10 @@ def retry_after_s(headers: Mapping[str, str]) -> float | None:
 
 class _Invalid(Exception):
     pass
+
+
+def _tokens(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _answer(question: QuestionModel, answer: Any, sdk: Any) -> dict[str, Any]:
@@ -163,8 +170,12 @@ class HttpSystemOneBackend:
                 model=model_requested,
             )
         # Subclasses first: a validation error is an API error, and a timeout is a connection error.
-        except sdk.TypeSafeAPIResponseValidationError:
-            raise BackendError("invalid_response", sent=True) from None
+        except sdk.TypeSafeAPIResponseValidationError as e:
+            # The body failed the SDK's schema, but its usage may still be valid: keep the measured cost.
+            usage = e.body.get("usage") if isinstance(e.body, dict) else None
+            tokens = _tokens(usage.get("input_tokens")) if isinstance(usage, dict) else None
+            usage_usd = None if tokens is None else tokens * self.usd_per_input_token
+            raise BackendError("invalid_response", sent=True, usage_usd=usage_usd) from None
         except sdk.TypeSafeAPIError as e:
             raise BackendError(
                 f"http_{e.status}",
@@ -181,12 +192,10 @@ class HttpSystemOneBackend:
             raise BackendError("invalid_request", sent=False) from None
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
-        tokens = resp.usage.input_tokens
-        usage_usd = None
-        if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
-            usage_usd = tokens * self.usd_per_input_token
+        tokens = _tokens(resp.usage.input_tokens)
+        usage_usd = None if tokens is None else tokens * self.usd_per_input_token
         try:
-            if not isinstance(resp.model, str) or not resp.model:
+            if not isinstance(resp.model, str) or not _MODEL_NAME.fullmatch(resp.model):
                 raise _Invalid
             answer = _answer(question, resp.answers.get(_NAME), sdk)
         except _Invalid:

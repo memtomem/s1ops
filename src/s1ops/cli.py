@@ -758,24 +758,24 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                     written += 1
                     failed += rec["model_served"] is None
 
-                try:
-                    run_batch(
-                        states,
-                        q_map,
-                        backend=backend,
-                        ledger=ledger,
-                        model_requested=args.model,
-                        worst_usd_per_token=args.worst_usd_per_token,
-                        reserve_overhead_tokens=args.reserve_overhead_tokens,
-                        probe_mode=not args.no_expand_probes,
-                        max_retries=args.max_retries,
-                        on_record=write,
-                    )
-                except (BudgetExceeded, ValueError, OSError) as e:
-                    if os.environ.get("S1_DEBUG"):
-                        raise
-                    message = _os_error_message(e) if isinstance(e, OSError) else str(e)
-                    raise CliError(f"{message}; {written} records kept in {out_path}") from None
+                run_batch(
+                    states,
+                    q_map,
+                    backend=backend,
+                    ledger=ledger,
+                    model_requested=args.model,
+                    worst_usd_per_token=args.worst_usd_per_token,
+                    reserve_overhead_tokens=args.reserve_overhead_tokens,
+                    probe_mode=not args.no_expand_probes,
+                    max_retries=args.max_retries,
+                    on_record=write,
+                )
+    # Outside both `with` blocks, so a second failure while closing the output cannot replace this message.
+    except (BudgetExceeded, ValueError, OSError) as e:
+        if os.environ.get("S1_DEBUG") or not written:
+            raise
+        message = _os_error_message(e) if isinstance(e, OSError) else str(e)
+        raise CliError(f"{message}; {written} records kept in {out_path}") from None
     finally:
         close = getattr(backend, "close", None)
         if close is not None:

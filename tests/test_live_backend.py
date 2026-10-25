@@ -183,10 +183,18 @@ def test_retry_after_parsing(headers, expected) -> None:
     assert retry_after_s(httpx2.Headers(headers)) == expected
 
 
-def test_retry_after_http_date() -> None:
-    when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=30), usegmt=True)
-    assert 25 <= retry_after_s(httpx2.Headers({"retry-after": when})) <= 30
-    past = format_datetime(datetime.now(timezone.utc) - timedelta(seconds=30), usegmt=True)
+def test_retry_after_http_date(monkeypatch) -> None:
+    now = datetime(2026, 10, 25, 12, 0, 0, tzinfo=timezone.utc)
+
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now
+
+    monkeypatch.setattr(backends_mod, "datetime", Frozen)
+    when = format_datetime(now + timedelta(seconds=30), usegmt=True)
+    assert retry_after_s(httpx2.Headers({"retry-after": when})) == 30.0
+    past = format_datetime(now - timedelta(seconds=30), usegmt=True)
     assert retry_after_s(httpx2.Headers({"retry-after": past})) == 0.0
 
 
@@ -228,6 +236,9 @@ def test_retry_after_http_date() -> None:
         ),
         (NOUL, {"model": "", "usage": {"input_tokens": 9, "output_tokens": 0}, "answers": {"q": {"type": "noul", "noul": 0.5}}}, "invalid_response", "measured"),
         (NOUL, {"model": "m", "answers": {"q": {"type": "noul", "noul": 0.5}}}, "invalid_response", "unknown"),
+        (NOUL, {"model": "m", "usage": {"input_tokens": 9, "output_tokens": 0}, "answers": {"q": {"type": "noul", "noul": "bad"}}}, "invalid_response", "measured"),
+        (NOUL, {"model": SECRET, "usage": {"input_tokens": 9, "output_tokens": 0}, "answers": {"q": {"type": "noul", "noul": 0.5}}}, "invalid_response", "measured"),
+        (NOUL, {"model": "m" * 129, "usage": {"input_tokens": 9, "output_tokens": 0}, "answers": {"q": {"type": "noul", "noul": 0.5}}}, "invalid_response", "measured"),
     ],
 )
 def test_unusable_responses_keep_their_measured_usage(tmp_path: Path, question, body, code, outcome) -> None:
@@ -236,6 +247,21 @@ def test_unusable_responses_keep_their_measured_usage(tmp_path: Path, question, 
     assert outcomes(state) == [outcome] and sleeps == []
     if outcome == "measured":
         assert state.spent_usd == pytest.approx(9 * PRICE)
+
+
+def test_overrun_reported_inside_an_sdk_rejected_body_still_stops(tmp_path: Path) -> None:
+    body = {"model": "m", "usage": {"input_tokens": 10**9, "output_tokens": 0}, "answers": {"q": {"type": "noul", "noul": "bad"}}}
+    server = Server(httpx2.Response(200, json=body))
+    journal = tmp_path / "journal.jsonl"
+    with Ledger(journal, cap_usd=1000.0) as ledger:
+        with pytest.raises(LedgerUnusable):
+            run_batch(
+                [{"item_id": "i1", "state": "s"}, {"item_id": "i2", "state": "s"}],
+                {"q1": NOUL},
+                backend=backend(server),
+                ledger=ledger,
+            )
+    assert len(server.bodies) == 1 and ledger_read(journal).overruns
 
 
 def test_overrun_on_the_last_request_stops_after_keeping_its_record(tmp_path: Path) -> None:
@@ -272,6 +298,48 @@ def test_interrupt_mid_request_charges_the_reservation(tmp_path: Path) -> None:
             run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=_Raising(KeyboardInterrupt()), ledger=ledger)
     st = ledger_read(journal)
     assert outcomes(st) == ["unknown"] and st.outstanding == []
+
+
+def test_interrupt_after_the_answer_but_before_settling(tmp_path: Path) -> None:
+    class Late:
+        """A response whose cost read is interrupted: infer has returned, settle has not begun."""
+
+        model_served = "m"
+        answer = {"p": 0.5}
+        latency_ms = 1.0
+
+        @property
+        def cost_usd(self):
+            raise KeyboardInterrupt
+
+    class Answering:
+        def infer(self, state, question, *, model_requested):
+            return Late()
+
+    journal = tmp_path / "journal.jsonl"
+    with Ledger(journal, cap_usd=1.0) as ledger:
+        with pytest.raises(KeyboardInterrupt):
+            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=Answering(), ledger=ledger)
+    st = ledger_read(journal)
+    assert outcomes(st) == ["unknown"] and st.outstanding == []
+
+
+def test_interrupt_inside_settle_is_not_settled_twice(tmp_path: Path, monkeypatch) -> None:
+    class Cheap:
+        def infer(self, state, question, *, model_requested):
+            return BackendResponse(model_served="m", answer={"p": 0.5}, cost_usd=1e-7, latency_ms=1.0)
+
+    with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
+        calls = []
+
+        def settle(reservation, usd=None, *, outcome, **meta):
+            calls.append(outcome)
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(ledger, "settle", settle)
+        with pytest.raises(KeyboardInterrupt):
+            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=Cheap(), ledger=ledger)
+    assert calls == ["measured"]
 
 
 def test_unsent_failure_is_charged_nothing(tmp_path: Path) -> None:
@@ -492,6 +560,30 @@ def test_cli_records_reach_disk_as_they_arrive(probe_files, live, capsys) -> Non
     assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 0
     assert seen == [0, 1, 2]
     assert len(probe_files["out"].read_text().splitlines()) == 3
+
+
+def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, capsys, monkeypatch) -> None:
+    import io
+
+    real_fdopen = os.fdopen
+
+    class Full(io.TextIOWrapper):
+        lines = 0
+
+        def flush(self):
+            if Full.lines >= 1:
+                raise OSError(28, "No space left on device")
+            Full.lines += 1
+            super().flush()
+
+    def fdopen(fd, mode, encoding):
+        raw = real_fdopen(fd, mode.replace("w", "wb"))
+        return Full(raw, encoding=encoding)
+
+    monkeypatch.setattr("s1ops.cli.os.fdopen", fdopen)
+    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 1
+    line = _one_line_error(capsys)
+    assert "No space left on device" in line and "records kept in" in line
 
 
 def test_cli_mock_probe_unchanged(probe_files, capsys) -> None:

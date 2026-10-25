@@ -274,27 +274,35 @@ def run_batch(
                     question_id=qid,
                     model_requested=model_requested,
                 )
+                settling = False
                 try:
-                    resp = backend.infer(
-                        state_text,
-                        q_model,
-                        model_requested=model_requested,
-                    )
-                except BackendError as e:
-                    _settle_failure(ledger, reservation, e)
-                    error: BackendError | None = e
+                    try:
+                        resp = backend.infer(
+                            state_text,
+                            q_model,
+                            model_requested=model_requested,
+                        )
+                        error: BackendError | None = None
+                    except BackendError as e:
+                        error = e
+                    if error is None:
+                        cost_usd, model_served = resp.cost_usd, resp.model_served
+                    # From here on a failure is the settlement's own; settling again could charge twice.
+                    settling = True
+                    if error is None:
+                        ledger.settle(
+                            reservation,
+                            cost_usd,
+                            outcome="measured",
+                            model_served=model_served,
+                        )
+                    else:
+                        _settle_failure(ledger, reservation, error)
                 except BaseException:
-                    # The request may have left: charge the reservation rather than nothing.
-                    ledger.settle(reservation, outcome="unknown")
+                    if not settling:
+                        # The request may have left: charge the reservation rather than nothing.
+                        ledger.settle(reservation, outcome="unknown")
                     raise
-                else:
-                    error = None
-                    ledger.settle(
-                        reservation,
-                        resp.cost_usd,
-                        outcome="measured",
-                        model_served=resp.model_served,
-                    )
                 if error is None or ledger.overrun or not error.retryable or attempt >= max_retries:
                     break
                 wait = error.retry_after_s

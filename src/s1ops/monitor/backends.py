@@ -4,15 +4,18 @@
 Retries are left to `run_batch`, so that every attempt gets its own ledger reservation.
 
 safe-v1: errors carry only an error code (`BackendError`), never server text, because a server may
-echo the request and the request carries the raw `state`. The SDK logs request bodies at DEBUG level
-on the `typesafe_sdk` logger, which has only a `NullHandler`; `s1` never configures logging, so they
-go nowhere. A library caller that attaches a handler must keep that logger above DEBUG.
+echo the request and the request carries the raw `state`. The SDK's own logs carry it too (request
+bodies at DEBUG, the request ID at INFO, an unknown answer type at WARNING) and reach any handler
+the caller configured, so records the `typesafe_sdk` logger emits during `infer` are dropped. Its
+logs outside that call, from other code in the process, pass through.
 """
 
 from __future__ import annotations
 
+import contextvars
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import logging
 import math
 import re
 import time
@@ -27,6 +30,16 @@ RETRY_STATUSES = frozenset({408, 429, *range(500, 600)})
 _NAME = "q"
 # `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+
+_IN_INFER: contextvars.ContextVar[bool] = contextvars.ContextVar("s1ops_systemone_infer", default=False)
+
+
+class _DropDuringInfer(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not _IN_INFER.get()
+
+
+_DROP_DURING_INFER = _DropDuringInfer()
 
 
 def retry_after_s(headers: Mapping[str, str]) -> float | None:
@@ -140,6 +153,8 @@ class HttpSystemOneBackend:
         ):
             raise ValueError(f"usd_per_input_token must be a finite number >= 0, got {usd_per_input_token!r}")
         self._sdk = typesafe_sdk
+        # The SDK logs through this one logger; addFilter ignores a filter already added.
+        logging.getLogger("typesafe_sdk").addFilter(_DROP_DURING_INFER)
         self.usd_per_input_token = float(usd_per_input_token)
         try:
             self._client = typesafe_sdk.TypeSafeClient(
@@ -174,6 +189,7 @@ class HttpSystemOneBackend:
     ) -> BackendResponse:
         sdk = self._sdk
         started = time.perf_counter()
+        quiet = _IN_INFER.set(True)
         try:
             resp = self._client.system_one(
                 state=state,
@@ -200,6 +216,8 @@ class HttpSystemOneBackend:
             raise BackendError("connect", sent=None, retryable=True) from None
         except sdk.TypeSafeError:
             raise BackendError("invalid_request", sent=False) from None
+        finally:
+            _IN_INFER.reset(quiet)
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         usage_usd = self._usd(_tokens(resp.usage.input_tokens))

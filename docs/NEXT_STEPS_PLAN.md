@@ -51,7 +51,7 @@
     - 요청: 문항 1개/요청, `questions={"q": question.wire_dict()}` (SDK가 raw dict를 받으므로 `question_id`와 같은 wire 형태가 그대로 감)
     - 응답 매핑: `model_served = response.model`. 응답에 USD가 없고 토큰 수만 있으므로 비용 = `usage.input_tokens × --usd-per-input-token` (출력 토큰 무료, 기본 단가 없음)
     - SDK는 `usage={}`, 빈 `answers`, 범위 밖 확률을 통과시키므로 백엔드가 답 타입·선택지·레벨·score 범위를 확인하고 만든 레코드를 `parse_record`로 검증
-    - safe-v1: `BackendError` 메시지는 오류 코드 + 고정 문구만 (SDK 예외 문자열은 서버 본문을 최대 200자 포함하고, `request_id`도 서버 헤더). SDK의 DEBUG 본문 로그는 `typesafe_sdk` 로거에 `NullHandler`만 있어 `s1` 프로세스에선 출력되지 않음 (측정)
+    - safe-v1: `BackendError` 메시지는 오류 코드 + 고정 문구만 (SDK 예외 문자열은 서버 본문을 최대 200자 포함하고, `request_id`도 서버 헤더). SDK 로그(DEBUG 요청 본문, INFO request ID, WARNING 미지의 answer type)도 서버가 되돌려준 state를 담을 수 있음: `s1` 프로세스에선 핸들러가 없어 출력되지 않지만(실측), 라이브러리 사용자가 `logging.basicConfig()` 등으로 핸들러를 붙이면 출력됨 → `infer` 호출 동안 `typesafe_sdk` 로거의 레코드를 버리는 ContextVar 필터(호출 밖 SDK 로그는 통과)
   - [x] **재시도 및 원장 정산 안전성** (원 설계의 "최종 실패 시 `settle(0.0)`"은 과금됐을 수 있는 요청을 0으로 기록해 cap을 무력화하므로 바꿈):
     - 응답 usage가 유효하면 답이 무효여도 `measured`; 요청이 확실히 안 나갔으면 `unsent`; 그 외(타임아웃·연결 오류·HTTP 오류 응답·예약~정산 사이 인터럽트)는 `unknown`(예약액 과금)
     - 타임아웃·연결 오류·408·429·5xx는 `--max-retries`까지 재시도, `Retry-After`/`retry-after-ms` 우선, 60초 초과 요청이면 재시도 중단. 최종 실패는 `model_served: null` + `error_code` 레코드

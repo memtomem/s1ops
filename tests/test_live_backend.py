@@ -463,6 +463,28 @@ def test_server_echo_of_state_never_leaves_the_process(tmp_path: Path, capsys) -
     assert "TOP_SECRET" not in "".join(capsys.readouterr())
 
 
+def test_sdk_logs_during_infer_never_carry_the_state(tmp_path: Path, caplog) -> None:
+    import logging
+
+    echo = Server(
+        httpx2.Response(500, json={"detail": SECRET}, headers={"x-typesafe-request-id": "TOP_SECRET_STATE"}),
+        httpx2.Response(200, json={"model": "m", "usage": {"input_tokens": 1, "output_tokens": 0}, "answers": {"q": {"type": SECRET}}}),
+        ok({"type": "noul", "noul": 0.5}),
+    )
+    b = backend(echo)
+    sdk_logger = logging.getLogger("typesafe_sdk")
+    with caplog.at_level(logging.DEBUG, logger="typesafe_sdk"):
+        for _ in range(3):
+            try:
+                b.infer(SECRET, NOUL, model_requested="m")
+            except BackendError:
+                pass
+        sdk_logger.warning("outside any request")
+    assert "TOP_SECRET" not in caplog.text
+    # The filter is scoped to the call: the SDK's logs elsewhere in the process still pass.
+    assert [r.getMessage() for r in caplog.records if r.name == "typesafe_sdk"] == ["outside any request"]
+
+
 # CLI
 
 

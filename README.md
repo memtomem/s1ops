@@ -15,6 +15,7 @@
 
 - **[docs/ARCHITECTURE_AND_PLAN.md](docs/ARCHITECTURE_AND_PLAN.md)**: Full architecture blueprint, vendor-neutral data contracts (`s1-record/1`, `jev-calib-fit/2`, `s1-policy/1`, `safe-v1`), 6-tab Web Workbench specification, and Phase 1–3 implementation roadmap.
 - **[docs/REVIEW_AND_COMPARISON.md](docs/REVIEW_AND_COMPARISON.md)**: Comparative analysis against `Langfuse` & `Arize Phoenix`, empirical System 1 failure modes encoded as guardrails, and package/CLI naming & registry review (`s1ops` vs `reflex-ops` vs `fastloop`).
+- **[docs/NEXT_STEPS_PLAN.md](docs/NEXT_STEPS_PLAN.md)**: Phase 4 follow-up roadmap covering GitHub remote/CI setup, live HTTP backend adapters (`HttpSystemOneBackend` / `OpenAIDecisionsBackend`), `DecisionGate` `choice`/`score` extensions, and `@pandas-studio/sys1` TypeScript SDK integration.
 
 ---
 

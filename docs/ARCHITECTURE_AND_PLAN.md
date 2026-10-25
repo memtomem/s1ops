@@ -115,4 +115,4 @@ s1ops/
 ### Phase 3: 런타임 `DecisionGate` 정책 평가기 & 6-탭 워크벤치 통합 (✅ 완료)
 - [x] **Sub-millisecond `DecisionGate` (`s1 gate`, `src/s1ops/runtime/gate.py`)**: `s1 policy tune`이 컴파일한 `policy.json` (`policy_sha256` 무결성 검증)과 `s1 fit`이 생성한 `fits.json`을 로드하여 런타임에서 즉각 사후 보정(`temperature` / `platt` / `isotonic`) + 임계값/에스컬레이션 밴드 라우팅(`ALLOW` / `BLOCK` / `ESCALATE`) 수행 및 `model_served` 불일치 시 즉시 차단(`ModelServedMismatchError`)
 - [x] **6-탭 로컬 웹 워크벤치 확장 (`src/s1ops/web/`)**: 6번째 탭 **`6. Distribution & Model Drift`** 추가 및 `/api/drift` 연동
-- [ ] **향후 확장 (Optional Next)**: TypeScript 경량 런타임 패키지(`@pandas-studio/sys1`) 및 Langfuse Annotation Queue 웹훅 양방향 동기화
+- [ ] **Phase 4 후속 확장 계획**: 상세 명세 및 체크리스트는 **[docs/NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md)** 참고 (GitHub 원격/CI 설정, 라이브 HTTP 백엔드 어댑터, `DecisionGate` `choice`/`score` 확장, `@pandas-studio/sys1` TypeScript SDK 및 `agent-harness` 연동)

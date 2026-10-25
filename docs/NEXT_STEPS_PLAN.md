@@ -1,0 +1,76 @@
+# `s1ops` 후속 확장 계획서 (Phase 4 & Ecosystem Integration Plan)
+
+> **현재 상태 요약 (`v0.2.0`, Commit `2fa8405`)**
+> - **완료된 범위 (Phase 1 ~ Phase 3)**:
+>   - 벤더 중립 계약(`questions.py`, `records.py`, `schemas.py`) 및 예산 안전 원장(`ledger/journal.py`)
+>   - 정적 문항 린터(`JL000`–`JL060`) 및 Noul/Choice Twin · Inverse 프로브 일관성 감사(`lint/`)
+>   - 보정 전/후 평가(`eval/metrics.py`, `audit.py`), 다중 백엔드 Shadow 비교(`compare.py`), 루브릭 심사자 합의도(`judge.py`)
+>   - 사후 보정 컴파일러(`improve/calibrate.py`), 임계값/에스컬레이션 밴드 파레토 튜너(`policy.py`), 슬라이스 분석(`slices.py`), 블라인드 라벨 감사(`labelaudit.py`)
+>   - 분포/모델 드리프트 모니터(`monitor/drift.py`), 예산 안전 프로브 러너(`monitor/runner.py`), 런타임 이진 게이트(`runtime/gate.py`)
+>   - `safe-v1` Langfuse / Arize Phoenix 익스포터(`bridges/`), 6-탭 로컬 웹 워크벤치(`web/`), 통합 CLI(`cli.py`), 19개 오프라인 테스트 전원 통과
+
+---
+
+## 남은 후속 작업 (4대 트랙)
+
+### Track 1. GitHub 원격 저장소(`pandas-studio/s1ops`) 연결 및 배포 파이프라인 구성
+
+- **목표**: 로컬 Git 저장소(`/Users/pdstudio/Work/s1ops`)를 `pandas-studio/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
+- **세부 작업**:
+  - [ ] `gh repo create pandas-studio/s1ops --private --source=. --remote=origin --push` (또는 공개 여부에 맞춰 생성 및 `main` 브랜치 Push)
+  - [ ] `.github/workflows/ci.yml` 추가:
+    - `uv sync --all-extras`
+    - `uv run pytest -v` (100% 오프라인 무의존성 검증)
+    - `uv run s1 lint check examples/data/questions.json` 스모크 체크
+
+---
+
+### Track 2. 라이브 HTTP 백엔드 어댑터 (`HttpSystemOneBackend` & `OpenAIDecisionsBackend`)
+
+- **목표**: `src/s1ops/monitor/runner.py`의 `Backend` 프로토콜을 구현하는 실제 HTTP 클라이언트 어댑터를 추가하여, `s1 probe`가 모의 백엔드(`DeterministicMockBackend`)뿐 아니라 라이브 API 엔드포인트도 예산 상한(`cap_usd`) 하에서 안전하게 호출할 수 있도록 확장합니다.
+- **대상 파일**:
+  - `src/s1ops/monitor/backends.py` (신규)
+  - `src/s1ops/monitor/runner.py` 및 `src/s1ops/cli.py` (`--backend mock|systemone|openai` 플래그 추가)
+- **세부 설계**:
+  - [ ] **`HttpSystemOneBackend`**:
+    - 엔드포인트: `POST {base_url}/v1/systemone` (기본 환경변수 `TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`)
+    - 요청 페이로드: 정규화된 `parse_wire_question(question)` + 런타임 메모리 내 `state` 전달 (디스크 레코드에는 `state` 미저장, `state_sha256`만 기록)
+    - 응답 매핑: 실제 서빙된 `model` 헤더/필드를 `model_served`로 캡처하여 무통보 모델 교체 감지와 직결
+  - [ ] **`OpenAIDecisionsBackend`**:
+    - 엔드포인트: `POST {base_url}/v1/decisions` (기본 환경변수 `OPENAI_BASE_URL`, `OPENAI_API_KEY`)
+    - 요청 페이로드: `to_openai_decision(question)` 변환기로 `noul` → `predicate`, `choice` → `choice` 자동 매핑
+  - [ ] **재시도 및 원장 정산 안전성**:
+    - 429/5xx 발생 시 지수 백오프 후 최종 실패 시 `ledger.settle(res, actual_usd=0.0)` 및 `no_response` 레코드(`model_served=None`, `error_code=...`) 기록
+
+---
+
+### Track 3. `DecisionGate`의 `choice` / `score` 런타임 평가 확장
+
+- **목표**: 현재 `evaluate_noul()`만 지원하는 `src/s1ops/runtime/gate.py`의 `DecisionGate`에 다지선다(`choice`) 및 순서형 루브릭(`score`) 런타임 보정·게이팅 메서드를 추가합니다.
+- **대상 파일**:
+  - `src/s1ops/runtime/gate.py`
+  - `src/s1ops/cli.py` (`s1 gate`에서 `--probs '{"A":0.7,"B":0.3}'` 지원)
+  - `tests/test_drift_runner_and_gate.py`
+- **세부 설계**:
+  - [ ] **`DecisionGate.evaluate_choice(...)`**:
+    - 입력: `question_id`, `model_served`, `probs_raw: dict[str, float]`, `classes: Sequence[str]`
+    - 처리: `fits.json`에 해당 그룹의 다중클래스 `temperature` 피팅이 있으면 `transform("temperature", "choice", fit.params, P)` 적용 → 최대 확률 선택지 `top_label`과 신뢰도 `conf = max(p_eff)` 산출
+    - 라우팅: `conf >= policy.threshold`이면 `SELECT:<option>` 확정(`escalated=False`), 미달이거나 `threshold is None`이면 `ESCALATE`(`escalated=True`)
+  - [ ] **`DecisionGate.evaluate_score(...)`**:
+    - 입력: `question_id`, `model_served`, `probs_raw: dict[str, float]` (`"0"`..`"L-1"`)
+    - 처리: 사후 온도 보정 적용 후 기대 점수 $\mathbb{E}[S] = \sum_{k=0}^{L-1} k \cdot p_k$ 및 최빈 등급 신뢰도 산출 → 임계값 기반 자동 통과/에스컬레이션 판정
+
+---
+
+### Track 4. TypeScript 경량 런타임 SDK (`@pandas-studio/sys1`) 및 `agent-harness` 연동
+
+- **목표**: Python(`s1ops`)에서 오프라인으로 컴파일한 `fits.json`과 `policy.json`을 Node.js / Edge 런타임이나 `agent-harness` 생태계(`decision-plane`, `tracegraph`)에서 즉시 소비할 수 있도록 연결합니다.
+- **세부 설계**:
+  - [ ] **`packages/ts` (`@pandas-studio/sys1`) 스캐폴딩**:
+    - 외부 무거운 의존성 없이 `fits.json`(`temperature` / `platt` / `isotonic`)과 `policy.json`(`s1-policy/1`, `policy_sha256` 검증)을 로드하는 TypeScript `DecisionGate` 클래스 구현
+    - `import { System1, DecisionGate } from '@pandas-studio/sys1'` 지원
+  - [ ] **`agent-harness` 연동 어댑터**:
+    - `decision-plane`: 라우팅 정책 로더에서 `s1-policy/1` 아티팩트 로드 및 `model_served` 불일치 시 서킷 브레이커 작동
+    - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.escalated`) 수집 및 시각화 연동
+  - [ ] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**:
+    - Langfuse Annotation Queue에서 검수 완료된 항목을 가져와 로컬 골드셋 패치 → `s1 fit` → `s1 policy tune` 재컴파일 루프 자동화

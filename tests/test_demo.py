@@ -56,6 +56,12 @@ def test_demo_seed_changes_the_data(tmp_path: Path, capsys) -> None:
     assert len(p_a) == len(p_b) and p_a != p_b
 
 
+def test_demo_next_step_quotes_the_path(tmp_path: Path, capsys) -> None:
+    out = tmp_path / "my demo"
+    assert cli_main(["demo", str(out)]) == 0
+    assert capsys.readouterr().err == f"next: s1 web --workspace '{out}'\n"
+
+
 def test_demo_accepts_existing_empty_directory(tmp_path: Path, capsys) -> None:
     out = tmp_path / "empty"
     out.mkdir()

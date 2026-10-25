@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.release_check import CheckError, check_metadata, check_sdist_manifest, check_version
+from scripts.release_check import CheckError, check_no_repo_identity, check_sdist_manifest, check_version
 from s1ops import __version__
 
 EXPECTED = {"PKG-INFO", ".gitignore", "README.md", "src/s1/__init__.py", "src/s1ops/__init__.py"}
@@ -67,26 +67,67 @@ def test_version_guard_accepts_matching_tag() -> None:
     assert check_version(f"refs/tags/v{__version__}") == __version__
 
 
-def _dists(tmp_path: Path, wheel_meta: str, pkg_info: str) -> tuple[Path, Path]:
+REPO = "example-org/example-repo"
+
+
+def _dists(tmp_path: Path, wheel_files: dict[str, str], sdist_files: dict[str, str]) -> tuple[Path, Path]:
     wheel = tmp_path / f"s1ops-{__version__}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as zf:
-        zf.writestr(f"s1ops-{__version__}.dist-info/METADATA", wheel_meta)
+        for name, text in wheel_files.items():
+            zf.writestr(name, text)
     sdist = tmp_path / f"s1ops-{__version__}.tar.gz"
     with tarfile.open(sdist, "w:gz") as tar:
-        info = tarfile.TarInfo(f"s1ops-{__version__}/PKG-INFO")
-        info.size = len(pkg_info.encode())
-        tar.addfile(info, io.BytesIO(pkg_info.encode()))
+        for name, text in sdist_files.items():
+            info = tarfile.TarInfo(f"s1ops-{__version__}/{name}")
+            info.size = len(text.encode())
+            tar.addfile(info, io.BytesIO(text.encode()))
     return wheel, sdist
 
 
-def test_metadata_without_repo_passes(tmp_path: Path) -> None:
-    check_metadata(*_dists(tmp_path, "Name: s1ops\n", "Name: s1ops\n"), __version__)
+_CLEAN_WHEEL = {f"s1ops-{__version__}.dist-info/METADATA": "Name: s1ops\n", "s1ops/cli.py": "x = 1\n"}
+_CLEAN_SDIST = {"PKG-INFO": "Name: s1ops\n", "scripts/release_check.py": "x = 1\n"}
 
 
-@pytest.mark.parametrize("where", ["wheel", "sdist"])
-def test_metadata_naming_private_repo_fails(tmp_path: Path, where: str) -> None:
-    leak = "Project-URL: Repository, https://github.com/memtomem/s1ops\n"
-    wheel_meta, pkg_info = (leak, "Name: s1ops\n") if where == "wheel" else ("Name: s1ops\n", leak)
-    with pytest.raises(CheckError, match="names the private repository") as exc:
-        check_metadata(*_dists(tmp_path, wheel_meta, pkg_info), __version__)
-    assert ("METADATA" if where == "wheel" else "PKG-INFO") in str(exc.value)
+def test_artifacts_without_repo_identity_pass(tmp_path: Path) -> None:
+    check_no_repo_identity(*_dists(tmp_path, _CLEAN_WHEEL, _CLEAN_SDIST), REPO)
+
+
+@pytest.mark.parametrize(
+    ("archive", "name"),
+    [
+        ("wheel", f"s1ops-{__version__}.dist-info/METADATA"),
+        ("wheel", "s1ops/cli.py"),
+        ("sdist", "PKG-INFO"),
+        ("sdist", "scripts/release_check.py"),
+    ],
+)
+def test_repo_identity_in_any_file_fails(tmp_path: Path, archive: str, name: str) -> None:
+    wheel_files, sdist_files = dict(_CLEAN_WHEEL), dict(_CLEAN_SDIST)
+    leak = "url = 'https://github.com/Example-Org/example-repo'\n"
+    (wheel_files if archive == "wheel" else sdist_files)[name] = leak
+    with pytest.raises(CheckError, match="name the private repository") as exc:
+        check_no_repo_identity(*_dists(tmp_path, wheel_files, sdist_files), REPO)
+    assert name in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "git@github.com-alias:example-org/example-repo.git",
+        "https://github.com/example-org/example-repo",
+        "https://github.com/example-org/example-repo.git",
+    ],
+)
+def test_repo_identity_from_origin_url(monkeypatch: pytest.MonkeyPatch, url: str) -> None:
+    import scripts.release_check as release_check
+
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.setattr(release_check, "_run", lambda cmd, cwd: url)
+    assert release_check.repo_identity() == REPO
+
+
+def test_repo_identity_prefers_actions_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.release_check import repo_identity
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    assert repo_identity() == REPO

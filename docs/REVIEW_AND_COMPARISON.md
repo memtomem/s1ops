@@ -43,11 +43,11 @@ System 1의 아이덴티티(**서브 100ms 반응성, 반사신경(Reflex), 직�
 | `synapse-ops` | 시냅스 신호 전달 | `404` | `404` | Matrix 홈서버(`element-hq/synapse`), Apache Synapse, Azure Synapse 등과 이름 중복도가 높음 |
 
 ### 2.2 최종 채택 사양 (`s1ops`)
-- **GitHub 저장소**: `pandas-studio/s1ops` (로컬 경로: `/Users/pdstudio/Work/s1ops`)
+- **GitHub 저장소**: `memtomem/s1ops` (비공개, 로컬 경로: `/Users/pdstudio/Work/s1ops`). 최초 채택안은 `pandas-studio/s1ops`였으나 2026-10-25 `tracegraph`·`syncmill` 등 관련 도구와 같은 `memtomem` 계정으로 변경
 - **PyPI 패키지**: `s1ops` (`pip install s1ops` / `uv add s1ops`)
 - **Python 임포트**: `import s1ops` 및 단축 별칭 `import s1` 동시 지원
 - **CLI 명령어**: `s1` 및 `s1ops` 동시 등록 (`$ s1 audit`, `$ s1 fit`, `$ s1 policy tune`, `$ s1 web` 등)
-- **향후 Node/TS 패키지 (Phase 3)**: `@pandas-studio/sys1`
+- **향후 Node/TS 패키지 (Phase 3)**: `@memtomem/sys1` (최초 채택안 `@pandas-studio/sys1`에서 변경)
 
 ---
 

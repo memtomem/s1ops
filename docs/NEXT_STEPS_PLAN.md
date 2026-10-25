@@ -13,11 +13,11 @@
 
 ## 남은 후속 작업 (4대 트랙)
 
-### Track 1. GitHub 원격 저장소(`pandas-studio/s1ops`) 연결 및 배포 파이프라인 구성
+### Track 1. GitHub 원격 저장소(`memtomem/s1ops`) 연결 및 배포 파이프라인 구성
 
-- **목표**: 로컬 Git 저장소(`/Users/pdstudio/Work/s1ops`)를 `pandas-studio/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
+- **목표**: 로컬 Git 저장소(`/Users/pdstudio/Work/s1ops`)를 `memtomem/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
 - **세부 작업**:
-  - [ ] `gh repo create pandas-studio/s1ops --private --source=. --remote=origin --push` (또는 공개 여부에 맞춰 생성 및 `main` 브랜치 Push)
+  - [x] 비공개 저장소 `memtomem/s1ops` 생성 및 `main` Push (2026-10-25). `origin`은 SSH alias `git@github.com-memtomem:memtomem/s1ops.git`; `gh` 활성 계정이 `tsdata`이므로 `gh` 호출은 `GH_TOKEN=$(gh auth token --user memtomem)`로 실행
   - [ ] `.github/workflows/ci.yml` 추가:
     - `uv sync --all-extras`
     - `uv run pytest -v` (100% 오프라인 무의존성 검증)
@@ -62,13 +62,13 @@
 
 ---
 
-### Track 4. TypeScript 경량 런타임 SDK (`@pandas-studio/sys1`) 및 `agent-harness` 연동
+### Track 4. TypeScript 경량 런타임 SDK (`@memtomem/sys1`) 및 `agent-harness` 연동
 
 - **목표**: Python(`s1ops`)에서 오프라인으로 컴파일한 `fits.json`과 `policy.json`을 Node.js / Edge 런타임이나 `agent-harness` 생태계(`decision-plane`, `tracegraph`)에서 즉시 소비할 수 있도록 연결합니다.
 - **세부 설계**:
-  - [ ] **`packages/ts` (`@pandas-studio/sys1`) 스캐폴딩**:
+  - [ ] **`packages/ts` (`@memtomem/sys1`) 스캐폴딩**: (npm `@memtomem` scope 소유 여부는 미확인; 2026-10-25 기준 `@memtomem/sys1`은 404, scope 내 패키지 0개)
     - 외부 무거운 의존성 없이 `fits.json`(`temperature` / `platt` / `isotonic`)과 `policy.json`(`s1-policy/1`, `policy_sha256` 검증)을 로드하는 TypeScript `DecisionGate` 클래스 구현
-    - `import { System1, DecisionGate } from '@pandas-studio/sys1'` 지원
+    - `import { System1, DecisionGate } from '@memtomem/sys1'` 지원
   - [ ] **`agent-harness` 연동 어댑터**:
     - `decision-plane`: 라우팅 정책 로더에서 `s1-policy/1` 아티팩트 로드 및 `model_served` 불일치 시 서킷 브레이커 작동
     - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.escalated`) 수집 및 시각화 연동
@@ -89,5 +89,5 @@
 파일 단위 손상(깨진 JSON, 객체가 아닌 행, 필드 누락·타입 오류)은 CLI exit 1 / 웹 400으로 보고되지만, 아래 세 경우는 형식상 유효한 행이 계산 단계에서 터져 CLI 트레이스백 또는 웹 500이 됩니다(2026-10-25 리뷰에서 재현, 브랜치 이전부터 존재). 리뷰 라운드마다 새 모양의 잘못된 입력이 발견되므로, 개별 가드 추가보다 features 행과 probe 레코드의 스키마를 정의하는 쪽이 맞습니다.
 
 - [ ] **calibrated 분포 키 불일치** (`contracts/records.py:185`): `calib.probabilities` 키를 원본 `probabilities`의 클래스와 대조하지 않음. 원본 `{"yes","no"}` + calib `{"other","no"}` → `/api/slices`에서 `KeyError('yes')`. `parse_record`에서 `RecordError`로 거부해야 함
-- [ ] **probe 역할-프리미티브 호환성** (`lint/lint.py` `audit_probe_records`): `probe_role="twin"` 레코드가 `"yes"` 키를 가진 choice라고 가정. noul 레코드에 `twin` 태그 → `KeyError('probabilities')`. 역할별 프리미티브·필수 키 검증 필요
+- [ ] **probe 역할-프리미티브 호환성** (`lint/lint.py` `audit_probe_records`): `probe_role="twin"` 레코드가 `"yes"` 키를 가진 choice라고 가정. 같은 항목의 `noul` 역할 레코드와 짝을 이룬 noul 레코드에 `twin` 태그 → `KeyError('probabilities')`. 역할별 프리미티브·필수 키 검증 필요
 - [ ] **features 행 식별자 타입** (`cli.py` `_cmd_slice`, `web/app.py` `api_slices`): `{"dataset": [], "item_id": "x", ...}` → dict 키 생성에서 `TypeError`. CLI·웹 공용 features 행 검증기 필요

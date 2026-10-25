@@ -38,8 +38,8 @@ langfuse = ["langfuse>=2.0"]
 typesafe = ["typesafe-sdk>=0.7.1,<0.8"]
 
 [project.urls]
-Repository = "https://github.com/pandas-studio/s1ops"
-Documentation = "https://github.com/pandas-studio/s1ops/tree/main/docs"
+Repository = "https://github.com/memtomem/s1ops"
+Documentation = "https://github.com/memtomem/s1ops/tree/main/docs"
 
 [project.scripts]
 s1 = "s1ops.cli:main"

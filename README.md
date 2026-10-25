@@ -2,7 +2,7 @@
 
 > **The dedicated System 1 LLMOps SDK for sub-100ms reflexive inference (`noul` / `choice` / `score`).**
 >
-> **Repository**: `pandas-studio/s1ops` · **PyPI**: `s1ops` · **Python**: `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
+> **Repository**: `memtomem/s1ops` (private) · **PyPI**: `s1ops` (not yet published) · **Python**: `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
 
 `s1ops` is an offline-first, vendor-neutral evaluation, calibration, threshold compilation, blind label audit, and observability platform purpose-built for **Typed Decision Models (System 1)**:
 - **TypeSafe `/v1/systemone`**: `jev-1.13.0`, `kev-1.0`, `laya`, `von` (`noul`, `choice`, `score`)
@@ -15,7 +15,7 @@
 
 - **[docs/ARCHITECTURE_AND_PLAN.md](docs/ARCHITECTURE_AND_PLAN.md)**: Full architecture blueprint, vendor-neutral data contracts (`s1-record/1`, `jev-calib-fit/2`, `s1-policy/1`, `safe-v1`), 6-tab Web Workbench specification, and Phase 1–3 implementation roadmap.
 - **[docs/REVIEW_AND_COMPARISON.md](docs/REVIEW_AND_COMPARISON.md)**: Comparative analysis against `Langfuse` & `Arize Phoenix`, empirical System 1 failure modes encoded as guardrails, and package/CLI naming & registry review (`s1ops` vs `reflex-ops` vs `fastloop`).
-- **[docs/NEXT_STEPS_PLAN.md](docs/NEXT_STEPS_PLAN.md)**: Phase 4 follow-up roadmap covering GitHub remote/CI setup, live HTTP backend adapters (`HttpSystemOneBackend` / `OpenAIDecisionsBackend`), `DecisionGate` `choice`/`score` extensions, and `@pandas-studio/sys1` TypeScript SDK integration.
+- **[docs/NEXT_STEPS_PLAN.md](docs/NEXT_STEPS_PLAN.md)**: Phase 4 follow-up roadmap covering GitHub remote/CI setup, live HTTP backend adapters (`HttpSystemOneBackend` / `OpenAIDecisionsBackend`), `DecisionGate` `choice`/`score` extensions, and `@memtomem/sys1` TypeScript SDK integration.
 
 ---
 
@@ -91,7 +91,7 @@ flowchart LR
 ### 1. Installation
 
 ```bash
-git clone git@github.com:pandas-studio/s1ops.git && cd s1ops
+git clone git@github.com:memtomem/s1ops.git && cd s1ops
 uv sync --all-extras
 ```
 

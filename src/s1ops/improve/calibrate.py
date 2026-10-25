@@ -8,10 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from scipy.optimize import minimize, minimize_scalar
 from scipy.special import expit, log_expit, log_softmax, logit, softmax
 from sklearn.isotonic import IsotonicRegression
 
+from s1ops.contracts._validation import pydantic_errors
 from s1ops.contracts.records import Group, GroupKey, ItemKey, Record
 from s1ops.eval.metrics import EPS, log_loss
 
@@ -168,6 +170,33 @@ def _reject_constant(name: str) -> float:
     raise FitError(f"non-finite number {name} is not valid JSON")
 
 
+class _FitRow(BaseModel):
+    """On-disk shape of one `Fit`; method/primitive/items consistency is checked after parsing."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    question_id: str
+    model_served: str
+    primitive: str
+    method: str
+    split: str
+    n: int
+    classes: list
+    params: dict
+    nll_before: float
+    nll_after: float
+    fitted_at: str
+    source_sha256: str
+    warnings: list[str]
+    items: list[list]
+
+
+class _FitDocument(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    fits: list[_FitRow] = Field(default_factory=list)
+
+
 def load_fits(path: str | Path) -> list[Fit]:
     with open(path, encoding="utf-8") as f:
         try:
@@ -178,12 +207,13 @@ def load_fits(path: str | Path) -> list[Fit]:
         raise FitError(f"{path}: jev-calib-fit/1 stores item ids without their dataset; refit to get {DEFAULT_FIT_SCHEMA}")
     if not isinstance(doc, dict) or doc.get("schema") not in FIT_SCHEMAS:
         raise FitError(f"{path}: not a {DEFAULT_FIT_SCHEMA} file")
+    try:
+        parsed = _FitDocument.model_validate(doc)
+    except ValidationError as e:
+        raise FitError(f"{path}: " + "; ".join(pydantic_errors(e))) from None
     fits = []
-    for row in doc.get("fits", []):
-        try:
-            fit = Fit(**row)
-        except TypeError as e:
-            raise FitError(f"{path}: malformed fit entry: {e}") from None
+    for row in parsed.fits:
+        fit = Fit(**row.model_dump())
         if fit.method not in METHODS or fit.primitive not in METHODS[fit.method]:
             raise FitError(f"{path}: {fit.method} is not a method for {fit.primitive}")
         if not (isinstance(fit.items, list) and len(fit.items) == fit.n and all(_is_item(i) for i in fit.items)):

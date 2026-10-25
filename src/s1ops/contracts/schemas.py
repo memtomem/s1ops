@@ -2,10 +2,14 @@
 
 import hashlib
 import json
-import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from s1ops.contracts._validation import pydantic_errors
 
 POLICY_SCHEMA = "s1-policy/1"
 RECEIPT_SCHEMA = "s1-receipt/1"
@@ -65,18 +69,47 @@ def save_policies(entries: list[PolicyEntry], path: str | Path) -> None:
         f.write("\n")
 
 
+class _PolicyRow(BaseModel):
+    """On-disk shape of one `PolicyEntry`; strict so a JSON string or bool never passes as a number."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    question_id: str
+    model_served: str
+    primitive: str
+    mode: Literal["error_budget", "escalation_band"]
+    split: str
+    n: int
+    threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    error_budget: float | None = None
+    band_lo: float | None = None
+    band_hi: float | None = None
+    calibrated: bool = False
+    fit_sha256: str | None = None
+    source_sha256: str = ""
+    created_at: str | None = None
+    metrics_on_split: dict = Field(default_factory=dict)
+    policy_sha256: str | None = None
+    """Written by `save_policies`; recomputed from the fields, not compared."""
+
+
+class _PolicyDocument(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    policies: list[_PolicyRow] = Field(default_factory=list)
+
+
 def load_policies(path: str | Path) -> list[PolicyEntry]:
     with open(path, encoding="utf-8") as f:
         doc = json.load(f, parse_constant=_reject_constant)
     if not isinstance(doc, dict) or doc.get("schema") != POLICY_SCHEMA:
         raise ValueError(f"{path}: not a {POLICY_SCHEMA} file")
-    out: list[PolicyEntry] = []
-    for row in doc.get("policies", []):
-        clean = {k: v for k, v in row.items() if k != "policy_sha256"}
-        entry = PolicyEntry(**clean)
-        if entry.mode not in ("error_budget", "escalation_band"):
-            raise ValueError(f"{path}: unsupported policy mode {entry.mode!r}")
-        if entry.threshold is not None and not (math.isfinite(entry.threshold) and 0.0 <= entry.threshold <= 1.0):
-            raise ValueError(f"{path}: threshold must be in [0, 1] or null")
-        out.append(entry)
-    return out
+    try:
+        _PolicyDocument.model_validate(doc)
+    except ValidationError as e:
+        raise ValueError(f"{path}: " + "; ".join(pydantic_errors(e))) from None
+    # Build from the file's own values: the validated model turns 1 into 1.0, which changes policy_sha256.
+    return [
+        PolicyEntry(**{k: v for k, v in row.items() if k != "policy_sha256"})
+        for row in doc.get("policies", [])
+    ]

@@ -38,7 +38,7 @@ def test_drift_psi_jsd_and_silent_model_upgrade(tmp_path: Path) -> None:
     assert "jev-1.14.0-rc1" in q_rep["cur_models"]
     assert q_rep["psi"] > 0.10
 
-    # CLI drift returns 0 by default, 1 with --fail-on-critical
+    # CLI drift returns 0 by default, 4 with --fail-on-critical
     assert cli_main(["drift", ws["records"], ws["records_canary"], "--policy", ws["policy"]]) == 0
     assert (
         cli_main(
@@ -51,7 +51,7 @@ def test_drift_psi_jsd_and_silent_model_upgrade(tmp_path: Path) -> None:
                 "--fail-on-critical",
             ]
         )
-        == 1
+        == 4
     )
 
 

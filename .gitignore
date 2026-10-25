@@ -16,3 +16,7 @@ build/
 *.tmp
 examples/data/
 
+
+# memtomem local artifacts (ADR-0011 project_local tier)
+.memtomem/*.local/
+.memtomem/.staging/

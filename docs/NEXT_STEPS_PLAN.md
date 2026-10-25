@@ -19,11 +19,11 @@
 - **세부 작업**:
   - [x] 비공개 저장소 `memtomem/s1ops` 생성 및 `main` Push (2026-10-25). `origin`은 SSH alias `git@github.com-memtomem:memtomem/s1ops.git`; `gh` 활성 계정이 `tsdata`이므로 `gh` 호출은 `GH_TOKEN=$(gh auth token --user memtomem)`로 실행
   - [x] PyPI·TestPyPI 이름 확보 (2026-10-25): 코드 없는 `s1ops 0.0.1`을 올리고 두 곳 모두 yank. pip는 yank된 버전을 건너뛰지만 `uv`는 고정하지 않은 `s1ops`에도 0.0.1을 고르므로, 0.2.0 전까지 uv 사용자는 빈 패키지를 받음
-  - [x] `.github/workflows/ci.yml` 추가 (첫 실행은 PR에서 확인):
+  - [ ] `.github/workflows/ci.yml` 추가됨, 첫 실행 성공 확인 전 (PR에서 확인):
     - Python 3.10–3.13 매트릭스, `uv sync --all-extras --locked` (lock이 낡으면 실패)
     - `uv run pytest -v` (100% 오프라인 무의존성 검증)
     - `examples/data/`는 gitignore된 생성물이므로 `uv run python examples/make_synthetic.py`로 먼저 만든 뒤 `uv run s1 lint check examples/data/questions.json` 스모크 체크 (데모 문항에 의도된 경고가 있어 `--strict` 없이 실행)
-    - `package` job: `uv build` → `twine check --strict` (publish action과 같은 twine 7.0.0) → `scripts/release_check.py dist`가 sdist 목록을 `[tool.hatch.build.targets.sdist] include`와 대조하고, wheel·sdist를 각각 checkout 밖의 새 venv에 설치해 버전·`web/static/index.html`을 확인
+    - `package` job: `uv build` → `twine check --strict` (publish action과 같은 twine 7.0.0) → `scripts/release_check.py dist`가 sdist 목록이 `[tool.hatch.build.targets.sdist] include` 아래의 `git ls-files` 목록(+ Hatch가 강제로 넣는 `.gitignore`·`PKG-INFO`)과 정확히 같은지(일반 파일만, 링크 불가) 확인하고, wheel·sdist를 각각 checkout 밖의 새 venv에 설치해 버전·`import s1` 별칭·`web/static/index.html`을 확인
   - [x] `.github/workflows/release.yml` 추가: 토큰 대신 GitHub Actions trusted publishing
     - 수동 `workflow_dispatch`만 받음 (입력 `index`: `testpypi` | `pypi`). dispatch 자체가 공개 시점을 정하는 관문
     - `guard`: ref가 `refs/tags/vX.Y.Z`이고 X.Y.Z가 `pyproject.toml` version·`s1ops.__version__`과 같아야 함
@@ -32,7 +32,7 @@
   - [ ] 소유자 1회 설정:
     - GitHub environment `testpypi`, `pypi` 생성
     - TestPyPI·PyPI의 **기존** `s1ops` 프로젝트(yank된 0.0.1이 있으므로 pending publisher가 아님) → Manage → Publishing에서 GitHub publisher 추가: owner `memtomem`, repository `s1ops`, workflow `release.yml`, environment `testpypi` / `pypi`
-  - 릴리스 절차: `vX.Y.Z` 태그 push → Actions → Release → Use workflow from: Tags → `vX.Y.Z` → `index` 선택. TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
+  - 릴리스 절차: `vX.Y.Z` 태그 push → `GH_TOKEN=$(gh auth token --user memtomem) gh workflow run release.yml --ref vX.Y.Z -f index=testpypi` (`--ref`는 태그 이름도 받음). TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
   - [ ] 첫 실제 릴리스(0.2.0) 전 체크리스트:
     - README에 인덱스 사용자용 설치 안내(`pip install s1ops`)를 클론 기반 데모와 분리해 추가. 지금 넣으면 yank된 빈 0.0.1로 안내하게 됨
     - 저장소 공개 여부와 시점 결정 (공개 시 `attestations: false` 제거)

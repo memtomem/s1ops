@@ -5,7 +5,7 @@ Usage:
     python scripts/release_check.py dist DIST_DIR
 
 Standard library only, so it runs before the project's dependencies are installed.
-Needs Python 3.11+ (``tomllib``) and, for ``dist``, ``uv`` on PATH.
+Needs Python 3.11+ (``tomllib``) and, for ``dist``, ``git`` and ``uv`` on PATH.
 """
 
 from __future__ import annotations
@@ -17,14 +17,13 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TAG_REF = re.compile(r"refs/tags/v(\d+\.\d+\.\d+)")
 # Hatch adds these to every sdist on top of the configured include list.
 HATCH_FORCED = {".gitignore", "PKG-INFO"}
-# Package data the wheel and sdist must carry; the web workbench fails without index.html.
+# Package data the installed wheel must carry; the web workbench fails without index.html.
 PACKAGE_DATA = ("s1ops/web/static/index.html", "s1ops/py.typed")
 
 
@@ -33,6 +32,8 @@ class CheckError(Exception):
 
 
 def _pyproject() -> dict:
+    import tomllib  # 3.11+; imported here so the manifest check also loads on 3.10
+
     return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 
@@ -63,26 +64,37 @@ def check_version(ref: str | None) -> str:
     return version
 
 
-def check_sdist_manifest(sdist: Path, version: str) -> None:
-    """Every sdist member must come from the pyproject include list or Hatch's forced files."""
+def expected_sdist_files() -> set[str]:
+    """Tracked files under the pyproject sdist include list, plus Hatch's forced files."""
     build = _pyproject().get("tool", {}).get("hatch", {}).get("build", {})
     include = build.get("targets", {}).get("sdist", {}).get("include")
     if not include:
         raise CheckError("pyproject.toml has no [tool.hatch.build.targets.sdist] include list")
-    dirs = tuple(f"{entry}/" for entry in include if (ROOT / entry).is_dir())
-    files = {entry for entry in include if not (ROOT / entry).is_dir()} | HATCH_FORCED
+    listed = _run(["git", "ls-files", "-z", "--", *include], ROOT)
+    return set(filter(None, listed.split("\0"))) | HATCH_FORCED
+
+
+def check_sdist_manifest(sdist: Path, version: str, expected: set[str]) -> None:
+    """The sdist must hold exactly the expected files, as regular files under one prefix.
+
+    Names are compared verbatim, so ``src/../CLAUDE.md`` is unexpected rather than
+    normalised into the ``src`` tree.
+    """
     prefix = f"s1ops-{version}/"
-    with tarfile.open(sdist) as tar:
-        members = [m.name for m in tar.getmembers() if m.isfile()]
     names = set()
-    for name in members:
-        if not name.startswith(prefix):
-            raise CheckError(f"{sdist.name}: member outside {prefix}: {name}")
-        names.add(name[len(prefix):])
-    unexpected = sorted(n for n in names if n not in files and not n.startswith(dirs))
+    with tarfile.open(sdist) as tar:
+        for member in tar.getmembers():
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise CheckError(f"{sdist.name}: {member.name} is not a regular file")
+            if not member.name.startswith(prefix):
+                raise CheckError(f"{sdist.name}: member outside {prefix}: {member.name}")
+            names.add(member.name[len(prefix):])
+    unexpected = sorted(names - expected)
     if unexpected:
         raise CheckError(f"{sdist.name}: unexpected files {unexpected}")
-    missing = sorted((files | {f"src/{p}" for p in PACKAGE_DATA}) - names)
+    missing = sorted(expected - names)
     if missing:
         raise CheckError(f"{sdist.name}: missing files {missing}")
 
@@ -95,7 +107,8 @@ def _run(cmd: list[str], cwd: Path) -> str:
 
 
 _PROBE = """
-import importlib.metadata, importlib.resources, s1ops
+import importlib.metadata, importlib.resources, s1, s1ops
+assert s1.__version__ == s1ops.__version__ and s1.DecisionGate is s1ops.DecisionGate
 print(importlib.metadata.version("s1ops"))
 print(s1ops.__file__)
 for path in {data!r}:
@@ -133,7 +146,7 @@ def check_dist(dist: Path) -> str:
     expected = ([f"s1ops-{version}-py3-none-any.whl"], [f"s1ops-{version}.tar.gz"])
     if ([w.name for w in wheels], [s.name for s in sdists]) != expected:
         raise CheckError(f"{dist}: expected {expected}, found {[p.name for p in wheels + sdists]}")
-    check_sdist_manifest(sdists[0], version)
+    check_sdist_manifest(sdists[0], version, expected_sdist_files())
     for artifact in (wheels[0], sdists[0]):
         check_install(artifact.resolve(), version)
     return version

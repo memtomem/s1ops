@@ -1,7 +1,8 @@
 name: Release
 
-# Manual only: dispatching this workflow is the release gate. Run it on a tag
-# (Use workflow from -> Tags -> vX.Y.Z); the guard rejects any other ref.
+# Manual only: dispatching this workflow is the release gate. Run it on a tag,
+# e.g. `gh workflow run release.yml --ref v0.2.0 -f index=testpypi`; the guard
+# rejects any other ref.
 on:
   workflow_dispatch:
     inputs:

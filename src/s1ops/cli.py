@@ -696,7 +696,8 @@ def _open_output_apart(path: Path, others: list[Path]):
     """Open `path` for writing, refusing if it is the same file as any of `others`.
 
     Compares file identity, not names: a symlink, a hard link or a case-insensitive filesystem can
-    make two names one file. `path` is truncated only after the check.
+    make two names one file. Nothing is truncated: the caller truncates when the first record
+    arrives, so a run that fails before any request keeps the previous output.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -716,7 +717,6 @@ def _open_output_apart(path: Path, others: list[Path]):
                 if created:
                     os.unlink(path)
                 raise CliError(f"--output {path} is the same file as {other}")
-        os.ftruncate(fd, 0)
     except BaseException:
         os.close(fd)
         raise
@@ -754,6 +754,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                 def write(rec: dict[str, Any]) -> None:
                     nonlocal written, failed, lost
                     try:
+                        if not written:
+                            fh.truncate(0)
                         fh.write(json.dumps(rec, sort_keys=True) + "\n")
                         fh.flush()
                     except OSError:
@@ -774,6 +776,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
                     max_retries=args.max_retries,
                     on_record=write,
                 )
+                if not written:
+                    fh.truncate(0)
     # Outside both `with` blocks, so a second failure while closing the output cannot replace this message.
     except (BudgetExceeded, ValueError, OSError) as e:
         if os.environ.get("S1_DEBUG") or not (written or lost):

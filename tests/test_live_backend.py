@@ -292,6 +292,47 @@ class _Raising:
         raise self.exc
 
 
+def test_http_error_usage_is_measured_and_stops_on_overrun(tmp_path: Path) -> None:
+    server = Server(httpx2.Response(500, json={"usage": {"input_tokens": 10**9, "output_tokens": 0}}))
+    journal = tmp_path / "journal.jsonl"
+    emitted: list[dict] = []
+    with Ledger(journal, cap_usd=1000.0) as ledger:
+        with pytest.raises(LedgerUnusable):
+            run_batch(
+                [{"item_id": "i1", "state": "s"}, {"item_id": "i2", "state": "s"}],
+                {"q1": NOUL},
+                backend=backend(server),
+                ledger=ledger,
+                max_retries=2,
+                on_record=emitted.append,
+                sleep=lambda s: None,
+            )
+    assert len(server.bodies) == 1
+    assert [r["error_code"] for r in emitted] == ["http_500"]
+    assert outcomes(ledger_read(journal)) == ["measured"]
+
+
+def test_refused_retry_still_records_the_paid_failure(tmp_path: Path) -> None:
+    server = Server(httpx2.Response(503))
+    journal = tmp_path / "journal.jsonl"
+    worst = (token_bound("s") + token_bound(json.dumps(NOUL.wire_dict()))) * 2e-6
+    emitted: list[dict] = []
+    # The first reservation fits; after it is charged as `unknown`, the retry's does not.
+    with Ledger(journal, cap_usd=worst * 1.5) as ledger:
+        with pytest.raises(BudgetExceeded):
+            run_batch(
+                [{"item_id": "i1", "state": "s"}],
+                {"q1": NOUL},
+                backend=backend(server),
+                ledger=ledger,
+                max_retries=2,
+                on_record=emitted.append,
+                sleep=lambda s: None,
+            )
+    assert [r["error_code"] for r in emitted] == ["http_503"]
+    assert outcomes(ledger_read(journal)) == ["unknown"]
+
+
 def test_interrupt_mid_request_charges_the_reservation(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     with Ledger(journal, cap_usd=1.0) as ledger:
@@ -568,7 +609,8 @@ def test_cli_records_reach_disk_as_they_arrive(probe_files, live, capsys) -> Non
 
     live.replies = [counting]
     assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 0
-    assert seen == [0, 1, 2]
+    # The old output stands until the first record replaces it.
+    assert seen == [50, 1, 2]
     assert len(probe_files["out"].read_text().splitlines()) == 3
 
 
@@ -579,12 +621,21 @@ def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, 
     real_fdopen = os.fdopen
 
     class Full(io.TextIOWrapper):
+        """Fails every flush that has data once `ok_lines` lines are on disk, including on close."""
+
         lines = 0
+        pending = False
+
+        def write(self, text):
+            Full.pending = True
+            return super().write(text)
 
         def flush(self):
-            if Full.lines >= ok_lines:
+            if Full.pending and Full.lines >= ok_lines:
                 raise OSError(28, "No space left on device")
-            Full.lines += 1
+            if Full.pending:
+                Full.lines += 1
+                Full.pending = False
             super().flush()
 
     def fdopen(fd, mode, encoding):
@@ -629,6 +680,29 @@ def test_cli_rejects_reservation_inputs_before_touching_files(probe_files, live,
     assert flag.lstrip("-").replace("-", "_") in _one_line_error(capsys)
     assert live.bodies == [] and not probe_files["ledger"].exists()
     assert probe_files["out"].read_text() == "keep\n"
+
+
+@pytest.mark.parametrize(
+    "questions, extra",
+    [
+        ({"q1": {"type": "choice", "instructions": "x", "criteria": {}}}, ()),
+        ({"q1": NOUL.wire_dict()}, ("--cap-usd", "1e-9")),
+    ],
+)
+def test_cli_failure_before_any_request_keeps_previous_output(probe_files, live, capsys, questions, extra) -> None:
+    probe_files["out"].write_text("previous paid results\n", encoding="utf-8")
+    probe_files["questions"].write_text(json.dumps({"questions": questions}), encoding="utf-8")
+    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", *extra) == 1
+    _one_line_error(capsys)
+    assert live.bodies == []
+    assert probe_files["out"].read_text() == "previous paid results\n"
+
+
+def test_cli_empty_states_leave_an_empty_output(probe_files, capsys) -> None:
+    probe_files["out"].write_text("old\n", encoding="utf-8")
+    probe_files["states"].write_text("", encoding="utf-8")
+    assert probe(probe_files) == 0
+    assert probe_files["out"].read_text() == ""
 
 
 def test_cli_mock_probe_unchanged(probe_files, capsys) -> None:

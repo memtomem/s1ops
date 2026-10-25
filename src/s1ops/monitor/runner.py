@@ -30,7 +30,7 @@ from s1ops.contracts.questions import (
     parse_wire_question,
     question_id,
 )
-from s1ops.ledger.journal import Ledger, LedgerUnusable, Reservation, token_bound
+from s1ops.ledger.journal import BudgetExceeded, Ledger, LedgerUnusable, Reservation, token_bound
 
 
 @dataclass(frozen=True)
@@ -279,14 +279,22 @@ def run_batch(
             worst_usd = max(1e-6, round(est_tokens * worst_usd_per_token, 8))
 
             attempt = 0
+            refused: BudgetExceeded | None = None
             while True:
-                reservation = ledger.reserve(
-                    worst_usd,
-                    dataset=dataset,
-                    item_id=item_id,
-                    question_id=qid,
-                    model_requested=model_requested,
-                )
+                try:
+                    reservation = ledger.reserve(
+                        worst_usd,
+                        dataset=dataset,
+                        item_id=item_id,
+                        question_id=qid,
+                        model_requested=model_requested,
+                    )
+                except BudgetExceeded as e:
+                    if attempt == 0:
+                        raise
+                    # A paid attempt already failed: record it before stopping.
+                    refused = e
+                    break
                 settling = False
                 try:
                     try:
@@ -352,5 +360,7 @@ def run_batch(
                 on_record(rec)
             if ledger.overrun:
                 raise LedgerUnusable(ledger.overrun)
+            if refused is not None:
+                raise refused
 
     return records_out

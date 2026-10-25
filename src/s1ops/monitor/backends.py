@@ -65,6 +65,12 @@ def _tokens(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+def _body_tokens(body: Any) -> int | None:
+    """Billable input tokens from an error body, when it reports valid usage."""
+    usage = body.get("usage") if isinstance(body, dict) else None
+    return _tokens(usage.get("input_tokens")) if isinstance(usage, dict) else None
+
+
 def _answer(question: QuestionModel, answer: Any, sdk: Any) -> dict[str, Any]:
     """Map the SDK answer to `s1-record/1` answer keys, checking it against the question asked."""
     if isinstance(question, NoulQuestion):
@@ -147,6 +153,9 @@ class HttpSystemOneBackend:
             # Configuration messages name the setting, never the key itself.
             raise ValueError(f"TypeSafe client: {e}") from None
 
+    def _usd(self, tokens: int | None) -> float | None:
+        return None if tokens is None else tokens * self.usd_per_input_token
+
     def close(self) -> None:
         self._client.close()
 
@@ -172,18 +181,17 @@ class HttpSystemOneBackend:
                 model=model_requested,
             )
         # Subclasses first: a validation error is an API error, and a timeout is a connection error.
+        # A body that failed the SDK's schema, or an HTTP error body, may still report valid usage:
+        # keep it as the measured cost, so that an overrun there stops the run too.
         except sdk.TypeSafeAPIResponseValidationError as e:
-            # The body failed the SDK's schema, but its usage may still be valid: keep the measured cost.
-            usage = e.body.get("usage") if isinstance(e.body, dict) else None
-            tokens = _tokens(usage.get("input_tokens")) if isinstance(usage, dict) else None
-            usage_usd = None if tokens is None else tokens * self.usd_per_input_token
-            raise BackendError("invalid_response", sent=True, usage_usd=usage_usd) from None
+            raise BackendError("invalid_response", sent=True, usage_usd=self._usd(_body_tokens(e.body))) from None
         except sdk.TypeSafeAPIError as e:
             raise BackendError(
                 f"http_{e.status}",
                 sent=True,
                 retryable=e.status in RETRY_STATUSES,
                 retry_after_s=retry_after_s(e.headers),
+                usage_usd=self._usd(_body_tokens(e.body)),
             ) from None
         except sdk.TypeSafeAPITimeoutError:
             raise BackendError("timeout", sent=None, retryable=True) from None
@@ -194,8 +202,7 @@ class HttpSystemOneBackend:
             raise BackendError("invalid_request", sent=False) from None
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
-        tokens = _tokens(resp.usage.input_tokens)
-        usage_usd = None if tokens is None else tokens * self.usd_per_input_token
+        usage_usd = self._usd(_tokens(resp.usage.input_tokens))
         try:
             if not isinstance(resp.model, str) or not _MODEL_NAME.fullmatch(resp.model):
                 raise _Invalid

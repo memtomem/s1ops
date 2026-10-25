@@ -73,8 +73,9 @@
     | 긴 영문(×12) | 803 | 440 | 430 | 312 |
     | 짧은 한글 | 36 | 98 | 304 | 179 |
 
-    - 영문 735자 증가에 두 API 모두 +143토큰(≈0.2토큰/자) → 나머지는 요청당 고정분. 추정 대비 고정 초과는 systemone 약 +235, openai 약 +120. `token_bound`의 글자당 상한(영문 0.5, 한글 2.0)은 실측(영문 ≈0.2, 한글 ≈0.65–0.8)보다 보수적이라 긴 state는 넉넉하고 짧은 state는 고정분만큼 모자람
-    - → `reserve_overhead_tokens` 백엔드 기본값: `HttpSystemOneBackend` 300, `OpenAIDecisionsBackend` 200, mock 0. `run_batch(reserve_overhead_tokens=None)`과 CLI 기본값이 이를 씀. 예약 단가(`--worst-usd-per-token` 기본 2e-6)가 실제 단가(openai $1e-7)보다 훨씬 크면 이 값과 무관하게 초과가 없고, 예약 단가를 실제 단가에 가깝게 잡을 때 짧은 state의 매 요청 초과(`LedgerUnusable`)를 막음
+    - 청구 − 추정(관측): systemone +216 / −10 / +206, openai +98 / −128 / +81(표의 행 순서). 짧은 state에서만 모자라고 긴 state에선 남음 — `token_bound`의 글자당 상한(영문 0.5, 한글 2.0)이 실측(영문 ≈0.2, 한글 ≈0.65–0.8)보다 보수적이기 때문
+    - 영문 735자 증가에 두 API 모두 +143토큰(≈0.195토큰/자) → 나머지는 요청당 고정분: systemone ≈274, openai ≈156토큰. 이 고정분에서 질문 추정(38)을 빼면 state가 비었을 때의 부족분 외삽치 ≈236 / ≈118(관측치가 아니라 3개 표본·한 질문에서의 외삽)
+    - → `reserve_overhead_tokens` 백엔드 기본값: `HttpSystemOneBackend` 300, `OpenAIDecisionsBackend` 200(외삽치에 여유), mock 0. `run_batch(reserve_overhead_tokens=None)`과 CLI 기본값이 이를 씀. 예약 단가(`--worst-usd-per-token` 기본 2e-6)가 실제 단가(openai $1e-7)보다 훨씬 크면 이 값과 무관하게 초과가 없고, 예약 단가를 실제 단가에 가깝게 잡을 때 짧은 state의 매 요청 초과(`LedgerUnusable`)를 막음
     - served model: `/v1/systemone`은 별칭을 실제 버전으로 풀어 돌려줌(`jev-latest` → `jev-1.14.0`) → 무통보 교체 감지 동작. `/v1/decisions`는 별칭 `gpt-6-luna`를 그대로 돌려줌 → 별칭 뒤 스냅샷 교체는 `model_served`로 보이지 않고 분포 drift로만 드러남
 
 ---

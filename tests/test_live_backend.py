@@ -17,7 +17,7 @@ from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, ScoreQuestio
 from s1ops.contracts.records import read_records
 from s1ops.ledger.journal import BudgetExceeded, Ledger, LedgerUnusable, read as ledger_read, token_bound
 from s1ops.monitor import backends as backends_mod
-from s1ops.monitor.backends import HttpSystemOneBackend, retry_after_s
+from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend, retry_after_s
 from s1ops.monitor.runner import BackendError, BackendResponse, run_batch
 
 SECRET = "TOP_SECRET_STATE\nsecond line"
@@ -768,6 +768,30 @@ def test_cli_overhead_default_is_the_backends(probe_files, live, capsys, extra, 
     estimate = token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict()))
     reserved = _reserved(probe_files["ledger"])
     assert len(reserved) == 3 and all(r == pytest.approx((estimate + overhead) * 2e-6) for r in reserved)
+
+
+def test_measured_overhead_defaults() -> None:
+    # The values the docs advertise, from the 2026-10-25 measurement; a change here is a decision.
+    assert (HttpSystemOneBackend.reserve_overhead_tokens, OpenAIDecisionsBackend.reserve_overhead_tokens) == (300.0, 200.0)
+
+
+@pytest.mark.parametrize("overhead, stops", [(None, False), (0.0, True)])
+def test_measured_short_state_bill_fits_the_default_reservation(tmp_path: Path, overhead, stops) -> None:
+    # The measured short-state case: 287 tokens billed for a 71-token estimate. With the reservation
+    # priced at the real price, only the default overhead keeps it from overrunning.
+    state = "The package arrived with a cracked screen and the box was crushed."
+    question = NoulQuestion(instructions="Does the customer report a damaged item?")
+    server = Server(ok({"type": "noul", "noul": 0.9}, tokens=287))
+    b = HttpSystemOneBackend(usd_per_input_token=2e-6, api_key="k", base_url="https://api.test", transport=httpx2.MockTransport(server))
+    with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
+        call = lambda: run_batch(  # noqa: E731
+            [{"item_id": "i1", "state": state}], {"q1": question}, backend=b, ledger=ledger, reserve_overhead_tokens=overhead
+        )
+        if stops:
+            with pytest.raises(LedgerUnusable):
+                call()
+        else:
+            assert call()[0]["p"] == 0.9
 
 
 def test_mock_backend_has_no_overhead(tmp_path: Path) -> None:

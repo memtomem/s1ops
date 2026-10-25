@@ -167,3 +167,14 @@ def test_ledger_reserve_settle_migrate_recover(tmp_path: Path) -> None:
     rec_out = tmp_path / "recovered.jsonl"
     recover(broken_path, rec_out)
     assert abs(read(rec_out).opening_usd - 0.20) < 1e-6
+
+
+def test_sdk_top_level_exports() -> None:
+    for name in s1ops.__all__:
+        assert getattr(s1ops, name) is getattr(s1, name), name
+    added = {
+        "Fit", "FitError", "fit_group", "transform", "load_fits", "save_fits", "fit_for",
+        "audit_group", "compare_records", "select_threshold", "lint_path",
+    }
+    assert added <= set(s1ops.__all__), sorted(added - set(s1ops.__all__))
+    assert s1.__version__ == s1ops.__version__

@@ -54,6 +54,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 pip install s1ops                # or: uv add s1ops
 pip install "s1ops[langfuse]"    # optional: the Langfuse client for live upload
 pip install "s1ops[typesafe]"    # optional: live `s1 probe --backend systemone`
+pip install "s1ops[openai]"      # optional: live `s1 probe --backend openai`
 ```
 
 ### 2. Generate the Deterministic Synthetic Demo Workspace
@@ -122,7 +123,7 @@ s1 export langfuse s1-demo/records.jsonl -o s1-demo/langfuse_export.json --polic
 s1 export phoenix s1-demo/records.jsonl -o s1-demo/phoenix_spans.jsonl --policy s1-demo/policy.json
 ```
 
-**Live probes.** `s1 probe --backend systemone` sends each state and question to `POST /v1/systemone` (key in `TYPESAFE_API_KEY`, endpoint in `TYPESAFE_BASE_URL` or `--base-url`). The API reports billable input tokens, not dollars, so `--usd-per-input-token` is required. Every attempt reserves its worst case first (`--worst-usd-per-token`, plus `--reserve-overhead-tokens` for server-side prompt tokens) and is settled as measured, or, when the request may have been billed without a usable reported cost (timeout, connection error, HTTP error), at its full reservation. Timeouts, connection errors, 408, 429 and 5xx are retried up to `--max-retries` times. An item that still fails is written as a record with `model_served: null` and an `error_code`, which `s1 drift` counts as a failure. Records are written as they arrive, so a run stopped by `--cap-usd` or by a measured cost above its reservation keeps what it paid for. Error messages carry only an error code, never server text, since a server may echo the request.
+**Live probes.** `s1 probe --backend systemone` sends each state and question to `POST /v1/systemone` (key in `TYPESAFE_API_KEY`, endpoint in `TYPESAFE_BASE_URL` or `--base-url`); `--backend openai` sends them to OpenAI's `POST /v1/decisions` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, model `gpt-6-luna` by default) with prompt caching disabled, so the measured cost is exact. A question that API cannot take as written — a Noul with `criteria`, structured instructions, or option and level counts outside its limits — is refused before anything is reserved, rather than sent in a different form under the same `question_id`. A refused answer is recorded with `error_code: "refusal"`. The APIs report billable input tokens, not dollars, so `--usd-per-input-token` is required. Every attempt reserves its worst case first (`--worst-usd-per-token`, plus `--reserve-overhead-tokens` for server-side prompt tokens) and is settled as measured, or, when the request may have been billed without a usable reported cost (timeout, connection error, HTTP error), at its full reservation. Timeouts, connection errors, 408, 429 and 5xx are retried up to `--max-retries` times. An item that still fails is written as a record with `model_served: null` and an `error_code`, which `s1 drift` counts as a failure. Records are written as they arrive, so a run stopped by `--cap-usd` or by a measured cost above its reservation keeps what it paid for. Error messages carry only an error code, never server text, since a server may echo the request.
 
 ### 4. Launch the 6-Tab Local Web Workbench
 

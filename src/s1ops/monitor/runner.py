@@ -166,11 +166,22 @@ class DeterministicMockBackend:
         raise ValueError(f"Unsupported question model: {type(question)}")
 
 
-def check_questions(work_questions: Sequence[tuple[str, str, QuestionModel]]) -> None:
-    """Reject questions no backend can answer, before anything is reserved."""
-    for name, _role, q in work_questions:
+def check_questions(work_questions: Sequence[tuple[str, str, QuestionModel]], backend: Backend | None = None) -> None:
+    """Reject questions no backend can answer, or this one cannot, before anything is reserved.
+
+    A backend may define `check_question(question)`, raising `ValueError` for a question its API
+    cannot take.
+    """
+    check = getattr(backend, "check_question", None)
+    for name, role, q in work_questions:
         if isinstance(q, (ChoiceQuestion, ScoreQuestion)) and not q.criteria:
             raise ValueError(f"question {name!r}: {q.type} criteria is empty")
+        if check is not None:
+            try:
+                check(q)
+            except ValueError as e:
+                probe = "" if role in ("primary", "noul") else f" ({role} probe)"
+                raise ValueError(f"question {name!r}{probe}: {e}") from None
 
 
 def check_reservation(worst_usd_per_token: float, reserve_overhead_tokens: float) -> None:
@@ -262,7 +273,7 @@ def run_batch(
             for name, q in questions.items()
         ]
 
-    check_questions(work_questions)
+    check_questions(work_questions, backend)
     check_reservation(worst_usd_per_token, reserve_overhead_tokens)
 
     records_out: list[dict[str, Any]] = []

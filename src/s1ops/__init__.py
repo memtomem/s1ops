@@ -46,7 +46,7 @@ from s1ops.monitor.drift import (
     jensen_shannon,
     psi,
 )
-from s1ops.monitor.backends import HttpSystemOneBackend
+from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
 from s1ops.monitor.runner import (
     Backend,
     BackendError,
@@ -101,6 +101,7 @@ __all__ = [
     "BackendResponse",
     "DeterministicMockBackend",
     "HttpSystemOneBackend",
+    "OpenAIDecisionsBackend",
     "expand_probes",
     "run_batch",
     "DecisionGate",

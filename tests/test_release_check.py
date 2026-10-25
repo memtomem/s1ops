@@ -58,11 +58,9 @@ def test_sdist_manifest_rejects(tmp_path: Path, names: list[str], extra: dict, m
     ["refs/heads/main", "refs/tags/v0.0.0", f"refs/tags/{__version__}", f"refs/tags/v{__version__}-rc1"],
 )
 def test_version_guard_rejects_ref(ref: str) -> None:
-    pytest.importorskip("tomllib")
     with pytest.raises(CheckError):
         check_version(ref)
 
 
 def test_version_guard_accepts_matching_tag() -> None:
-    pytest.importorskip("tomllib")
     assert check_version(f"refs/tags/v{__version__}") == __version__

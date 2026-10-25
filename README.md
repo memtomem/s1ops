@@ -242,7 +242,7 @@ All tests run 100% offline with zero network calls or API keys:
 uv run pytest -v
 ```
 
-CI (`.github/workflows/ci.yml`) runs the suite on Python 3.10–3.13 against the locked dependencies, lints the generated demo questions, and validates the built wheel and sdist by installing each outside the checkout (`scripts/release_check.py`).
+CI (`.github/workflows/ci.yml`) runs the suite on Python 3.11–3.13 against the locked dependencies, lints the generated demo questions, and validates the built wheel and sdist by installing each outside the checkout (`scripts/release_check.py`).
 
 ## Releasing
 

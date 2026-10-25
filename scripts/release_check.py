@@ -5,7 +5,7 @@ Usage:
     python scripts/release_check.py dist DIST_DIR
 
 Standard library only, so it runs before the project's dependencies are installed.
-Needs Python 3.11+ (``tomllib``) and, for ``dist``, ``git`` and ``uv`` on PATH.
+Needs ``git`` and ``uv`` on PATH for ``dist``.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,8 +33,6 @@ class CheckError(Exception):
 
 
 def _pyproject() -> dict:
-    import tomllib  # 3.11+; imported here so the manifest check also loads on 3.10
-
     return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 

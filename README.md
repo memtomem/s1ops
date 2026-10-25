@@ -241,3 +241,9 @@ All tests run 100% offline with zero network calls or API keys:
 ```bash
 uv run pytest -v
 ```
+
+CI (`.github/workflows/ci.yml`) runs the suite on Python 3.10–3.13 against the locked dependencies, lints the generated demo questions, and validates the built wheel and sdist by installing each outside the checkout (`scripts/release_check.py`).
+
+## Releasing
+
+Releases are published by `.github/workflows/release.yml`, which runs only when dispatched by hand on a `vX.Y.Z` tag that matches the `pyproject.toml` version and `s1ops.__version__`. It reruns CI on that commit and uploads the validated artifacts to TestPyPI or PyPI through trusted publishing; no API token is stored. The procedure and one-time setup are in [docs/NEXT_STEPS_PLAN.md](docs/NEXT_STEPS_PLAN.md) (Track 1).

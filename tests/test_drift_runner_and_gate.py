@@ -197,3 +197,43 @@ def test_runtime_decision_gate_and_cli_web(tmp_path: Path) -> None:
     r_drift = client.get("/api/drift")
     assert r_drift.status_code == 200
     assert r_drift.json()["summary"]["critical"] == 1
+
+
+class _NeverCalled:
+    def infer(self, state, question, *, model_requested):
+        raise AssertionError("no request may be sent")
+
+
+@pytest.mark.parametrize(
+    "rows, message",
+    [
+        ([{"item_id": "a", "state": "ok"}, {"item_id": "b"}], "row 2 is missing 'item_id' or 'state'"),
+        ([{"state": "ok"}], "row 1 is missing 'item_id' or 'state'"),
+        ([{"item_id": "a", "state": None}], "row 1: 'state' must be a string, got NoneType"),
+        ([{"item_id": "a", "state": 987654321}], "row 1: 'state' must be a string, got int"),
+        ([{"item_id": True, "state": "x"}], "row 1: 'item_id' must be a non-empty string or an integer, got bool"),
+        ([{"item_id": "", "state": "x"}], "row 1: 'item_id' must be a non-empty string or an integer, got str"),
+        ([{"item_id": "a", "state": "x", "dataset": 5}], "row 1: 'dataset' must be a non-empty string, got int"),
+        (["not an object"], "row 1 is not an object"),
+    ],
+)
+def test_bad_state_rows_are_refused_before_any_reservation(tmp_path: Path, rows, message) -> None:
+    journal = tmp_path / "journal.jsonl"
+    with Ledger(journal, cap_usd=1.0) as ledger:
+        with pytest.raises(ValueError) as info:
+            run_batch(rows, {"q": NoulQuestion(instructions="x?")}, backend=_NeverCalled(), ledger=ledger)
+    assert str(info.value) == message
+    # Messages carry the row and the type, never a state value.
+    assert "987654321" not in str(info.value)
+    assert not journal.exists()
+
+
+def test_integer_item_ids_and_missing_dataset_are_accepted(tmp_path: Path) -> None:
+    with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
+        recs = run_batch(
+            [{"item_id": 7, "state": "x"}, {"item_id": "b", "state": "", "dataset": None}],
+            {"q": NoulQuestion(instructions="x?")},
+            backend=DeterministicMockBackend(),
+            ledger=ledger,
+        )
+    assert [(r["dataset"], r["item_id"]) for r in recs] == [("default", "7"), (None, "b")]

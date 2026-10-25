@@ -319,3 +319,26 @@ def test_integer_beyond_float_range_is_a_record_error(tmp_path: Path, capsys) ->
     assert cli_main(["audit", str(path)]) == 1
     err = capsys.readouterr().err.strip().splitlines()
     assert len(err) == 1 and err[0].startswith("s1: line 1: p must be finite")
+
+
+@pytest.mark.parametrize(
+    "row, message",
+    [
+        ({"item_id": "i1"}, "row 2 is missing 'item_id' or 'state'"),
+        ({"state": "x"}, "row 2 is missing 'item_id' or 'state'"),
+        ({"item_id": "i1", "state": None}, "row 2: 'state' must be a string, got NoneType"),
+    ],
+)
+def test_probe_bad_states_row_is_one_line_before_ledger_or_output(tmp_path: Path, capsys, row, message) -> None:
+    questions = tmp_path / "q.json"
+    questions.write_text(json.dumps({"questions": {"q1": {"type": "noul", "instructions": "ok?"}}}), encoding="utf-8")
+    states = tmp_path / "states.jsonl"
+    states.write_text(json.dumps({"item_id": "i0", "state": "fine"}) + "\n" + json.dumps(row) + "\n", encoding="utf-8")
+    out = tmp_path / "out.jsonl"
+    out.write_text("previous\n", encoding="utf-8")
+    ledger = tmp_path / "journal.jsonl"
+    rc = cli_main(["probe", str(questions), "--states", str(states), "-o", str(out), "--ledger", str(ledger)])
+    assert rc == 1
+    err = capsys.readouterr().err.strip().splitlines()
+    assert err == [f"s1: {states}: {message}"]
+    assert out.read_text() == "previous\n" and not ledger.exists()

@@ -184,6 +184,28 @@ def check_questions(work_questions: Sequence[tuple[str, str, QuestionModel]], ba
                 raise ValueError(f"question {name!r}{probe}: {e}") from None
 
 
+def check_states(states: Sequence[Any]) -> None:
+    """Reject state rows `run_batch` cannot send, before anything is reserved.
+
+    Each row needs `item_id` (a string or integer) and `state` (a string: anything else would be sent
+    as its `str()`, such as the text "None"). Messages name the row and the type, never a value, since
+    the state is raw text that must not leave the process.
+    """
+    for i, row in enumerate(states, start=1):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"row {i} is not an object")
+        if "item_id" not in row or "state" not in row:
+            raise ValueError(f"row {i} is missing 'item_id' or 'state'")
+        item_id = row["item_id"]
+        if isinstance(item_id, bool) or not isinstance(item_id, (str, int)) or item_id == "":
+            raise ValueError(f"row {i}: 'item_id' must be a non-empty string or an integer, got {type(item_id).__name__}")
+        if not isinstance(row["state"], str):
+            raise ValueError(f"row {i}: 'state' must be a string, got {type(row['state']).__name__}")
+        dataset = row.get("dataset")
+        if dataset is not None and (not isinstance(dataset, str) or not dataset):
+            raise ValueError(f"row {i}: 'dataset' must be a non-empty string, got {type(dataset).__name__}")
+
+
 def check_reservation(worst_usd_per_token: float, reserve_overhead_tokens: float) -> None:
     """Reject reservation inputs that would collapse every reservation to the $1e-6 floor."""
     for name, value, low in (
@@ -275,6 +297,7 @@ def run_batch(
             for name, q in questions.items()
         ]
 
+    check_states(states)
     check_questions(work_questions, backend)
     if reserve_overhead_tokens is None:
         reserve_overhead_tokens = getattr(backend, "reserve_overhead_tokens", 0.0)

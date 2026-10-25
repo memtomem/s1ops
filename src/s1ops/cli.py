@@ -67,7 +67,7 @@ from s1ops.lint.lint import audit_probe_records, format_text, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
-from s1ops.monitor.runner import DeterministicMockBackend, check_reservation, run_batch
+from s1ops.monitor.runner import DeterministicMockBackend, check_reservation, check_states, run_batch
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
 
 EXIT_OK = 0
@@ -745,6 +745,10 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens or 0.0)
 
     states = _load_jsonl_dicts(Path(args.states))
+    try:
+        check_states(states)
+    except ValueError as e:
+        raise CliError(f"{args.states}: {e}") from None
     if args.model is None:
         args.model = _DEFAULT_MODEL[args.backend]
     backend = _probe_backend(args)

@@ -44,19 +44,24 @@
 ### Track 2. 라이브 HTTP 백엔드 어댑터 (`HttpSystemOneBackend` & `OpenAIDecisionsBackend`)
 
 - **목표**: `src/s1ops/monitor/runner.py`의 `Backend` 프로토콜을 구현하는 실제 HTTP 클라이언트 어댑터를 추가하여, `s1 probe`가 모의 백엔드(`DeterministicMockBackend`)뿐 아니라 라이브 API 엔드포인트도 예산 상한(`cap_usd`) 하에서 안전하게 호출할 수 있도록 확장합니다.
-- **대상 파일**:
-  - `src/s1ops/monitor/backends.py` (신규)
-  - `src/s1ops/monitor/runner.py` 및 `src/s1ops/cli.py` (`--backend mock|systemone|openai` 플래그 추가)
+- **대상 파일**: `src/s1ops/monitor/backends.py` (신규), `src/s1ops/monitor/runner.py`, `src/s1ops/cli.py` (`s1 probe --backend mock|systemone`)
 - **세부 설계**:
-  - [ ] **`HttpSystemOneBackend`**:
-    - 엔드포인트: `POST {base_url}/v1/systemone` (기본 환경변수 `TYPESAFE_BASE_URL`, `TYPESAFE_API_KEY`)
-    - 요청 페이로드: 정규화된 `parse_wire_question(question)` + 런타임 메모리 내 `state` 전달 (디스크 레코드에는 `state` 미저장, `state_sha256`만 기록)
-    - 응답 매핑: 실제 서빙된 `model` 헤더/필드를 `model_served`로 캡처하여 무통보 모델 교체 감지와 직결
-  - [ ] **`OpenAIDecisionsBackend`**:
-    - 엔드포인트: `POST {base_url}/v1/decisions` (기본 환경변수 `OPENAI_BASE_URL`, `OPENAI_API_KEY`)
-    - 요청 페이로드: `to_openai_decision(question)` 변환기로 `noul` → `predicate`, `choice` → `choice` 자동 매핑
-  - [ ] **재시도 및 원장 정산 안전성**:
-    - 429/5xx 발생 시 지수 백오프 후 최종 실패 시 `ledger.settle(res, actual_usd=0.0)` 및 `no_response` 레코드(`model_served=None`, `error_code=...`) 기록
+  - [x] **`HttpSystemOneBackend`** (2026-10-25, 브랜치 `feat/live-systemone-backend`):
+    - 직접 HTTP 구현 대신 `typesafe` extra의 `typesafe-sdk`를 감쌈. SDK 재시도는 끄고(`RetryPolicy(max_retries=0)`) 재시도는 `run_batch`가 수행해 시도마다 원장 예약을 따로 잡음
+    - 요청: 문항 1개/요청, `questions={"q": question.wire_dict()}` (SDK가 raw dict를 받으므로 `question_id`와 같은 wire 형태가 그대로 감)
+    - 응답 매핑: `model_served = response.model`. 응답에 USD가 없고 토큰 수만 있으므로 비용 = `usage.input_tokens × --usd-per-input-token` (출력 토큰 무료, 기본 단가 없음)
+    - SDK는 `usage={}`, 빈 `answers`, 범위 밖 확률을 통과시키므로 백엔드가 답 타입·선택지·레벨·score 범위를 확인하고 만든 레코드를 `parse_record`로 검증
+    - safe-v1: `BackendError` 메시지는 오류 코드 + 고정 문구만 (SDK 예외 문자열은 서버 본문을 최대 200자 포함하고, `request_id`도 서버 헤더). SDK의 DEBUG 본문 로그는 `typesafe_sdk` 로거에 `NullHandler`만 있어 `s1` 프로세스에선 출력되지 않음 (측정)
+  - [x] **재시도 및 원장 정산 안전성** (원 설계의 "최종 실패 시 `settle(0.0)`"은 과금됐을 수 있는 요청을 0으로 기록해 cap을 무력화하므로 바꿈):
+    - 응답 usage가 유효하면 답이 무효여도 `measured`; 요청이 확실히 안 나갔으면 `unsent`; 그 외(타임아웃·연결 오류·HTTP 오류 응답·예약~정산 사이 인터럽트)는 `unknown`(예약액 과금)
+    - 타임아웃·연결 오류·408·429·5xx는 `--max-retries`까지 재시도, `Retry-After`/`retry-after-ms` 우선, 60초 초과 요청이면 재시도 중단. 최종 실패는 `model_served: null` + `error_code` 레코드
+    - `run_batch`의 `min(측정, 예약)` 클램프 제거. `Ledger.settle`은 초과를 기록만 하고 다음 `reserve`에서 멈추므로, `run_batch`가 정산 직후 `ledger.overrun`을 확인해 그 레코드를 내보낸 뒤 `LedgerUnusable`
+    - 레코드는 `on_record`로 즉시 기록·flush: 중간 정지 시 이미 비용을 낸 응답이 남음. `-o`가 원장·lock·입력과 같은 파일(심볼릭·하드링크·대소문자 무시 FS)이면 inode 비교로 거부
+  - [ ] **`OpenAIDecisionsBackend`** (후속 PR). 공식 가이드(developers.openai.com/api/docs/guides/decisions, 2026-10-06 public beta)가 저장소 가정과 다름:
+    - 요청 `input`(not `state`), `questions` 배열(1–400), `score`(`levels`: `label`+`description`, 2–10개) 지원 → `to_openai_decision`·`parse_wire_question`에 score 추가 필요
+    - 응답 `probabilities`는 `[{value, probability}]` 배열, predicate 답은 `probability`, `refusal` 답 타입 존재; usage는 `input_tokens`(+ 캐시 세부), 캐시 쓰기 과금·적중 할인이 있어 단일 단가로는 측정 비용이 근사
+    - **응답에 served model 필드가 있는지 문서에서 확인 못함** → 실제 응답 1건으로 확인한 뒤 시작. 없으면 무통보 모델 교체 감지가 불가
+  - [ ] `--reserve-overhead-tokens` 기본값(현재 0): 서버 측 템플릿 토큰으로 측정이 예약을 넘으면 `LedgerUnusable`로 멈춤(안전한 실패). 라이브 실측 후 조정
 
 ---
 

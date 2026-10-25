@@ -130,7 +130,12 @@ INSTRUCTION_PARTS = frozenset({"input_text", "input_image", "input_json"})
 
 
 def _openai_instructions(instructions: Any) -> str | list[Any]:
-    """A string, or a list of `/v1/decisions` input parts; a bare object has no OpenAI form."""
+    """A string, or a list of `/v1/decisions` input parts; a bare object has no OpenAI form.
+
+    Only the shape is checked: each part is an object tagged `input_text`, `input_image` or
+    `input_json`. Its payload is the API's to validate; a malformed one comes back as HTTP 400,
+    which changes no question's meaning (the reason for refusing here) and is recorded as a failure.
+    """
     if isinstance(instructions, str):
         return instructions
     if (

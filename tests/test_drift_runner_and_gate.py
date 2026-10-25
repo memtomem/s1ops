@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from examples.make_synthetic import generate_workspace
 from s1ops.cli import main as cli_main
 from s1ops.contracts.questions import NoulQuestion
+from s1ops.demo import generate_workspace
 from s1ops.ledger.journal import BudgetExceeded, Ledger, read as ledger_read
 from s1ops.lint.lint import audit_probe_records
 from s1ops.monitor.drift import audit_drift, jensen_shannon, psi

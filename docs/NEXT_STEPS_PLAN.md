@@ -22,7 +22,7 @@
   - [x] `.github/workflows/ci.yml` 추가 (2026-10-25, PR #2 run 40169216043 녹색: 3.11–3.13 각 92 passed, `package` job `release_check: dist ok`):
     - Python 3.11–3.13 매트릭스 (`eval/judge.py`가 쓰는 `cohen_kappa_score(replace_undefined_by=...)`가 scikit-learn 1.9부터 있고, 1.9는 Python 3.11 이상 필요), `uv sync --all-extras --locked` (lock이 낡으면 실패)
     - `uv run pytest -v` (100% 오프라인 무의존성 검증)
-    - `examples/data/`는 gitignore된 생성물이므로 `uv run python examples/make_synthetic.py`로 먼저 만든 뒤 `uv run s1 lint check examples/data/questions.json` 스모크 체크 (데모 문항에 의도된 경고가 있어 `--strict` 없이 실행)
+    - `examples/data/`는 gitignore된 생성물이므로 `uv run s1 demo examples/data`로 먼저 만든 뒤 `uv run s1 lint check examples/data/questions.json` 스모크 체크 (데모 문항에 의도된 경고가 있어 `--strict` 없이 실행)
     - `package` job: `uv build` → `twine check --strict` (publish action과 같은 twine 7.0.0) → `scripts/release_check.py dist`가 sdist 목록이 `[tool.hatch.build.targets.sdist] include` 아래의 `git ls-files` 목록(+ Hatch가 강제로 넣는 `.gitignore`·`PKG-INFO`)과 정확히 같은지(일반 파일만, 링크 불가) 확인하고, wheel·sdist를 각각 checkout 밖의 새 venv에 설치해 버전·`import s1` 별칭·`web/static/index.html`을 확인
   - [x] `.github/workflows/release.yml` 추가: 토큰 대신 GitHub Actions trusted publishing
     - 수동 `workflow_dispatch`만 받음 (입력 `index`: `testpypi` | `pypi`). dispatch 자체가 공개 시점을 정하는 관문
@@ -33,9 +33,11 @@
     - GitHub environment `testpypi`, `pypi` 생성
     - TestPyPI·PyPI의 **기존** `s1ops` 프로젝트(yank된 0.0.1이 있으므로 pending publisher가 아님) → Manage → Publishing에서 GitHub publisher 추가: owner `memtomem`, repository `s1ops`, workflow `release.yml`, environment `testpypi` / `pypi`
   - 릴리스 절차: `vX.Y.Z` 태그 push → `GH_TOKEN=$(gh auth token --user memtomem) gh workflow run release.yml --ref vX.Y.Z -f index=testpypi` (`--ref`는 태그 이름도 받음). TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
-  - [ ] 첫 실제 릴리스(0.2.0) 전 체크리스트:
-    - README에 인덱스 사용자용 설치 안내(`pip install s1ops`)를 클론 기반 데모와 분리해 추가. 지금 넣으면 yank된 빈 0.0.1로 안내하게 됨
-    - 저장소 공개 여부와 시점 결정 (공개 시 `attestations: false` 제거)
+  - [x] 첫 실제 릴리스(0.2.0) 준비 (2026-10-25 소유자 결정: 패키지만 먼저 공개, 저장소는 비공개 유지):
+    - 데모 생성기를 패키지로 옮겨 `s1 demo OUT_DIR [--seed N]` 추가 (새 디렉터리나 빈 디렉터리에만 씀, `--force` 없음). `release_check.py`가 wheel·sdist 설치본에서 `s1 demo` + lint까지 실행
+    - README를 PyPI용으로 재작성: `pip install s1ops` → `s1 demo` → 파이프라인. 저장소·`docs/` 링크, Mermaid, `$...$` 수식 제거 (PyPI는 렌더링하지 않음)
+    - `[project.urls]` 제거, `release_check.py`가 METADATA·PKG-INFO에 `memtomem/s1ops`가 없는지 검사
+  - [ ] 저장소 공개 시: `release.yml`의 `attestations: false`와 `release_check.py`의 `PRIVATE_REPO` 검사 제거, `[project.urls]` 복원, `docs/*.md`의 로컬 경로 정리
 
 ---
 

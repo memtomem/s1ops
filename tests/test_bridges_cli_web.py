@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from examples.make_synthetic import generate_workspace
 from s1ops.bridges.langfuse import build_langfuse_events
 from s1ops.bridges.openinference import (
     MultipleCurrenciesError,
@@ -16,6 +15,7 @@ from s1ops.bridges.openinference import (
 )
 from s1ops.cli import main as cli_main
 from s1ops.contracts.records import read_records
+from s1ops.demo import generate_workspace
 from s1ops.web.app import create_app
 
 

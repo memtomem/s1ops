@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from examples.make_synthetic import generate_workspace
 from s1ops import __version__
 from s1ops.cli import main as cli_main
 from s1ops.contracts.schemas import load_policies
+from s1ops.demo import generate_workspace
 from s1ops.improve.calibrate import FitError, load_fits
 
 

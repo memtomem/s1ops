@@ -36,10 +36,6 @@ dependencies = [
 langfuse = ["langfuse>=2.0"]
 typesafe = ["typesafe-sdk>=0.7.1,<0.8"]
 
-[project.urls]
-Repository = "https://github.com/memtomem/s1ops"
-Documentation = "https://github.com/memtomem/s1ops/tree/main/docs"
-
 [project.scripts]
 s1 = "s1ops.cli:main"
 s1ops = "s1ops.cli:main"
@@ -59,7 +55,6 @@ packages = ["src/s1ops", "src/s1"]
 include = [
     "src",
     "tests",
-    "examples/make_synthetic.py",
     "scripts/release_check.py",
     "README.md",
     "LICENSE",

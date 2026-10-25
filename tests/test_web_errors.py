@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from examples.make_synthetic import generate_workspace
+from s1ops.demo import generate_workspace
 from s1ops.web.app import STATIC_DIR, create_app
 
 HOSTILE = "<img src=x onerror=alert(1)>"

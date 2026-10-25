@@ -215,6 +215,12 @@ class _NeverCalled:
         ([{"item_id": "", "state": "x"}], "row 1: 'item_id' must be a non-empty string or an integer, got str"),
         ([{"item_id": "a", "state": "x", "dataset": 5}], "row 1: 'dataset' must be a non-empty string, got int"),
         (["not an object"], "row 1 is not an object"),
+        ([{"item_id": "7", "state": "a"}, {"item_id": "7", "state": "b"}], "row 2 is the same item as row 1: (dataset, item_id) = ('default', '7')"),
+        ([{"item_id": 7, "state": "a"}, {"item_id": "7", "state": "b"}], "row 2 is the same item as row 1: (dataset, item_id) = ('default', '7')"),
+        (
+            [{"item_id": "7", "state": "a"}, {"item_id": "7", "state": "b", "dataset": "default"}],
+            "row 2 is the same item as row 1: (dataset, item_id) = ('default', '7')",
+        ),
     ],
 )
 def test_bad_state_rows_are_refused_before_any_reservation(tmp_path: Path, rows, message) -> None:
@@ -231,9 +237,15 @@ def test_bad_state_rows_are_refused_before_any_reservation(tmp_path: Path, rows,
 def test_integer_item_ids_and_missing_dataset_are_accepted(tmp_path: Path) -> None:
     with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
         recs = run_batch(
-            [{"item_id": 7, "state": "x"}, {"item_id": "b", "state": "", "dataset": None}],
+            [
+                {"item_id": 7, "state": "x"},
+                {"item_id": "b", "state": "", "dataset": None},
+                # The same id in other datasets is a different item.
+                {"item_id": 7, "state": "y", "dataset": "other"},
+                {"item_id": "b", "state": "z"},
+            ],
             {"q": NoulQuestion(instructions="x?")},
             backend=DeterministicMockBackend(),
             ledger=ledger,
         )
-    assert [(r["dataset"], r["item_id"]) for r in recs] == [("default", "7"), (None, "b")]
+    assert [(r["dataset"], r["item_id"]) for r in recs] == [("default", "7"), (None, "b"), ("other", "7"), ("default", "b")]

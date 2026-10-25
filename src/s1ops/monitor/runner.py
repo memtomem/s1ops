@@ -188,9 +188,12 @@ def check_states(states: Sequence[Any]) -> None:
     """Reject state rows `run_batch` cannot send, before anything is reserved.
 
     Each row needs `item_id` (a string or integer) and `state` (a string: anything else would be sent
-    as its `str()`, such as the text "None"). Messages name the row and the type, never a value, since
-    the state is raw text that must not leave the process.
+    as its `str()`, such as the text "None"), and no two rows may be the same item as records key it,
+    `(dataset or "default", str(item_id))`: both would be paid for, and every reader of the output
+    refuses an item that appears twice in a group. Messages name rows, fields and types, never a
+    state, since the state is raw text that must not leave the process.
     """
+    seen: dict[tuple[Any, str], int] = {}
     for i, row in enumerate(states, start=1):
         if not isinstance(row, Mapping):
             raise ValueError(f"row {i} is not an object")
@@ -204,6 +207,10 @@ def check_states(states: Sequence[Any]) -> None:
         dataset = row.get("dataset")
         if dataset is not None and (not isinstance(dataset, str) or not dataset):
             raise ValueError(f"row {i}: 'dataset' must be a non-empty string, got {type(dataset).__name__}")
+        key = (row.get("dataset", "default"), str(item_id))
+        if key in seen:
+            raise ValueError(f"row {i} is the same item as row {seen[key]}: (dataset, item_id) = {key!r}")
+        seen[key] = i
 
 
 def check_reservation(worst_usd_per_token: float, reserve_overhead_tokens: float) -> None:

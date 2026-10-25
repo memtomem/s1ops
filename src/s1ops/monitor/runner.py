@@ -189,7 +189,7 @@ def check_states(states: Sequence[Any]) -> None:
 
     Each row needs `item_id` (a string or integer) and `state` (a string: anything else would be sent
     as its `str()`, such as the text "None"), and no two rows may be the same item as records key it,
-    `(dataset or "default", str(item_id))`: both would be paid for, and every reader of the output
+    `(row.get("dataset", "default"), str(item_id))` (an explicit `null` dataset stays `None`): both would be paid for, and every reader of the output
     refuses an item that appears twice in a group. Messages name rows, fields and types, never a
     state, since the state is raw text that must not leave the process.
     """

@@ -23,6 +23,7 @@ import numpy as np
 
 from s1ops.contracts.records import Record, read_records
 from s1ops.contracts.schemas import PolicyEntry
+from s1ops.runtime.routing import route
 
 PSI_EPS = 1e-4
 PSI_WARN = 0.10
@@ -125,15 +126,7 @@ def _escalation_rate(records: Sequence[Record], policy: PolicyEntry | None) -> f
     valid = [r for r in records if r.model_served is not None and r.probs]
     if not valid:
         return None
-    esc = 0
-    for r in valid:
-        s = _primary_score(r)
-        if policy.mode == "escalation_band" and policy.band_lo is not None and policy.band_hi is not None:
-            if policy.band_lo <= s < policy.band_hi:
-                esc += 1
-        elif policy.threshold is not None:
-            if s < policy.threshold:
-                esc += 1
+    esc = sum(route(policy, r.classes, r.probs).escalated for r in valid)
     return round(esc / len(valid), 6)
 
 

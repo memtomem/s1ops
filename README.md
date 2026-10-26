@@ -120,6 +120,8 @@ s1 judge audit s1-demo/judge_grades.jsonl
 # 7) Distribution & Silent Model-Served Drift Monitor (PSI on raw probabilities;
 #    --calibrated compares calibrated ones and needs `calib` on every answered record of both files)
 s1 drift s1-demo/records.jsonl s1-demo/records_canary.jsonl --policy s1-demo/policy.json
+#    (a live canary has no `calib` yet: run `s1 apply canary.jsonl --fit s1-demo/fits.json -o canary_calibrated.jsonl
+#    --pass-through-unfitted` first, which keeps the records of models without a fit)
 
 # 8) Budget-Guarded Probe Runner (built-in deterministic mock backend) & Runtime DecisionGate
 s1 probe s1-demo/questions.json --states s1-demo/states_local.jsonl \
@@ -205,7 +207,7 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 - **No Cross-Group Pooling**: Metrics, fits, drift audits, and thresholds are keyed strictly to `(question_id, model_served, primitive)`.
 - **Out-of-Sample & Model-Mismatch Enforcement (`s1 apply` & `DecisionGate`)**:
   - Attempting to apply a calibration fit to any `(dataset, item_id)` used during `s1 fit` exits with **code `2`**.
-  - Attempting to apply a calibration fit or runtime `DecisionGate` to a record whose `model_served` differs from the fitted/compiled model exits with **code `3`** (`ModelServedMismatchError`).
+  - Attempting to apply a calibration fit or runtime `DecisionGate` to a record whose `model_served` differs from the fitted/compiled model exits with **code `3`** (`ModelServedMismatchError`). For a production file that mixes models, `s1 apply --pass-through-unfitted` calibrates the records it has a fit for, writes the others unchanged, and prints how many of each (with the reason per group); class mismatches and in-sample items are still refused.
 - **Policy Fingerprint (`policy_sha256`)**: every `PolicyEntry` carries a canonical SHA-256 fingerprint of its routing fields. Verification is opt-in: pass the expected fingerprint to `DecisionGate.evaluate_noul(expected_policy_sha256=...)` or `s1 gate --expected-sha256`, and a mismatch raises `PolicyIntegrityError`. Loading `policy.json` recomputes the fingerprint; it does not compare against the stored value.
 - **Reserve-Then-Settle Budget Ledger (`s1 ledger` & `s1 probe`)**: Uses exclusive `flock` on `<journal>.lock`, rejects hard-linked ledgers, and halts immediately if a measured cost exceeds its reservation (`LedgerUnusable`).
 
@@ -218,7 +220,7 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 | `0` | Success |
 | `1` | Usage error, missing or malformed input, no matching groups, `lint check --strict` findings, policy fingerprint mismatch, ledger error, `s1 demo` target not new or empty |
 | `2` | `s1 apply` refused an in-sample item (override with `--allow-in-sample`) |
-| `3` | `model_served` mismatch against the fit or policy (`s1 apply`, `s1 gate`) |
+| `3` | `model_served` mismatch against the fit or policy (`s1 apply` without `--pass-through-unfitted`, `s1 gate`) |
 | `4` | `s1 drift --fail-on-critical` found a `CRITICAL` question |
 
 Errors print a single `s1: <message>` line on stderr. When an input that another command produces is missing, the message names that command (for example `run \`s1 fit\` first`). Set `S1_DEBUG=1` to re-raise errors raised by the library, with their traceback; checks the CLI makes itself (a missing input file, an empty grades file) still print one line. A missing input path is an error everywhere, including `s1 ledger status`, except `s1 lint check`, which reports an unreadable questions file as a `JL000` finding in its normal (`--format json`) report.

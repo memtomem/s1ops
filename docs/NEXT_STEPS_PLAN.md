@@ -124,6 +124,11 @@
     - 비교 분포는 `audit_drift`가 각 레코드의 `raw`에서 다시 파싱하므로 경로로 넘기든 미리 파싱한 `Record`로 넘기든 같음. 저장된 `calib`는 두 모드 모두 검증(`calib.p: "nan"`은 raw 모드에서도 `RecordError`)
     - 리포트에 `distribution: "raw" | "calibrated"` 추가(스키마 id는 `s1-drift-report/1` 유지; 없으면 이전 버전 리포트). web Drift 탭은 raw, 탭에 표시
     - escalation 비율은 그대로 `policy.calibrated` 기준(#14)
+  - [x] **`s1 apply --pass-through-unfitted`** (#21, 소유자 결정: A안): 보정 정책은 `calib` 없는 레코드를 거부하며 "`s1 apply`를 먼저"라고 안내하지만, 모델이 섞인 canary(데모: `jev-1.13.0` 80 + `jev-1.14.0-rc1` 40)에서는 `s1 apply`가 첫 불일치 레코드에서 exit 3으로 멈춰 안내를 따를 수 없었음
+    - 플래그를 주면 fit이 없는 레코드(다른 모델·질문·primitive, 즉 `fit_for`가 `None`)는 입력 행 그대로(있던 `calib` 포함) 쓰고, stdout에 `{"calibrated": n, "passed_through": [{question_id, model_served, primitive, n, reason}]}`(처음 나온 순서) 출력. 하나도 보정하지 않아도 exit 0(요약에 `calibrated: 0`). 플래그 없으면 출력·exit 3 그대로
+    - fit이 있는 그룹은 그대로 거부: class 불일치 exit 1, in-sample exit 2(`--allow-in-sample`이면 보정하고 `in_fit_sample` 표시)
+    - 라우팅 거부 메시지가 이 플래그를 안내
+    - 보류(B안): drift/export/SDK/web에서 `--fit`으로 메모리 보정. 보정을 두 번째 장소에서 계산하는 데서 생기는 설계 항목(gate와 bit 동일 helper, 전체 분포 Brier, class 불일치 오류 타입, in-sample 처리, 저장된 `calib`과 fit 우선순위, web의 `fits.json`)이 그대로 남아 #21에 열어 둠
   - [x] **데모 choice/score 레코드** (#16): 별도 파일 `records_categorical_train.jsonl` / `records_categorical.jsonl`(choice `support_intent`, score `urgency` 각 150 + 150, `jev-1.13.0`)과 `fits_categorical.json` / `policy_categorical.json`. README walkthrough가 categorical fit → apply → audit → tune → `gate --probs` → export를 실제 정책으로 실행. `questions.json`에 score 질문 `urgency` 추가(`s1 probe` 호출 160건 증가). 별도 난수열이라 기존 noul 파일은 그대로(파일별 digest가 main과 같음). web workbench는 noul 파일만 읽음
 
 ---

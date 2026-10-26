@@ -66,8 +66,15 @@ def _route_categorical(pol: PolicyEntry, classes: list, probs: list[float]) -> R
             f"policy for {pol.question_id} ({pol.model_served}) has mode {pol.mode!r}; "
             f"{pol.primitive} policies support error_budget only"
         )
-    if len(classes) < 2:
-        raise ValueError(f"{pol.primitive} needs at least two classes, got {classes!r}")
+    if len(classes) < 2 or len(set(map(repr, classes))) != len(classes):
+        raise ValueError(f"{pol.primitive} needs at least two distinct classes, got {classes!r}")
+    if pol.primitive == "choice":
+        ok = all(isinstance(c, str) and c for c in classes)
+    else:
+        ok = all(isinstance(c, int) and not isinstance(c, bool) and c >= 0 for c in classes)
+    if not ok:
+        kind = "option names" if pol.primitive == "choice" else "non-negative integer levels"
+        raise ValueError(f"{pol.primitive} classes must be {kind}, got {classes!r}")
     top = max(probs)
     label = classes[probs.index(top)]
     # The tuner breaks a tie by the first record's option order, which file order and

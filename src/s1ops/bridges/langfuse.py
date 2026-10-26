@@ -86,16 +86,18 @@ def _predict_info(
     action = f"SELECT:{top_label}"
     if policy is not None:
         # Route on the distribution the tuner saw: renormalized, score levels as ascending integers.
+        # Exported labels stay as the record wrote them ("01" is not reported as "1").
         if record.primitive == "score":
-            levels = {int(k): float(v) for k, v in probs_eff.items()}
-            classes: list = sorted(levels)
-            values = [levels[c] for c in classes]
+            label_of = {int(k): k for k in probs_eff}
+            classes: list = sorted(label_of)
         else:
+            label_of = {k: k for k in probs_eff}
             classes = list(probs_eff)
-            values = [float(probs_eff[c]) for c in classes]
+        values = [float(probs_eff[label_of[c]]) for c in classes]
         total = probability_total(values)
         routed = route(policy, classes, [v / total for v in values])
-        action, predicted = routed.action, str(routed.predicted)
+        predicted = label_of[routed.predicted]
+        action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
 
     return {
         "p_raw": round(p_raw, 6),

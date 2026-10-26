@@ -6,6 +6,7 @@ routes at runtime exactly as it was tuned; drift and both exporters route throug
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -142,6 +143,24 @@ def test_gate_routes_every_record_as_the_tuner_measured_it(tuned, calibrated: bo
     assert ties > 0
 
 
+@pytest.mark.parametrize("calibrated", [False, True])
+def test_the_gate_compares_the_tuned_threshold_exactly(tuned, calibrated: bool) -> None:
+    """Move the real threshold one float either side of an answer that sits exactly on it."""
+    primitive = tuned["primitive"]
+    policy_path = tuned["policy_cal" if calibrated else "policy_raw"]
+    (pol,) = load_policies(policy_path)
+    tuned_on = tuned["applied"] if calibrated else str(tuned["dir"] / "eval.jsonl")
+    (grp,) = select(read_records(tuned_on, use_calib=calibrated), allow_model_mismatch=True).groups
+    conf, _ = top_label(grp.P, grp.y)
+    i = int(np.flatnonzero(conf == pol.threshold)[0])
+    row = next(r for r in tuned["eval_rows"] if r["item_id"] == grp.items[i][1])
+    probs = _runtime_probs(row, primitive)
+    (fit,) = load_fits(tuned["fits"])
+    for threshold, escalated in ((pol.threshold, False), (float(np.nextafter(pol.threshold, 2)), True), (float(np.nextafter(pol.threshold, -1)), False)):
+        gate = DecisionGate([dataclasses.replace(pol, threshold=threshold)], [fit])
+        assert _evaluate(gate, primitive, probs).escalated is escalated, threshold
+
+
 def test_raw_policy_routes_the_same_with_or_without_a_fit(tuned) -> None:
     primitive = tuned["primitive"]
     with_fit = DecisionGate.from_files(tuned["policy_raw"], tuned["fits"])
@@ -227,6 +246,23 @@ def test_a_two_level_score_is_never_routed_as_noul() -> None:
     assert (routed.action, routed.predicted) == ("SELECT:1", 1)
     with pytest.raises(ValueError, match="noul classes"):
         route(_policy("noul", threshold=0.6), [0, 1], [0.1, 0.9])
+    with pytest.raises(ValueError, match="non-negative integer levels"):
+        route(_policy("score", threshold=0.6), [False, True], [0.1, 0.9])
+
+
+@pytest.mark.parametrize(
+    "primitive, classes, message",
+    [
+        ("choice", ["A", 1], "option names"),
+        ("choice", ["A", ""], "option names"),
+        ("score", [0, -1], "non-negative integer levels"),
+        ("score", ["0", "1"], "non-negative integer levels"),
+        ("choice", ["A", "A"], "distinct"),
+    ],
+)
+def test_categorical_classes_are_checked(primitive: str, classes: list, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        route(_policy(primitive, threshold=0.5), classes, [0.9, 0.1])
 
 
 def test_categorical_band_policy_is_refused() -> None:
@@ -368,17 +404,30 @@ def test_cli_gate_noul_question_with_probs(tmp_path: Path, capsys) -> None:
     assert "pass --p, not --probs" in capsys.readouterr().err
 
 
-def test_noul_decision_gains_only_null_fields(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "p, action, predicted, p_calibrated",
+    [(0.98, "ALLOW", True, 0.873792), (0.5, "ESCALATE", True, 0.5), (0.02, "BLOCK", False, 0.126208)],
+)
+def test_noul_decision_gains_only_null_fields(tmp_path: Path, p, action, predicted, p_calibrated) -> None:
     from s1ops.demo import generate_workspace
 
     ws = generate_workspace(tmp_path / "ws")
     gate = DecisionGate.from_files(ws["policy"], ws["fits"])
     qid = json.loads(Path(ws["policy"]).read_text())["policies"][0]["question_id"]
-    d = gate.evaluate_noul(question_id=qid, model_served="jev-1.13.0", p_raw=0.98).as_dict()
-    assert d["probabilities"] is None and d["expected_score"] is None
-    assert set(d) == {
-        "question_id", "model_served", "primitive", "action", "escalated", "predicted", "p_raw",
-        "p_calibrated", "p_effective", "policy_sha256", "probabilities", "expected_score",
+    # The values the gate on main returned for the seeded demo, plus the two new null fields.
+    assert gate.evaluate_noul(question_id=qid, model_served="jev-1.13.0", p_raw=p).as_dict() == {
+        "question_id": "q-30076be2728be682",
+        "model_served": "jev-1.13.0",
+        "primitive": "noul",
+        "action": action,
+        "escalated": action == "ESCALATE",
+        "predicted": predicted,
+        "p_raw": p,
+        "p_calibrated": p_calibrated,
+        "p_effective": p_calibrated,
+        "policy_sha256": "d411d78ef9968964",
+        "probabilities": None,
+        "expected_score": None,
     }
 
 
@@ -416,6 +465,11 @@ def test_exporters_route_categorical_ties_and_null_threshold() -> None:
     info = _predict_info(score, _policy("score", threshold=0.5))
     assert (info["policy_action"], info["predicted"]) == ("SELECT:10", "10")
     assert info["p_effective"] == 0.6
+    # Labels are exported as the record wrote them, with or without a policy.
+    padded = _record("score", score=1, confidence=0.9, probabilities={"00": 0.1, "01": 0.9})
+    assert _predict_info(padded, None)["predicted"] == "01"
+    info = _predict_info(padded, _policy("score", threshold=0.8))
+    assert (info["policy_action"], info["predicted"]) == ("SELECT:01", "01")
 
 
 def test_exporters_route_on_the_renormalized_top_probability() -> None:

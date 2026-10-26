@@ -12,7 +12,7 @@ from typing import Any
 
 from s1ops.contracts.records import Record, parse_record, score_level
 from s1ops.contracts.schemas import PolicyEntry
-from s1ops.runtime.routing import ROUTING_RULE, route
+from s1ops.runtime.routing import ROUTING_RULE, policy_distribution, route
 
 
 def _trace_id(record: Record, run_name: str = "s1ops-run") -> str:
@@ -41,18 +41,20 @@ def _predict_info(
         p_raw = float(raw_row["p"])
         # The parser checks calib.p, as drift sees it.
         p_cal = parse_record(raw_row, record.line, use_calib=True).probs[1] if calib and "p" in calib else None
-        p_eff = p_cal if p_cal is not None else p_raw
+        if policy is not None:
+            # The distribution the policy was tuned on, whatever the record carries.
+            classes, probs = policy_distribution(policy, record)
+            p_eff = probs[1]
+            routed = route(policy, classes, probs)
+            action, predicted = routed.action, routed.predicted
+        else:
+            p_eff = p_cal if p_cal is not None else p_raw
+            predicted = p_eff >= 0.5
+            action = "ALLOW" if predicted else "BLOCK"
         brier_val: float | None = None
         if isinstance(record.label, bool):
             y = 1.0 if record.label else 0.0
             brier_val = (p_eff - y) ** 2
-
-        if policy is not None:
-            routed = route(policy, (False, True), (1.0 - p_eff, p_eff))
-            action, predicted = routed.action, routed.predicted
-        else:
-            predicted = p_eff >= 0.5
-            action = "ALLOW" if predicted else "BLOCK"
 
         return {
             "p_raw": round(p_raw, 6),
@@ -69,15 +71,21 @@ def _predict_info(
     probs_cal: dict[str, float] | None = (
         dict(calib["probabilities"]) if calib and "probabilities" in calib else None
     )
-    probs_eff = probs_cal if probs_cal is not None else probs_raw
-    # The parser checks the calibrated keys against the raw ones and renormalizes, as drift sees it.
-    parsed = parse_record(raw_row, record.line, use_calib=True) if probs_cal is not None else record
-    predicted = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]
-    action = f"SELECT:{predicted}"
-    if policy is not None:
+    if probs_cal is not None:
+        # The parser checks the calibrated keys against the raw ones, as drift sees them.
+        parse_record(raw_row, record.line, use_calib=True)
+    if policy is None:
+        probs_eff = probs_cal if probs_cal is not None else probs_raw
+        predicted = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]
+        action = f"SELECT:{predicted}"
+    else:
+        # The distribution the policy was tuned on, whatever the record carries, renormalized as
+        # routed: p_effective and brier describe what was decided on, as the gate reports it.
+        classes, probs = policy_distribution(policy, record)
+        routed = route(policy, classes, probs)
         # Export labels as the record wrote them ("01" is not reported as "1").
-        routed = route(policy, parsed.classes, parsed.probs)
-        label_of = {score_level(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
+        label_of = {score_level(k): k for k in probs_raw} if record.primitive == "score" else {k: k for k in probs_raw}
+        probs_eff = {label_of[c]: q for c, q in zip(classes, probs)}
         predicted = label_of[routed.predicted]
         action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
     p_raw = float(probs_raw[predicted])

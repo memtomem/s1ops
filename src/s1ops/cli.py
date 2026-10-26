@@ -1059,7 +1059,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_drf.add_argument("current", help=f"current/canary {_H_RECORDS}")
     p_drf.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; enables escalation-rate drift")
     p_drf.add_argument("--bins", type=int, default=10, help="histogram bins for PSI and Jensen-Shannon")
-    p_drf.add_argument("--raw-only", action="store_true", help="compare raw probabilities even when records carry calibrated ones")
+    p_drf.add_argument("--raw-only", action="store_true", help="compare raw probabilities even when records carry calibrated ones (PSI, quantiles, entropy; the escalation rate always routes what each policy was tuned on)")
     p_drf.add_argument("--fail-on-critical", action="store_true", help="exit 4 if any question is CRITICAL")
     p_drf.set_defaults(func=_cmd_drift)
 

@@ -13,7 +13,7 @@ per `question_id` without ever requiring ground-truth labels on the current wind
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 import math
 from pathlib import Path
@@ -21,9 +21,9 @@ from typing import Any
 
 import numpy as np
 
-from s1ops.contracts.records import Record, read_records
+from s1ops.contracts.records import GroupKey, Record, read_records
 from s1ops.contracts.schemas import PolicyEntry
-from s1ops.runtime.routing import route
+from s1ops.runtime.routing import RoutingInputError, route_record
 
 PSI_EPS = 1e-4
 PSI_WARN = 0.10
@@ -120,14 +120,23 @@ def _latency_summary(records: Sequence[Record]) -> dict[str, float | None]:
     }
 
 
-def _escalation_rate(records: Sequence[Record], policy: PolicyEntry | None) -> float | None:
-    if policy is None:
+def _escalation_rate(
+    records: Sequence[Record], policies: Mapping[GroupKey, PolicyEntry], side: str | None = None
+) -> float | None:
+    """The share of answered records escalated by the policy of their own group, over the records
+    that have one; `None` when none has."""
+    escalated: list[bool] = []
+    for r in records:
+        pol = policies.get((r.question_id, r.model_served, r.primitive)) if r.model_served is not None and r.probs else None
+        if pol is None:
+            continue
+        try:
+            escalated.append(route_record(pol, r).escalated)
+        except RoutingInputError as e:
+            raise (e.with_side(side) if side else e) from None
+    if not escalated:
         return None
-    valid = [r for r in records if r.model_served is not None and r.probs]
-    if not valid:
-        return None
-    esc = sum(route(policy, r.classes, r.probs).escalated for r in valid)
-    return round(esc / len(valid), 6)
+    return round(sum(escalated) / len(escalated), 6)
 
 
 @dataclass(frozen=True)
@@ -179,10 +188,7 @@ def audit_drift(
         curs = list(cur_records)
 
 
-    pol_by_qid: dict[str, PolicyEntry] = {}
-    if policies:
-        for p in policies:
-            pol_by_qid[p.question_id] = p
+    pol_by_key: dict[GroupKey, PolicyEntry] = {(p.question_id, p.model_served, p.primitive): p for p in policies or ()}
 
     ref_by_q: dict[str, list[Record]] = defaultdict(list)
     cur_by_q: dict[str, list[Record]] = defaultdict(list)
@@ -227,9 +233,8 @@ def audit_drift(
             else 0.0
         )
 
-        pol = pol_by_qid.get(qid)
-        esc_ref = _escalation_rate(r_ok, pol)
-        esc_cur = _escalation_rate(c_ok, pol)
+        esc_ref = _escalation_rate(r_ok, pol_by_key, "reference")
+        esc_cur = _escalation_rate(c_ok, pol_by_key, "current")
 
         alerts: list[str] = []
         status = "OK"

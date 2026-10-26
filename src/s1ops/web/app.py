@@ -44,6 +44,7 @@ from s1ops.improve.slices import mine_error_slices, slice_report
 from s1ops.lint.lint import audit_probe_records, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
+from s1ops.runtime.routing import RoutingInputError
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -490,7 +491,11 @@ def create_app(
         policies = _load_or_400(pol_file, load_policies, pol_file) if pol_file.exists() else None
         refs = _load_or_400(rec_file, read_records, rec_file, require_answer=True, use_calib=True)
         curs = _load_or_400(canary_file, read_records, canary_file, require_answer=True, use_calib=True)
-        return audit_drift(refs, curs, policies=policies)
+        try:
+            return audit_drift(refs, curs, policies=policies)
+        except RoutingInputError as e:
+            path = rec_file if e.side == "reference" else canary_file
+            raise HTTPException(status_code=400, detail=f"{path.name}: line {e.line}: {e.message}") from None
 
     return app
 

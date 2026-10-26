@@ -6,6 +6,7 @@ Generates a complete, 100% offline System 1 evaluation workspace:
 - `records.jsonl`: 160 held-out evaluation records (`jev-1.13.0`, calibrated via `fits.json`)
 - `records_kev.jsonl`: 160 paired shadow records (`kev-1.0`) for McNemar-Holm comparison
 - `records_canary.jsonl`: 120 canary records with distribution drift and a silent `model_served` upgrade
+  (the `jev-1.13.0` part calibrated via `fits.json`, as `s1 apply` would; the upgraded part has no fit)
 - `probe_records.jsonl`: Noul/Choice twin & inverse coherence probes (`probe_role`: `noul`, `twin`, `inverse`)
 - `features.jsonl`: per-item slice & feature tags (answerability + BH-FDR error slice mining)
 - `states_local.jsonl`: local-only synthetic item states for blind review sheet generation
@@ -346,22 +347,22 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
         # Silent provider upgrade on 30% of traffic + upward probability shift
         served = "jev-1.14.0-rc1" if (i % 3 == 0) else "jev-1.13.0"
         p_shifted = min(max(_sigmoid(rng.gauss(1.15, 0.9)), 0.001), 0.999)
-        canary_objs.append(
-            {
-                "schema": "s1-record/1",
-                "dataset": "fin-guard-prod-canary",
-                "split": "prod",
-                "item_id": item_id,
-                "state_sha256": s_hash,
-                "question_id": qid_noul,
-                "primitive": "noul",
-                "model_requested": "jev-1.13.0",
-                "model_served": served,
-                "p": round(p_shifted, 6),
-                "latency_ms": round(rng.uniform(28.0, 72.0), 2),
-                "timestamp": "2026-10-25T03:00:00Z",
-            }
-        )
+        canary = {
+            "schema": "s1-record/1",
+            "dataset": "fin-guard-prod-canary",
+            "split": "prod",
+            "item_id": item_id,
+            "state_sha256": s_hash,
+            "question_id": qid_noul,
+            "primitive": "noul",
+            "model_requested": "jev-1.13.0",
+            "model_served": served,
+            "p": round(p_shifted, 6),
+            "latency_ms": round(rng.uniform(28.0, 72.0), 2),
+            "timestamp": "2026-10-25T03:00:00Z",
+        }
+        # The policy is calibrated, so its own model's records need `calib` to be routed.
+        canary_objs.append(apply_to_record(fit_noul, parse_record(canary)) if served == "jev-1.13.0" else canary)
     canary_path = out / "records_canary.jsonl"
     with canary_path.open("w", encoding="utf-8") as fh:
         for obj in canary_objs:

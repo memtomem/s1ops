@@ -21,10 +21,10 @@ from s1ops.cli import main as cli_main
 from s1ops.contracts.records import RecordError, parse_record, read_records, select
 from s1ops.contracts.schemas import PolicyEntry, load_policies
 from s1ops.eval.metrics import top_label
-from s1ops.monitor.drift import _escalation_rate
+from s1ops.monitor.drift import _escalation_rate, audit_drift
 from s1ops.improve.calibrate import FitError, load_fits
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError, _calibrated, _normalized
-from s1ops.runtime.routing import ROUTING_RULE, route
+from s1ops.runtime.routing import ROUTING_RULE, RoutingInputError, policy_distribution, route
 
 QID = {"choice": "q-choice00000000a", "score": "q-score000000000b"}
 CLASSES = {"choice": ["A", "B", "C"], "score": [0, 1, 2, 3]}
@@ -491,9 +491,13 @@ def test_exported_probabilities_belong_to_the_exported_label() -> None:
         "choice", choice="A", confidence=0.9,
         probabilities={"A": 0.9, "B": 0.1}, calib={"probabilities": {"A": 0.5, "B": 0.5}},
     )
-    info = _predict_info(r, _policy("choice", threshold=0.4))
+    # A calibrated policy routes the tied calibrated answer; a raw one routes the clear raw answer.
+    info = _predict_info(r, _policy("choice", threshold=0.4, calibrated=True))
     assert (info["policy_action"], info["predicted"]) == ("ESCALATE", "A")
     assert (info["p_raw"], info["p_calib"], info["p_effective"]) == (0.9, 0.5, 0.5)
+    info = _predict_info(r, _policy("choice", threshold=0.4))
+    assert (info["policy_action"], info["predicted"]) == ("SELECT:A", "A")
+    assert (info["p_raw"], info["p_calib"], info["p_effective"]) == (0.9, 0.5, 0.9)
 
 
 @pytest.mark.parametrize("command", [["export", "langfuse"], ["export", "phoenix"], ["drift"]])
@@ -520,7 +524,23 @@ def test_exporters_route_on_the_renormalized_top_probability() -> None:
     r = _record("choice", choice="A", confidence=0.495, probabilities={"A": 0.495, "B": 0.49})
     info = _predict_info(r, _policy("choice", threshold=0.5))
     assert info["policy_action"] == "SELECT:A"
-    assert info["p_effective"] == 0.495
+    # Reported as routed (and as the gate reports it), not as stored; p_raw stays as stored.
+    assert (info["p_raw"], info["p_effective"]) == (0.495, round(0.495 / 0.985, 6))
+    gate = DecisionGate([_policy("choice", threshold=0.5)]).evaluate_choice(
+        question_id="q", model_served="m", probs_raw={"A": 0.495, "B": 0.49}
+    )
+    assert info["p_effective"] == gate.p_effective
+
+
+@pytest.mark.parametrize("calibrated", [False, True])
+def test_exported_brier_is_of_the_routed_distribution(calibrated: bool) -> None:
+    probs = {"A": 0.6, "B": 0.39}
+    extra = {"calib": {"probabilities": probs}} if calibrated else {}
+    r = _record("choice", choice="A", confidence=0.6, probabilities=probs, label="A", **extra)
+    info = _predict_info(r, _policy("choice", threshold=0.605, calibrated=calibrated))
+    a, b = 0.6 / 0.99, 0.39 / 0.99
+    assert (info["policy_action"], info["p_effective"]) == ("SELECT:A", round(a, 6))
+    assert info["brier"] == round((a - 1) ** 2 + b**2, 6) == 0.310376
 
 
 def test_exports_mark_policy_routed_records_with_the_rule() -> None:
@@ -538,13 +558,16 @@ def test_exports_mark_policy_routed_records_with_the_rule() -> None:
 
 
 def test_drift_escalation_rate_uses_the_shared_rule() -> None:
+    def by_key(pol: PolicyEntry) -> dict:
+        return {(pol.question_id, pol.model_served, pol.primitive): pol}
+
     noul = [_record("noul", p=p) for p in (0.6, 0.95, 0.05)]
     # Before: escalated when p < threshold, so 0.6 and 0.05 -> 2/3. Now max(p, 1-p) < 0.8: only 0.6.
-    assert _escalation_rate(noul, _policy("noul", threshold=0.8)) == round(1 / 3, 6)
-    assert _escalation_rate(noul, _policy("noul", threshold=None)) == 1.0
+    assert _escalation_rate(noul, by_key(_policy("noul", threshold=0.8))) == round(1 / 3, 6)
+    assert _escalation_rate(noul, by_key(_policy("noul", threshold=None))) == 1.0
     tie = _record("choice", choice="A", confidence=0.5, probabilities={"A": 0.5, "B": 0.5})
     clear = _record("choice", choice="A", confidence=0.9, probabilities={"A": 0.9, "B": 0.1})
-    assert _escalation_rate([tie, clear], _policy("choice", threshold=0.0)) == 0.5
+    assert _escalation_rate([tie, clear], by_key(_policy("choice", threshold=0.0))) == 0.5
 
 
 @pytest.fixture(scope="module")
@@ -640,8 +663,16 @@ def test_exporters_route_the_calibrated_noul_p(calib: dict, p_calib, action: str
     r = _record("noul", p=0.3, label=True, calib=calib)
     p_eff = 0.3 if p_calib is None else p_calib
     common = {"p_raw": 0.3, "p_calib": p_calib, "p_effective": p_eff, "brier": brier}
+    if p_calib is None:
+        with pytest.raises(RoutingInputError, match="tuned on calibrated probabilities"):
+            _predict_info(r, _policy("noul", threshold=0.8, calibrated=True))
+    else:
+        assert _predict_info(r, _policy("noul", threshold=0.8, calibrated=True)) == {
+            **common, "predicted": predicted, "policy_action": action, "routing_rule": ROUTING_RULE,
+        }
+    # A raw policy routes raw p, whatever the record carries.
     assert _predict_info(r, _policy("noul", threshold=0.8)) == {
-        **common, "predicted": predicted, "policy_action": action, "routing_rule": ROUTING_RULE,
+        **common, "p_effective": 0.3, "brier": 0.49, "predicted": False, "policy_action": "ESCALATE", "routing_rule": ROUTING_RULE,
     }
     assert _predict_info(r, None) == {
         **common, "predicted": p_eff >= 0.5, "policy_action": "ALLOW" if p_eff >= 0.5 else "BLOCK", "routing_rule": None,
@@ -666,3 +697,30 @@ def test_cli_export_refuses_a_calibrated_noul_p_in_one_line(tmp_path: Path, comm
     assert cli_main([*command, records, "-o", str(tmp_path / "out")]) == 1
     err = capsys.readouterr().err
     assert "calib.p" in err and "line 1" in err and "Traceback" not in err
+
+
+@pytest.mark.parametrize("calibrated", [False, True])
+def test_reports_route_categorical_records_like_the_gate(tuned, calibrated: bool) -> None:
+    primitive = tuned["primitive"]
+    (pol,) = load_policies(tuned["policy_cal" if calibrated else "policy_raw"])
+    (fit,) = load_fits(tuned["fits"])
+    gate = DecisionGate([pol], [fit])
+    records = read_records(tuned["applied"])  # every record carries calib, so both policies apply
+    escalated = []
+    for rec in records:
+        probs = {(int(k) if primitive == "score" else k): v for k, v in rec.raw["probabilities"].items()}
+        classes = list(probs) if primitive == "choice" else sorted(probs)
+        expected = _normalized(classes, [probs[c] for c in classes])
+        if calibrated:
+            expected = _calibrated(fit, classes, expected)
+        got_classes, got = policy_distribution(pol, rec)
+        assert dict(zip(got_classes, got)) == dict(zip(classes, expected)), rec.line
+        d = _evaluate(gate, primitive, probs)
+        info = _predict_info(rec, pol)
+        assert info["policy_action"] == d.action, rec.line
+        if not d.escalated:  # the top is unique; on a tie the first tied label depends on key order
+            assert str(info["predicted"]) == str(d.predicted)
+        escalated.append(d.escalated)
+    (q,) = audit_drift(records, records, policies=[pol])["questions"]
+    assert q["escalation_rate_ref"] == round(sum(escalated) / len(escalated), 6)
+    assert 0 < sum(escalated) < len(escalated)

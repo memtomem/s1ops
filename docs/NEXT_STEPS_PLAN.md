@@ -118,6 +118,12 @@
     - 정책으로 판정한 choice/score export의 `p_effective`·`brier`는 판정한(재정규화된) 분포 기준, gate와 같은 값(이전엔 저장된 값이라 합이 1이 아니면 달랐음: `{"A":0.6,"B":0.39}` → 0.6 대신 0.606061). `p_raw`·`p_calib`는 저장된 값 그대로
     - 데모 canary의 `jev-1.13.0` 80건에 `calib`(fits.json)를 넣음. raw 값은 그대로(calib 뺀 digest가 main과 같음). 현재 쪽이 보정 80 + raw 40이 되어 기본 PSI 값이 바뀜(혼합 비교 자체는 #20)
     - 후속(별도 이슈): drift/export의 `--fit`(calib 없는 레코드를 gate처럼 보정), in-sample 항목 처리, 모델이 섞인 파일에서 `s1 apply`가 exit 3으로 멈추는 문제
+  - [x] **drift가 한 분포끼리만 비교** (#20, 소유자 결정: raw 기본): drift는 기본 `use_calib`로 읽고 `calib`가 없는 레코드만 raw로 대체해, 보정 reference와 raw current(데모 canary는 한쪽 안에서도 보정 80 + raw 40)를 섞어 PSI·JSD·분위수·엔트로피를 계산했음(데모 PSI 4.17284, raw끼리 6.649894)
+    - 기본은 raw. `--calibrated`(SDK `use_calib=True`)는 양쪽 파일의 응답 레코드 전부에 `calib`가 있어야 하고, 없으면 `DriftInputError`(reference/current, 줄 번호, exit 1). 질문 교집합 전에 검사하므로 한쪽에만 있는 질문도 빠지지 않음. 응답 없는 레코드는 검사하지 않음
+    - `--raw-only`(0.1.0 배포)는 기본과 같은 뜻으로 남기고 `--calibrated`와 함께 쓸 수 없음
+    - 비교 분포는 `audit_drift`가 각 레코드의 `raw`에서 다시 파싱하므로 경로로 넘기든 미리 파싱한 `Record`로 넘기든 같음. 저장된 `calib`는 두 모드 모두 검증(`calib.p: "nan"`은 raw 모드에서도 `RecordError`)
+    - 리포트에 `distribution: "raw" | "calibrated"` 추가(스키마 id는 `s1-drift-report/1` 유지; 없으면 이전 버전 리포트). web Drift 탭은 raw, 탭에 표시
+    - escalation 비율은 그대로 `policy.calibrated` 기준(#14)
   - [x] **데모 choice/score 레코드** (#16): 별도 파일 `records_categorical_train.jsonl` / `records_categorical.jsonl`(choice `support_intent`, score `urgency` 각 150 + 150, `jev-1.13.0`)과 `fits_categorical.json` / `policy_categorical.json`. README walkthrough가 categorical fit → apply → audit → tune → `gate --probs` → export를 실제 정책으로 실행. `questions.json`에 score 질문 `urgency` 추가(`s1 probe` 호출 160건 증가). 별도 난수열이라 기존 noul 파일은 그대로(파일별 digest가 main과 같음). web workbench는 noul 파일만 읽음
 
 ---

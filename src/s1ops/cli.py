@@ -667,7 +667,7 @@ def _cmd_drift(args: argparse.Namespace) -> int:
         args.current,
         policies=policies,
         bins=args.bins,
-        use_calib=not args.raw_only,
+        use_calib=args.calibrated,
     )
     print(json.dumps(rep, indent=2, sort_keys=True))
     if args.fail_on_critical and rep["summary"]["critical"] > 0:
@@ -1059,7 +1059,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_drf.add_argument("current", help=f"current/canary {_H_RECORDS}")
     p_drf.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; enables escalation-rate drift")
     p_drf.add_argument("--bins", type=int, default=10, help="histogram bins for PSI and Jensen-Shannon")
-    p_drf.add_argument("--raw-only", action="store_true", help="compare raw probabilities even when records carry calibrated ones (PSI, quantiles, entropy; the escalation rate always routes what each policy was tuned on)")
+    p_drf_dist = p_drf.add_mutually_exclusive_group()
+    p_drf_dist.add_argument("--calibrated", action="store_true", help="compare calibrated probabilities (PSI, JS divergence, quantiles, entropy); every answered record in both files must carry `calib` from `s1 apply`. The escalation rate always routes what each policy was tuned on")
+    p_drf_dist.add_argument("--raw-only", action="store_true", help="compare raw probabilities; the default, kept for scripts written for s1ops 0.1.0")
     p_drf.add_argument("--fail-on-critical", action="store_true", help="exit 4 if any question is CRITICAL")
     p_drf.set_defaults(func=_cmd_drift)
 

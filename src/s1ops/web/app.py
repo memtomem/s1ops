@@ -487,8 +487,10 @@ def create_app(
         canary_file = _resolve(None, "records_canary.jsonl")
         pol_file = _resolve(None, "policy.json")
         if not rec_file.exists() or not canary_file.exists():
-            return {"schema": "s1-drift-report/1", "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0}, "questions": []}
+            return {"schema": "s1-drift-report/1", "distribution": "raw", "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0}, "questions": []}
         policies = _load_or_400(pol_file, load_policies, pol_file) if pol_file.exists() else None
+        # Read with use_calib so a malformed stored calib is a 400 naming its file; the report
+        # still compares raw probabilities, re-parsed by audit_drift.
         refs = _load_or_400(rec_file, read_records, rec_file, require_answer=True, use_calib=True)
         curs = _load_or_400(canary_file, read_records, canary_file, require_answer=True, use_calib=True)
         try:

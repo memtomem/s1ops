@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from s1ops.contracts.records import Record, parse_record
+from s1ops.contracts.records import Record, has_calib, parse_record
 from s1ops.contracts.schemas import PolicyEntry
 
 ROUTING_RULE = "3"
@@ -77,14 +77,12 @@ def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tup
     Re-parsed from `record.raw` with the default `sum_tol`, so the result does not depend on how the
     caller parsed the record (one parsed with a looser tolerance can be refused here).
     """
-    if policy.calibrated:
-        calib = record.raw.get("calib")
-        if not (isinstance(calib, dict) and ("p" if policy.primitive == "noul" else "probabilities") in calib):
-            raise RoutingInputError(
-                record.line,
-                f"policy for {policy.question_id} ({policy.model_served}) was tuned on calibrated "
-                "probabilities and this record has none; run `s1 apply` on this model's records first",
-            )
+    if policy.calibrated and not has_calib(record.raw, policy.primitive):
+        raise RoutingInputError(
+            record.line,
+            f"policy for {policy.question_id} ({policy.model_served}) was tuned on calibrated "
+            "probabilities and this record has none; run `s1 apply` on this model's records first",
+        )
     parsed = parse_record(record.raw, record.line, use_calib=policy.calibrated)
     return parsed.classes, parsed.probs
 

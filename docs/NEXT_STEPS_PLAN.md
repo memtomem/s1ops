@@ -112,6 +112,12 @@
     - 이전: 파서가 `"0"`과 `"00"`을 한 레벨로 접어 확률 합이 줄어듦(`{"0":0.2,"00":0.3,"1":0.5}` → 합 0.8); 4300자리를 넘는 키는 줄 번호 없이 Python의 `int()` 메시지로 실패; 파서는 401자리 레벨도 받아 `s1 fit`·`policy tune`·`drift`·`export`가 그대로 썼고 `s1 audit`는 `OverflowError` traceback(gate는 #12부터 float 최댓값까지만 받음); `compare_records`에 dict를 넘기면 score 키를 검사하지 않음
     - 상한 `2**53`: 모든 레벨이 정확한 float이라 두 레벨이 같은 float로 반올림되지 않고(`float(2**53+1) == float(2**53)`), 레벨 합산이 overflow하지 않음(float 최댓값 근처 레벨 세 개로 MAE가 inf가 됨). gate의 #12 상한(float 최댓값)보다 좁아짐(미배포)
     - 20자 제한: 0을 길게 덧붙인 키를 정규화하는 대신 거부. `int()`가 20자를 넘는 문자열을 보지 않으므로 `sys.get_int_max_str_digits()` 설정과 무관
+  - [x] **리포트도 정책이 튜닝된 분포로 판정** (#14, `routing_rule: "3"`): gate는 `policy.calibrated`일 때만 보정 분포로 판정하는데, exporter는 레코드에 `calib`가 있으면 항상, drift는 `--raw-only` 여부에 따라 골랐음(이슈 재현: export ESCALATE, gate ALLOW) → `routing.policy_distribution` / `route_record`가 정책 기준으로 고름
+    - 보정 정책인데 `calib`가 없는 레코드는 거부(`RoutingInputError`, 줄 번호, drift는 reference/current 표시, web은 해당 파일을 지목한 400)
+    - drift가 정책을 `question_id`로만 찾아 데모 canary의 `jev-1.14.0-rc1` 레코드를 `jev-1.13.0` 정책으로 판정(escalation 0.525)했음 → group key로 찾고, 정책이 없는 레코드는 비율에서 제외(없으면 `null`)
+    - 정책으로 판정한 choice/score export의 `p_effective`·`brier`는 판정한(재정규화된) 분포 기준, gate와 같은 값(이전엔 저장된 값이라 합이 1이 아니면 달랐음: `{"A":0.6,"B":0.39}` → 0.6 대신 0.606061). `p_raw`·`p_calib`는 저장된 값 그대로
+    - 데모 canary의 `jev-1.13.0` 80건에 `calib`(fits.json)를 넣음. raw 값은 그대로(calib 뺀 digest가 main과 같음). 현재 쪽이 보정 80 + raw 40이 되어 기본 PSI 값이 바뀜(혼합 비교 자체는 #20)
+    - 후속(별도 이슈): drift/export의 `--fit`(calib 없는 레코드를 gate처럼 보정), in-sample 항목 처리, 모델이 섞인 파일에서 `s1 apply`가 exit 3으로 멈추는 문제
   - 범위 밖으로 남긴 것: 데모 워크스페이스에 choice/score 레코드 없음(#16)
 
 ---

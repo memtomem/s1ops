@@ -1,8 +1,10 @@
 """One routing rule for every consumer of a compiled `s1-policy/1` entry.
 
 `DecisionGate`, the escalation rate in `s1 drift` and the Langfuse / Phoenix exporters all decide
-through `route`, so a policy means the same thing at runtime and in every report. Callers choose
-which distribution to route (raw or calibrated); only the decision is shared.
+through `route`, so a policy means the same thing at runtime and in every report. The policy also
+chooses what is routed: the calibrated distribution exactly when it was tuned on one
+(`policy.calibrated`). The gate calibrates a live answer with its fit; the reports route a record
+through `route_record`, which takes the record's stored `calib`.
 """
 
 from __future__ import annotations
@@ -10,12 +12,33 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from s1ops.contracts.records import Record, parse_record
 from s1ops.contracts.schemas import PolicyEntry
 
-ROUTING_RULE = "2"
-"""Exported with every policy-routed record. Exports made before the rule was shared (when the
-exporters and drift each applied a policy their own way) carry no rule, which tells them apart:
-their `policy_sha256` is the same, but `policy_action` and `predicted` can differ."""
+ROUTING_RULE = "3"
+"""Exported with every policy-routed record, so exports made under different rules can be told
+apart: their `policy_sha256` is the same, but `policy_action` and `predicted` can differ.
+
+- none: before the rule was shared, the exporters and drift each applied a policy their own way.
+- "2": one rule, but reports routed `calib` whenever a record carried it, and drift looked the
+  policy up by `question_id` alone.
+- "3": reports route the distribution the policy was tuned on (`policy.calibrated`), refuse a
+  calibrated policy for a record without `calib`, and drift routes each record under the policy
+  of its own `(question_id, model_served, primitive)` group. A policy-routed choice / score export
+  reports `p_effective` and `brier` of the renormalized distribution it routed, as the gate does.
+"""
+
+
+class RoutingInputError(ValueError):
+    """A record cannot be routed the way its policy was tuned. Carries the 1-based line and, from
+    `s1 drift`, the side (`"reference"` or `"current"`) the record came from."""
+
+    def __init__(self, line: int, message: str, side: str | None = None) -> None:
+        self.line, self.message, self.side = line, message, side
+        super().__init__(f"{side + ' records: ' if side else ''}line {line}: {message}")
+
+    def with_side(self, side: str) -> RoutingInputError:
+        return RoutingInputError(self.line, self.message, side)
 
 
 @dataclass(frozen=True)
@@ -45,6 +68,30 @@ def route(policy: PolicyEntry, classes: Sequence, probs: Sequence[float]) -> Rou
     if policy.primitive in ("choice", "score"):
         return _route_categorical(policy, list(classes), probs)
     raise ValueError(f"policy for {policy.question_id} has unknown primitive {policy.primitive!r}")
+
+
+def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tuple[float, ...]]:
+    """The classes and distribution `policy` was tuned on: the record's `calib` exactly when
+    `policy.calibrated`, as the gate routes.
+
+    Re-parsed from `record.raw` with the default `sum_tol`, so the result does not depend on how the
+    caller parsed the record (one parsed with a looser tolerance can be refused here).
+    """
+    if policy.calibrated:
+        calib = record.raw.get("calib")
+        if not (isinstance(calib, dict) and ("p" if policy.primitive == "noul" else "probabilities") in calib):
+            raise RoutingInputError(
+                record.line,
+                f"policy for {policy.question_id} ({policy.model_served}) was tuned on calibrated "
+                "probabilities and this record has none; run `s1 apply` on this model's records first",
+            )
+    parsed = parse_record(record.raw, record.line, use_calib=policy.calibrated)
+    return parsed.classes, parsed.probs
+
+
+def route_record(policy: PolicyEntry, record: Record) -> Routed:
+    """Route a decision record under `policy`, on the distribution the policy was tuned on."""
+    return route(policy, *policy_distribution(policy, record))
 
 
 def _route_noul(pol: PolicyEntry, p: float) -> Routed:

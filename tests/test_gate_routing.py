@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from decimal import Decimal
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -16,11 +18,11 @@ import pytest
 from s1ops.bridges.langfuse import _predict_info, build_langfuse_events
 from s1ops.bridges.openinference import build_openinference_spans
 from s1ops.cli import main as cli_main
-from s1ops.contracts.records import parse_record, read_records, select
+from s1ops.contracts.records import RecordError, parse_record, read_records, select
 from s1ops.contracts.schemas import PolicyEntry, load_policies
 from s1ops.eval.metrics import top_label
 from s1ops.monitor.drift import _escalation_rate
-from s1ops.improve.calibrate import load_fits
+from s1ops.improve.calibrate import FitError, load_fits
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError, _calibrated, _normalized
 from s1ops.runtime.routing import ROUTING_RULE, route
 
@@ -553,3 +555,124 @@ def test_drift_escalation_rate_uses_the_shared_rule() -> None:
     tie = _record("choice", choice="A", confidence=0.5, probabilities={"A": 0.5, "B": 0.5})
     clear = _record("choice", choice="A", confidence=0.9, probabilities={"A": 0.9, "B": 0.1})
     assert _escalation_rate([tie, clear], _policy("choice", threshold=0.0)) == 0.5
+
+
+@pytest.fixture(scope="module")
+def demo(tmp_path_factory) -> dict:
+    """The seeded demo's calibrated band policy and fit, plus the same policy as an error budget."""
+    from s1ops.demo import generate_workspace
+
+    ws = generate_workspace(tmp_path_factory.mktemp("demo") / "ws")
+    (band,) = load_policies(ws["policy"])
+    return {
+        "ws": ws,
+        "qid": band.question_id,
+        "band": band,
+        "budget": dataclasses.replace(band, mode="error_budget", threshold=0.8),
+        "fits": load_fits(ws["fits"]),
+    }
+
+
+@pytest.mark.parametrize("mode", ["band", "budget"])
+@pytest.mark.parametrize("with_fit", [False, True])
+@pytest.mark.parametrize(
+    "p",
+    [
+        float("nan"), float("inf"), float("-inf"), 1.5, -0.2, True, np.bool_(True), None, "0.9", 1 + 0j,
+        Decimal("0.5"), pytest.param(10**400, id="10**400"), pytest.param(Fraction(10**400, 1), id="Fraction(10**400)"),
+        pytest.param(10**5000, id="10**5000"), pytest.param(Fraction(10**5000, 1), id="Fraction(10**5000)"),
+        # Out of range, but each rounds into it as a float.
+        pytest.param(Fraction(2**54 + 1, 2**54), id="Fraction(1+2**-54)"), pytest.param(Fraction(-1, 10**400), id="Fraction(-1e-400)"),
+    ],
+)
+def test_noul_p_raw_that_is_not_a_probability_is_refused(demo, mode: str, with_fit: bool, p, monkeypatch) -> None:
+    def transform(*args, **kwargs):
+        raise AssertionError("calibrated before p_raw was checked")
+
+    monkeypatch.setattr("s1ops.runtime.gate.transform", transform)
+    gate = DecisionGate([demo[mode]], demo["fits"] if with_fit else None)
+    with pytest.raises(ValueError, match=r"^p_raw must be a (number|finite number in \[0, 1\]), got ") as exc:
+        gate.evaluate_noul(question_id=demo["qid"], model_served="jev-1.13.0", p_raw=p)
+    assert not isinstance(exc.value, FitError)
+
+
+@pytest.mark.parametrize(
+    "p", [np.float16(0.5), np.float32(0.9), np.float64(0.9), np.int64(0), np.int64(1), Fraction(1, 2), 0, 1, 0.0, 1.0]
+)
+def test_noul_p_raw_takes_any_real_number_type(demo, p) -> None:
+    gate = DecisionGate([demo["band"]], demo["fits"])
+    d = gate.evaluate_noul(question_id=demo["qid"], model_served="jev-1.13.0", p_raw=p).as_dict()
+    assert d == gate.evaluate_noul(question_id=demo["qid"], model_served="jev-1.13.0", p_raw=float(p)).as_dict()
+    assert all(type(d[k]) is float for k in ("p_raw", "p_calibrated", "p_effective"))
+    json.dumps(d, allow_nan=False)
+
+
+@pytest.mark.parametrize("primitive", ["choice", "score"])
+def test_categorical_probabilities_take_any_real_number_type(primitive: str) -> None:
+    gate = _gate(primitive)
+    fn = gate.evaluate_choice if primitive == "choice" else gate.evaluate_score
+    classes = ["A", "B", "C"] if primitive == "choice" else [0, 1, 2]
+    exotic = dict(zip(classes, [np.float32(0.25), Fraction(1, 4), np.float64(0.5)]))
+    d = fn(question_id="q", model_served="m", probs_raw=exotic).as_dict()
+    assert d == fn(question_id="q", model_served="m", probs_raw={c: float(v) for c, v in exotic.items()}).as_dict()
+    assert all(type(v) is float for v in [d["p_raw"], d["p_effective"], *d["probabilities"].values()])
+    assert type(d["expected_score"]) is float if primitive == "score" else d["expected_score"] is None
+    json.dumps(d, allow_nan=False)
+
+
+def test_the_policy_is_looked_up_before_p_raw_is_checked(demo, capsys) -> None:
+    with pytest.raises(ModelServedMismatchError):
+        DecisionGate([demo["band"]]).evaluate_noul(question_id=demo["qid"], model_served="other", p_raw=float("nan"))
+    assert cli_main(["gate", demo["ws"]["policy"], "--question", demo["qid"], "--model", "other", "--p", "nan"]) == 3
+
+
+@pytest.mark.parametrize("p", ["nan", "inf", "1.5", "-0.2"])
+@pytest.mark.parametrize("with_fit", [False, True])
+def test_cli_gate_refuses_p_outside_a_probability_in_one_line(demo, p: str, with_fit: bool, capsys) -> None:
+    fit = ["--fit", demo["ws"]["fits"]] if with_fit else []
+    rc = cli_main(["gate", demo["ws"]["policy"], *fit, "--question", demo["qid"], "--model", "jev-1.13.0", "--p", p])
+    out, err = capsys.readouterr()
+    assert rc == 1 and out == ""
+    assert err.startswith("s1: p_raw must be a finite number in [0, 1]") and err.count("\n") == 1
+
+
+@pytest.mark.parametrize(
+    "calib, p_calib, action, predicted, brier",
+    [
+        ({"p": 0.9, "method": "platt", "in_fit_sample": False}, 0.9, "ALLOW", True, 0.01),
+        ({"p": 1}, 1.0, "ALLOW", True, 0.0),
+        ({"p": 0}, 0.0, "BLOCK", False, 1.0),
+        ({"method": "platt"}, None, "ESCALATE", False, 0.49),
+    ],
+)
+def test_exporters_route_the_calibrated_noul_p(calib: dict, p_calib, action: str, predicted: bool, brier: float) -> None:
+    # Raw p 0.3 escalates under a 0.8 budget, so routing the raw value cannot pass for a calibrated one.
+    r = _record("noul", p=0.3, label=True, calib=calib)
+    p_eff = 0.3 if p_calib is None else p_calib
+    common = {"p_raw": 0.3, "p_calib": p_calib, "p_effective": p_eff, "brier": brier}
+    assert _predict_info(r, _policy("noul", threshold=0.8)) == {
+        **common, "predicted": predicted, "policy_action": action, "routing_rule": ROUTING_RULE,
+    }
+    assert _predict_info(r, None) == {
+        **common, "predicted": p_eff >= 0.5, "policy_action": "ALLOW" if p_eff >= 0.5 else "BLOCK", "routing_rule": None,
+    }
+
+
+@pytest.mark.parametrize("calib_p", ["nan", 1.5, -0.1, None, True])
+def test_exporters_refuse_a_calibrated_noul_p_that_is_not_a_probability(calib_p) -> None:
+    r = _record("noul", p=0.6, calib={"p": calib_p})
+    for pol in (None, _policy("noul", threshold=0.8)):
+        with pytest.raises(RecordError, match="calib.p"):
+            _predict_info(r, pol)
+
+
+@pytest.mark.parametrize("command", [["export", "langfuse"], ["export", "phoenix"]])
+def test_cli_export_refuses_a_calibrated_noul_p_in_one_line(tmp_path: Path, command: list, capsys) -> None:
+    row = {
+        "schema": "s1-record/1", "item_id": "i", "question_id": "q", "primitive": "noul",
+        "model_requested": "m", "model_served": "m", "p": 0.6, "calib": {"p": "nan"},
+    }
+    records = _write(tmp_path / "r.jsonl", [row])
+    assert cli_main([*command, records, "-o", str(tmp_path / "out")]) == 1
+    err = capsys.readouterr().err
+    assert "calib.p" in err and "line 1" in err and "Traceback" not in err

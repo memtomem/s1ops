@@ -12,13 +12,14 @@ import hashlib
 import json
 import os
 import sys
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
-from s1ops.contracts.records import Selection, read_records, select
+from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -134,6 +135,38 @@ def _check_inputs(args: argparse.Namespace) -> None:
         value = getattr(args, dest, None)
         if value is not None:
             _require_file(value, what, producer)
+
+
+def _tuned_rows(records: list[Record]) -> dict[GroupKey, list[Record]]:
+    """The records `select(records, allow_model_mismatch=True)` tunes on, by group: answered and
+    labeled (`select` refuses a repeated item within a group)."""
+    rows: dict[GroupKey, list[Record]] = defaultdict(list)
+    for r in records:
+        if r.model_served is not None and r.label is not None:
+            rows[r.key].append(r)
+    return rows
+
+
+def _tuned_fit_sha256(grp: Group, rows: list[Record]) -> str | None:
+    """The `fit_sha256` that every record tuned into `grp` was calibrated through, or `None` for
+    records from before `s1 apply` wrote it. A record without the calibrated distribution would be
+    tuned on its raw one (`parse_record` falls back), so it is refused rather than counted."""
+    name = f"{grp.question_id} ({grp.model_served})"
+    for r in rows:
+        if not has_calib(r.raw, grp.primitive):
+            raise CliError(
+                f"{name}: line {r.line} has no calibrated probabilities; `--use-calib` tunes on the "
+                "`calib` that `s1 apply` writes, so apply the fit to every record first"
+            )
+    for r in rows:
+        h = r.raw["calib"].get("fit_sha256")
+        if h is not None and not isinstance(h, str):
+            raise CliError(f"{name}: line {r.line}: calib.fit_sha256 must be a string, got {short_repr(h)}")
+    hashes = {r.raw["calib"].get("fit_sha256") for r in rows}
+    if len(hashes) > 1:
+        shown = ", ".join(sorted(repr(h) for h in hashes))
+        raise CliError(f"{name}: records were calibrated through different fits ({shown}); apply one fit file")
+    return hashes.pop() if hashes else None
 
 
 def _no_groups(args: argparse.Namespace, sel: Selection, records_path: str) -> CliError:
@@ -372,6 +405,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         return 0
 
     src_sha = sha256_file(args.records)
+    tuned_rows = _tuned_rows(records) if args.use_calib else {}
     policies: list[PolicyEntry] = []
     for grp in sel.groups:
         if args.question and grp.question_id != args.question:
@@ -425,6 +459,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
                 band_lo=band_lo,
                 band_hi=band_hi,
                 calibrated=args.use_calib,
+                fit_sha256=_tuned_fit_sha256(grp, tuned_rows[grp.key]) if args.use_calib else None,
                 source_sha256=src_sha,
             )
         )
@@ -1099,7 +1134,7 @@ def build_parser() -> argparse.ArgumentParser:
     # gate
     p_gte = sub.add_parser("gate", help="Evaluate runtime DecisionGate on a live System 1 output", **_FMT)
     p_gte.add_argument("policy", help=_H_POLICY_IN)
-    p_gte.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; calibrates --p or --probs when the policy was compiled with --use-calib (required then for choice and score)")
+    p_gte.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; calibrates --p or --probs; required when the policy was compiled with --use-calib, and must be the fit it was tuned through")
     p_gte.add_argument("--question", required=True, help="question_id of the live call")
     p_gte.add_argument("--model", required=True, help="model_served of the live call; a mismatch with the policy exits 3")
     p_gte_answer = p_gte.add_mutually_exclusive_group(required=True)

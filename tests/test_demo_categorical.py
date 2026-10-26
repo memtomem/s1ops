@@ -13,7 +13,7 @@ import pytest
 
 from s1ops.cli import main as cli_main
 from s1ops.contracts.records import read_records, select
-from s1ops.contracts.schemas import load_policies
+from s1ops.contracts.schemas import PolicyEntry, load_policies
 from s1ops.demo import _categorical_rows, generate_workspace
 from s1ops.eval.metrics import top_label
 from s1ops.improve.calibrate import load_fits, sha256_file
@@ -26,7 +26,10 @@ README = Path(__file__).resolve().parents[1] / "README.md"
 
 # Every noul-era file as main @ 04e23a8 generated it, clock keys stripped and floats cut to 12
 # significant digits: calibrated values come out of libm, whose last bits differ between macOS and
-# Linux (records.jsonl's `calib.p` did), while a changed rng stream moves every value.
+# Linux (records.jsonl's `calib.p` did), while a changed rng stream moves every value. The fit
+# provenance added since (`calib.fit_sha256`, the policy's `fit_sha256` and with it `policy_sha256`)
+# hashes fitted parameters exactly, so it cannot be cut to 12 digits: `_as_on_main` checks it
+# against the generated fit and puts the files back in main's shape.
 MAIN_DIGESTS = {
     "features.jsonl": "51c3a928536f1f8d8a18d87fc459daec04e6bfa8dea3d66a56cdaf4608435510",
     "fits.json": "19aa3c850296af41afa53af03198766caf7b2e0a32aea399e9320b3680925c7e",
@@ -61,10 +64,29 @@ def ws(tmp_path_factory) -> dict[str, str]:
     return generate_workspace(tmp_path_factory.mktemp("demo") / "ws")
 
 
+def _as_on_main(files: dict, fits_path: str) -> int:
+    """Remove the fit provenance from the noul files after checking it against the fit generated in
+    this run, and recompute `policy_sha256` without it. Returns how many hashes were checked."""
+    (fit,) = load_fits(fits_path)
+    checked = 0
+    for name in ("records.jsonl", "records_canary.jsonl", "probe_records.jsonl", "records_kev.jsonl", "records_train.jsonl"):
+        for row in files[name]:
+            if "calib" in row:
+                assert row["calib"].pop("fit_sha256") == fit.fit_sha256, (name, row["item_id"])
+                checked += 1
+    for pol in files["policy.json"]["policies"]:
+        assert pol["fit_sha256"] == fit.fit_sha256
+        pol["fit_sha256"] = None
+        pol["policy_sha256"] = PolicyEntry(**{k: v for k, v in pol.items() if k != "policy_sha256"}).policy_sha256
+        checked += 1
+    return checked
+
+
 def test_the_noul_files_are_unchanged(ws) -> None:
     files = _workspace(Path(ws["records"]).parent)
     urgency = files["questions.json"].pop("urgency")  # the one addition to questions.json
     assert (urgency["type"], len(urgency["criteria"])) == ("score", 4)
+    assert _as_on_main(files, ws["fits"]) > 1
     assert {name: _digest(files[name]) for name in MAIN_DIGESTS} == MAIN_DIGESTS
 
 

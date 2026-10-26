@@ -77,7 +77,8 @@ def test_reports_route_like_the_gate_under_other_fits(demo, method: str) -> None
     raw = [{k: v for k, v in row.items() if k != "calib"} for row in demo["rows"]]
     applied = [apply_to_record(fit, parse_record(row)) for row in raw]
     for pol in _policies(demo["band"]):
-        _assert_reports_route_like_the_gate(applied, fit, pol)
+        # Bound to this fit, as `s1 policy tune` would bind a policy tuned on these records.
+        _assert_reports_route_like_the_gate(applied, fit, dataclasses.replace(pol, fit_sha256=fit.fit_sha256))
 
 
 def _row(primitive: str, **extra) -> dict:

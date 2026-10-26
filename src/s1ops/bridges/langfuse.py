@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from s1ops.contracts.records import Record, parse_record
+from s1ops.contracts.records import Record, parse_record, score_level
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.runtime.routing import ROUTING_RULE, route
 
@@ -77,7 +77,7 @@ def _predict_info(
     if policy is not None:
         # Export labels as the record wrote them ("01" is not reported as "1").
         routed = route(policy, parsed.classes, parsed.probs)
-        label_of = {int(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
+        label_of = {score_level(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
         predicted = label_of[routed.predicted]
         action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
     p_raw = float(probs_raw[predicted])

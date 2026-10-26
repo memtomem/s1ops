@@ -112,11 +112,21 @@ def _level(key: str, line: int) -> int:
     return int(key)
 
 
+def probability_total(values: Iterable[float]) -> float:
+    """The sum a distribution is checked against and divided by.
+
+    `math.fsum` is correctly rounded, so the total does not depend on key order. Plain `sum` is
+    naive on Python 3.11, where the order a backend or `s1 apply` (`sort_keys=True`) wrote the keys
+    would change the last bit, and with it which side of a tuned threshold an answer lands on.
+    """
+    return math.fsum(values)
+
+
 def _distribution(value: object, line: int, sum_tol: float) -> dict[str, float]:
     if not isinstance(value, dict) or not value:
         raise RecordError(line, f"probabilities must be a non-empty object, got {value!r}")
     probs = {k: _probability(v, f"probabilities[{k!r}]", line) for k, v in value.items()}
-    total = sum(probs.values())
+    total = probability_total(probs.values())
     if abs(total - 1.0) > sum_tol:
         raise RecordError(line, f"probabilities sum to {total:.6g}, not 1 within {sum_tol}")
     return probs
@@ -188,7 +198,9 @@ def parse_record(
     _probability(row["confidence"], "confidence", line)
     dist_raw = _distribution(row["probabilities"], line, sum_tol)
     dist = _distribution(calib["probabilities"], line, sum_tol) if calib and "probabilities" in calib else dist_raw
-    total = sum(dist.values())
+    if set(dist) != set(dist_raw):
+        raise RecordError(line, f"calib.probabilities keys {sorted(dist)} differ from probabilities keys {sorted(dist_raw)}")
+    total = probability_total(dist.values())
     if primitive == "choice":
         choice = _string(row["choice"], "choice", line)
         if choice not in dist_raw:

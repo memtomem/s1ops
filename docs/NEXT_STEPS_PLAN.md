@@ -84,17 +84,30 @@
 
 - **목표**: 현재 `evaluate_noul()`만 지원하는 `src/s1ops/runtime/gate.py`의 `DecisionGate`에 다지선다(`choice`) 및 순서형 루브릭(`score`) 런타임 보정·게이팅 메서드를 추가합니다.
 - **대상 파일**:
-  - `src/s1ops/runtime/gate.py`
+  - `src/s1ops/runtime/gate.py`, `src/s1ops/runtime/routing.py` (신규)
   - `src/s1ops/cli.py` (`s1 gate`에서 `--probs '{"A":0.7,"B":0.3}'` 지원)
-  - `tests/test_drift_runner_and_gate.py`
+  - `src/s1ops/contracts/records.py` (`probability_total`), `src/s1ops/monitor/drift.py`, `src/s1ops/bridges/langfuse.py`, `src/s1ops/bridges/openinference.py`
+  - `tests/test_gate_routing.py` (신규)
 - **세부 설계**:
-  - [ ] **`DecisionGate.evaluate_choice(...)`**:
-    - 입력: `question_id`, `model_served`, `probs_raw: dict[str, float]`, `classes: Sequence[str]`
-    - 처리: `fits.json`에 해당 그룹의 다중클래스 `temperature` 피팅이 있으면 `transform("temperature", "choice", fit.params, P)` 적용 → 최대 확률 선택지 `top_label`과 신뢰도 `conf = max(p_eff)` 산출
-    - 라우팅: `conf >= policy.threshold`이면 `SELECT:<option>` 확정(`escalated=False`), 미달이거나 `threshold is None`이면 `ESCALATE`(`escalated=True`)
-  - [ ] **`DecisionGate.evaluate_score(...)`**:
-    - 입력: `question_id`, `model_served`, `probs_raw: dict[str, float]` (`"0"`..`"L-1"`)
-    - 처리: 사후 온도 보정 적용 후 기대 점수 $\mathbb{E}[S] = \sum_{k=0}^{L-1} k \cdot p_k$ 및 최빈 등급 신뢰도 산출 → 임계값 기반 자동 통과/에스컬레이션 판정
+  - [x] **`DecisionGate.evaluate_choice(...)` / `evaluate_score(...)`** (2026-10-26, 브랜치 `feat/gate-choice-score`):
+    - 입력: `question_id`, `model_served`, `probs_raw` (choice는 선택지→확률, score는 레벨(정수 또는 `"0"` 같은 10진 문자열)→확률). `classes` 인자는 두지 않음: choice는 호출자 매핑 순서, score는 오름차순
+    - 검증: 유한한 `[0,1]` 숫자(bool 불가), 2개 이상, 합 `1 ± 0.02`, 같은 레벨로 접히는 score 키(`0`과 `"0"`, `"0"`과 `"00"`) 거부 → `ValueError`
+    - 판정: `s1 policy tune`이 잰 값과 같은 top-label 확률이 `threshold` 이상이면 `SELECT:<label>`, 미만·`threshold: null`·**최상위 동률**이면 `ESCALATE`. 튜너는 동률을 그룹 첫 레코드의 선택지 순서로 깨는데 이 순서는 파일 순서와 `s1 apply`의 `sort_keys`로 바뀌어 런타임에 재현할 수 없음(소유자 결정: 동률은 escalate. 최상위 동률이면 확률 ≤ 0.5라 threshold ≤ 0.5인 정책에서만 차이)
+    - 보정: `policy.calibrated`면 fit의 `temperature`를 `s1 apply` → `parse_record(use_calib=True)`와 같은 단계로 적용. **calibrated 정책인데 fit이 없으면 `ValueError`**(noul의 조용한 raw fallback은 그대로). choice/score `escalation_band` 정책은 `ValueError`
+    - score: 기대 점수 `Σ k·p_k`는 보고만 하고 판정은 최빈 등급 확률로 함(초안의 "기대 점수 기반 판정"에서 바꿈: 튜너가 top-label 확률로 threshold를 고르므로)
+    - `GateDecision`에 `probabilities`, `expected_score` 필드 추가(noul은 `null`)
+    - primitive가 다른 질문에 호출하면 `ValueError`(exit 1). 이전엔 noul gate를 choice 질문에 부르면 `ModelServedMismatchError`(exit 3)
+  - [x] **정규화를 `math.fsum`으로** (`records.probability_total`, 파서와 gate 공용): Python 3.11의 `sum()`은 순서에 따라 마지막 비트가 달라, 같은 분포가 백엔드 순서(raw)와 정렬 순서(`s1 apply` 출력)에서 다른 확률이 됨. 실측(3.11.14, 무작위 분포 2만 개, 순서만 섞음): 정규화한 최고 확률이 K=3에서 5.3%, K=5에서 19%, K=10에서 36% 달라짐(4자리 반올림 입력). 3.12+의 `sum()`은 보정 합산이라 0%이고 `fsum`과 12만 건 모두 같음 → 3.11에서 0.1.0 이하로 튜닝한 choice/score 정책은 재튜닝
+  - [x] **공통 판정 규칙 `runtime/routing.py::route`** (소유자 결정: "공통 routing 함수로 통일"): gate, `s1 drift`의 escalation 비율, Langfuse/Phoenix exporter의 `policy_action`이 같은 함수를 씀. 이전엔 exporter와 drift가 각자 다르게 판정했음:
+    - noul `error_budget`: exporter는 `p ≥ τ`면 ALLOW 아니면 BLOCK(ESCALATE 없음), `predicted = p ≥ τ`; drift는 `p < τ`를 escalate로 셈 → gate와 같은 `max(p, 1-p) ≥ τ`, `predicted = p ≥ 0.5`
+    - noul band: exporter `predicted`가 `p ≥ band_hi`(band 안이면 항상 False) → gate와 같이 band 안에선 `p ≥ 0.5`
+    - `threshold: null`: exporter는 SELECT/ALLOW·BLOCK, drift는 escalate 0 → ESCALATE
+    - choice/score 동률: exporter는 사전순 가장 큰 라벨 선택 → ESCALATE
+    - 판정 대상 분포(raw/보정)는 호출자가 고름. drift와 exporter가 이를 `policy.calibrated`에 맞춰 고르지 않는 점은 그대로 남음
+    - export에 `routing_rule: "2"` 표시(Phoenix `s1.routing_rule`, Langfuse `metadata.routing_rule`, 정책으로 판정한 레코드만). `policy_sha256`은 같은데 판정이 달라질 수 있어 이전 export와 구분하기 위함
+  - [x] **`parse_record`이 `calib.probabilities` 키가 raw `probabilities` 키와 다르면 `RecordError`**(줄 번호 포함): 이전엔 `s1 drift`(기본 `use_calib`) 등이 `KeyError` traceback으로 죽었고, exporter가 parse된 레코드로 판정하게 되면서 export에도 번질 뻔함
+  - [x] **`s1 gate --probs '{"A":0.7,"B":0.3}'`**: `--p`와 상호 배타. 질문의 primitive와 맞지 않는 플래그는 exit 1로 올바른 플래그를 안내. `--probs`는 JSON 객체만, NaN·중복 키 거부
+  - 범위 밖으로 남긴 것: `records.parse_record`가 score 키 `"0"`과 `"00"`을 한 레벨로 접어 확률 합이 줄어듦(`{"0":0.2,"00":0.3,"1":0.5}` → 합 0.8); `evaluate_noul`이 `p_raw` 범위를 검사하지 않음; 데모 워크스페이스에 choice/score 레코드 없음
 
 ---
 

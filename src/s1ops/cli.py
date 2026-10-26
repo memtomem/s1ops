@@ -819,15 +819,47 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _gate_probs(text: str) -> dict:
+    def pairs(items: list[tuple[str, Any]]) -> dict:
+        keys = [k for k, _ in items]
+        repeated = sorted({k for k in keys if keys.count(k) > 1})
+        if repeated:
+            raise CliError(f"--probs repeats {repeated}")
+        return dict(items)
+
+    def constant(name: str) -> float:
+        raise CliError(f"--probs: non-finite number {name} is not valid JSON")
+
+    try:
+        probs = json.loads(text, object_pairs_hook=pairs, parse_constant=constant)
+    except json.JSONDecodeError as e:
+        raise CliError(f"--probs is not valid JSON: {e}") from None
+    if not isinstance(probs, dict):
+        raise CliError(f"--probs must be a JSON object of label to probability, got {text!r}")
+    return probs
+
+
 def _cmd_gate(args: argparse.Namespace) -> int:
     gate = DecisionGate.from_files(args.policy, args.fit)
+    primitive = gate.primitive_of(args.question)
+    common = {
+        "question_id": args.question,
+        "model_served": args.model,
+        "expected_policy_sha256": args.expected_sha256,
+    }
     try:
-        dec = gate.evaluate_noul(
-            question_id=args.question,
-            model_served=args.model,
-            p_raw=args.p,
-            expected_policy_sha256=args.expected_sha256,
-        )
+        if args.p is not None:
+            if primitive in ("choice", "score"):
+                raise CliError(f"{args.question} is a {primitive} question; pass --probs, not --p")
+            dec = gate.evaluate_noul(p_raw=args.p, **common)
+        else:
+            probs = _gate_probs(args.probs)
+            if primitive == "noul":
+                raise CliError(f"{args.question} is a noul question; pass --p, not --probs")
+            if primitive == "score":
+                dec = gate.evaluate_score(probs_raw=probs, **common)
+            else:
+                dec = gate.evaluate_choice(probs_raw=probs, **common)
     except KeyError as e:
         raise CliError(f"{e.args[0]} in {args.policy}") from None
     print(json.dumps(dec.as_dict(), indent=2, sort_keys=True))
@@ -1053,10 +1085,16 @@ def build_parser() -> argparse.ArgumentParser:
     # gate
     p_gte = sub.add_parser("gate", help="Evaluate runtime DecisionGate on a live System 1 output", **_FMT)
     p_gte.add_argument("policy", help=_H_POLICY_IN)
-    p_gte.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; calibrates --p when the policy was compiled with --use-calib")
+    p_gte.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; calibrates --p or --probs when the policy was compiled with --use-calib (required then for choice and score)")
     p_gte.add_argument("--question", required=True, help="question_id of the live call")
     p_gte.add_argument("--model", required=True, help="model_served of the live call; a mismatch with the policy exits 3")
-    p_gte.add_argument("--p", type=float, required=True, help="raw noul probability returned by the model")
+    p_gte_answer = p_gte.add_mutually_exclusive_group(required=True)
+    p_gte_answer.add_argument("--p", type=float, default=None, help="raw noul probability returned by the model")
+    p_gte_answer.add_argument(
+        "--probs",
+        default=None,
+        help='raw choice or score probabilities as a JSON object, e.g. \'{"A": 0.7, "B": 0.3}\' or \'{"0": 0.1, "1": 0.9}\'',
+    )
     p_gte.add_argument("--expected-sha256", default=None, help="expected policy_sha256; a mismatch exits 1")
     p_gte.set_defaults(func=_cmd_gate)
 

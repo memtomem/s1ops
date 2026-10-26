@@ -117,6 +117,8 @@ s1 probe s1-demo/questions.json --states s1-demo/states_local.jsonl \
   -o s1-demo/probe_live.jsonl --ledger s1-demo/probe_ledger.jsonl --cap-usd 0.50
 s1 gate s1-demo/policy.json --fit s1-demo/fits.json \
   --question q-30076be2728be682 --model jev-1.13.0 --p 0.52
+# a choice or score question takes its distribution instead of --p:
+#   s1 gate policy.json --fit fits.json --question <qid> --model <model> --probs '{"A": 0.7, "B": 0.3}'
 
 # 9) Safe-v1 Body-Free Export to Langfuse & Arize Phoenix (OpenInference)
 s1 export langfuse s1-demo/records.jsonl -o s1-demo/langfuse_export.json --policy s1-demo/policy.json
@@ -172,6 +174,11 @@ decision = gate.evaluate_noul(
     p_raw=0.52,
 )
 print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALATE', True, ...
+
+# Choice and score questions: evaluate_choice / evaluate_score take the distribution;
+# the action is SELECT:<label> or ESCALATE, and a score decision also reports expected_score.
+# gate.evaluate_choice(question_id=..., model_served=..., probs_raw={"A": 0.7, "B": 0.3})
+# gate.evaluate_score(question_id=..., model_served=..., probs_raw={"0": 0.1, "1": 0.2, "2": 0.7})
 ```
 
 ---
@@ -179,6 +186,7 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 ## Safety & Statistical Guardrails
 
 - **Zero-State Privacy (`safe-v1`)**: `s1-record/1` files, budget ledgers, probe outputs, and Langfuse/Phoenix exports never store raw item `state` text.
+- **One Routing Rule**: `DecisionGate`, `s1 drift`'s escalation rate, and the `policy_action` of both exporters apply a policy through the same rule. A Noul `error_budget` policy accepts when `max(p, 1 - p)` reaches the threshold (else escalates); a band accepts at or above `band_hi`, blocks below `band_lo`, and escalates between. A choice or score policy selects the top answer when its probability reaches the threshold, and escalates on a tie at the top or when no threshold met the error budget (`threshold: null`); a policy tuned with `--use-calib` must be gated with its `fits.json`. Exports of policy-routed records carry `routing_rule` (`s1.routing_rule` on Phoenix spans, `metadata.routing_rule` on Langfuse observations); exports from s1ops 0.1.0 and earlier have none, and their `policy_action` and `predicted` may differ for the same policy. Choice and score probabilities are renormalized with an exactly rounded sum, so retune choice or score policies compiled by 0.1.0 or earlier on Python 3.11 (run `s1 apply` first for `--use-calib` ones).
 - **No Cross-Group Pooling**: Metrics, fits, drift audits, and thresholds are keyed strictly to `(question_id, model_served, primitive)`.
 - **Out-of-Sample & Model-Mismatch Enforcement (`s1 apply` & `DecisionGate`)**:
   - Attempting to apply a calibration fit to any `(dataset, item_id)` used during `s1 fit` exits with **code `2`**.

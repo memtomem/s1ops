@@ -10,8 +10,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from s1ops.contracts.records import Record
+from s1ops.contracts.records import Record, parse_record
 from s1ops.contracts.schemas import PolicyEntry
+from s1ops.runtime.routing import ROUTING_RULE, route
 
 
 def _trace_id(record: Record, run_name: str = "s1ops-run") -> str:
@@ -45,30 +46,21 @@ def _predict_info(
             y = 1.0 if record.label else 0.0
             brier_val = (p_eff - y) ** 2
 
-        tau = 0.5
-        low = 0.5
-        high = 0.5
         if policy is not None:
-            if policy.mode == "escalation_band" and policy.band_lo is not None and policy.band_hi is not None:
-                low, high = policy.band_lo, policy.band_hi
-                tau = high
-            elif policy.threshold is not None:
-                tau = low = high = policy.threshold
-
-        if p_eff >= high:
-            action = "ALLOW"
-        elif p_eff < low:
-            action = "BLOCK"
+            routed = route(policy, (False, True), (1.0 - p_eff, p_eff))
+            action, predicted = routed.action, routed.predicted
         else:
-            action = "ESCALATE"
+            predicted = p_eff >= 0.5
+            action = "ALLOW" if predicted else "BLOCK"
 
         return {
             "p_raw": round(p_raw, 6),
             "p_calib": round(p_cal, 6) if p_cal is not None else None,
             "p_effective": round(p_eff, 6),
-            "predicted": p_eff >= tau,
+            "predicted": predicted,
             "brier": round(brier_val, 6) if brier_val is not None else None,
             "policy_action": action,
+            "routing_rule": ROUTING_RULE if policy is not None else None,
         }
 
     # choice or score
@@ -77,10 +69,19 @@ def _predict_info(
         dict(calib["probabilities"]) if calib and "probabilities" in calib else None
     )
     probs_eff = probs_cal if probs_cal is not None else probs_raw
-    top_label = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]
-    p_raw = float(probs_raw[top_label])
-    p_cal = float(probs_cal[top_label]) if probs_cal is not None else None
-    p_eff = float(probs_eff[top_label])
+    # The parser checks the calibrated keys against the raw ones and renormalizes, as drift sees it.
+    parsed = parse_record(raw_row, record.line, use_calib=True) if probs_cal is not None else record
+    predicted = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]
+    action = f"SELECT:{predicted}"
+    if policy is not None:
+        # Export labels as the record wrote them ("01" is not reported as "1").
+        routed = route(policy, parsed.classes, parsed.probs)
+        label_of = {int(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
+        predicted = label_of[routed.predicted]
+        action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
+    p_raw = float(probs_raw[predicted])
+    p_cal = float(probs_cal[predicted]) if probs_cal is not None else None
+    p_eff = float(probs_eff[predicted])
 
     brier_val = None
     if record.label is not None and str(record.label) in probs_eff:
@@ -90,17 +91,14 @@ def _predict_info(
             for k, p in probs_eff.items()
         )
 
-    action = f"SELECT:{top_label}"
-    if policy is not None and policy.threshold is not None and p_eff < policy.threshold:
-        action = "ESCALATE"
-
     return {
         "p_raw": round(p_raw, 6),
         "p_calib": round(p_cal, 6) if p_cal is not None else None,
         "p_effective": round(p_eff, 6),
-        "predicted": top_label,
+        "predicted": predicted,
         "brier": round(brier_val, 6) if brier_val is not None else None,
         "policy_action": action,
+        "routing_rule": ROUTING_RULE if policy is not None else None,
     }
 
 
@@ -160,6 +158,8 @@ def build_langfuse_events(
                 "latency_ms": r.raw.get("latency_ms"),
             },
         }
+        if info["routing_rule"] is not None:
+            obs["metadata"]["routing_rule"] = info["routing_rule"]
         observations.append(obs)
 
         dataset_run_items.append(

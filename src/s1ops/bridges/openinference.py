@@ -118,6 +118,7 @@ def build_openinference_spans(
             attributes["s1.threshold"] = pol.threshold
             attributes["s1.band_lo"] = pol.band_lo
             attributes["s1.band_hi"] = pol.band_hi
+            attributes["s1.routing_rule"] = info["routing_rule"]
 
         spans.append(
             {

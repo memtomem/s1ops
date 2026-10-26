@@ -150,7 +150,7 @@
       - 연동 조건: **판정 매핑을 명시.** 이름이 반대 방향이라 그대로 연결하면 위험 판단이 뒤집힘. decision-plane은 `p_risky ≥ ask_at`이면 ASK(모델 단독 DENY는 `deny_at`으로만, 기본 꺼짐)인데, s1ops noul `route`는 높은 p에 `ALLOW`(예측 참), 낮은 p에 `BLOCK`, 불확실하면 `ESCALATE`를 냄(`error_budget`·band 모두). 질문이 "위험한가"일 때 매핑: `ALLOW`(위험 예측) → ASK(DENY는 명시적으로 켰을 때만), `BLOCK`(안전 예측) → ALLOW, `ESCALATE` → ASK. 결정적 규칙의 하한과 판정 실패 시 ASK(`judgment_failed`)는 그대로 유지. 지금은 세 질문의 raw p 최댓값 하나로 판정(`worker.py`)하므로, 질문별 보정·라우팅 결과를 합치는 규칙(예: 하나라도 ASK면 ASK)도 정해야 함
       - 전제 조건: **numpy·scipy·sklearn과 `s1ops/__init__` 연쇄 없이 import되는 runtime 경로.** 훅이 도구 호출마다 worker 자식 프로세스를 띄우므로(`hook.py`, `DEFAULT_DEADLINE_S = 5.0`) import 시간이 매 호출에 붙음. 실측(2026-10-26, 데워진 캐시, `python -X importtime`, 4회): `import s1ops.runtime.gate` 0.548–0.571초, 그중 `s1ops.improve.calibrate` 약 0.46초(`sklearn.isotonic` 약 0.27초 + 맨 위의 `scipy.optimize`·`scipy.special`·numpy). sklearn만 빼면 절반가량 남음. 현재 경로를 그대로 쓰면 decision-plane runtime 의존성에 numpy·scipy·sklearn이 추가됨
       - 알려진 한계(선행 조건 아님): `model_served` 검사는 이미 있음(`backend.py`의 `"served a different model"`). 하지만 Kev는 요청한 모델 이름을 그대로 `model`로 돌려주므로(decision-plane README) policy의 `model_served`와 비교해도 설정의 이름 불일치만 잡고 checkpoint 교체는 못 잡음
-    - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.escalated`) 수집 및 시각화 연동
+    - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.policy_action` — 위임 여부는 `== "ESCALATE"`) 수집 및 시각화 연동
   - [ ] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**:
     - Langfuse Annotation Queue에서 검수 완료된 항목을 가져와 로컬 골드셋 패치 → `s1 fit` → `s1 policy tune` 재컴파일 루프 자동화
 

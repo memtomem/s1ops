@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -108,8 +109,30 @@ def load_policies(path: str | Path) -> list[PolicyEntry]:
         _PolicyDocument.model_validate(doc)
     except ValidationError as e:
         raise ValueError(f"{path}: " + "; ".join(pydantic_errors(e))) from None
+    rows = doc.get("policies", [])
+    for i, row in enumerate(rows):
+        problem = _band_problem(row)
+        if problem:
+            raise ValueError(f"{path}: policies.{i}: {problem}")
+    keys = [(row["question_id"], row["model_served"], row["primitive"]) for row in rows]
+    repeated = sorted(k for k, n in Counter(keys).items() if n > 1)
+    if repeated:
+        raise ValueError(f"{path}: more than one policy for {repeated}")
     # Build from the file's own values: the validated model turns 1 into 1.0, which changes policy_sha256.
-    return [
-        PolicyEntry(**{k: v for k, v in row.items() if k != "policy_sha256"})
-        for row in doc.get("policies", [])
-    ]
+    return [PolicyEntry(**{k: v for k, v in row.items() if k != "policy_sha256"}) for row in rows]
+
+
+def _band_problem(row: dict) -> str | None:
+    """Routing reads the band only when both bounds are set (`routing._route_noul`), so a band
+    missing a bound would silently route by threshold; one outside [0, 1] or reversed routes
+    probabilities in ways no tuned band produces (`[2, 3)` blocks `p = 1`)."""
+    lo, hi = row.get("band_lo"), row.get("band_hi")
+    if row["mode"] == "error_budget":
+        if lo is not None or hi is not None:
+            return "an error_budget policy has no band; band_lo and band_hi must be null"
+        return None
+    if lo is None or hi is None:
+        return "an escalation_band policy needs both band_lo and band_hi"
+    if not 0.0 <= lo <= hi <= 1.0:
+        return f"band_lo and band_hi must satisfy 0 <= band_lo <= band_hi <= 1, got [{lo!r}, {hi!r})"
+    return None

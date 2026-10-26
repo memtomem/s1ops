@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import numbers
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -65,16 +66,16 @@ class DecisionGate:
         policies: list[PolicyEntry],
         fits: list[Fit] | None = None,
     ) -> None:
-        self._policies: dict[GroupKey, PolicyEntry] = {
-            (p.question_id, p.model_served, p.primitive): p for p in policies
-        }
+        policy_keys = [(p.question_id, p.model_served, p.primitive) for p in policies]
+        _refuse_duplicates("policy", policy_keys)
+        self._policies: dict[GroupKey, PolicyEntry] = dict(zip(policy_keys, policies))
         self._policies_by_qid: dict[str, list[PolicyEntry]] = {}
         for p in policies:
             self._policies_by_qid.setdefault(p.question_id, []).append(p)
 
-        self._fits: dict[GroupKey, Fit] = {
-            f.key: f for f in (fits or [])
-        }
+        fits = fits or []
+        _refuse_duplicates("fit", [f.key for f in fits])
+        self._fits: dict[GroupKey, Fit] = {f.key: f for f in fits}
 
     @classmethod
     def from_files(
@@ -115,6 +116,27 @@ class DecisionGate:
             )
         return pol
 
+    def _fit(self, key: GroupKey, pol: PolicyEntry) -> Fit | None:
+        """The fit for `key`. A calibrated policy needs the fit it was tuned through: without one
+        the raw distribution would be routed against a threshold tuned on calibrated values, and a
+        different fit for the same group (`fit_sha256` recorded by `s1 policy tune`) moves the
+        routed values just as silently. A policy without a recorded `fit_sha256` takes any fit."""
+        fit = self._fits.get(key)
+        if not pol.calibrated:
+            return fit
+        question_id, model_served, _ = key
+        if fit is None:
+            raise ValueError(
+                f"policy for {question_id} ({model_served}) was tuned on calibrated probabilities; "
+                "pass the fits.json it was compiled with"
+            )
+        if pol.fit_sha256 is not None and fit.fit_sha256 != pol.fit_sha256:
+            raise PolicyIntegrityError(
+                f"policy for {question_id} ({model_served}) was tuned through fit {pol.fit_sha256!r}, "
+                f"but the fits.json has {fit.fit_sha256!r}"
+            )
+        return fit
+
     def evaluate_noul(
         self,
         *,
@@ -128,7 +150,7 @@ class DecisionGate:
         p = _probability(p_raw, "p_raw")
 
         p_cal: float | None = None
-        fit = self._fits.get(key)
+        fit = self._fit(key, pol)
         if fit is not None:
             P = np.array([[1.0 - p, p]], dtype=float)
             Q = transform(fit.method, "noul", fit.params, P)
@@ -203,12 +225,7 @@ class DecisionGate:
         pol = self._policy(key, expected_policy_sha256)
         raw = _normalized(classes, values)
 
-        fit = self._fits.get(key)
-        if pol.calibrated and fit is None:
-            raise ValueError(
-                f"policy for {question_id} ({model_served}) was tuned on calibrated probabilities; "
-                "pass the fits.json it was compiled with"
-            )
+        fit = self._fit(key, pol)
         cal = _calibrated(fit, classes, raw) if fit is not None else None
 
         eff = cal if (pol.calibrated and cal is not None) else raw
@@ -231,6 +248,12 @@ class DecisionGate:
                 round(math.fsum(c * q for c, q in zip(classes, eff)), 6) if primitive == "score" else None
             ),
         )
+
+
+def _refuse_duplicates(kind: str, keys: list[GroupKey]) -> None:
+    repeated = sorted(k for k, n in Counter(keys).items() if n > 1)
+    if repeated:
+        raise ValueError(f"more than one {kind} for {repeated}")
 
 
 def _calibrated(fit: Fit, classes: list, raw: list[float]) -> list[float]:

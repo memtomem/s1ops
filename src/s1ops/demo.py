@@ -327,6 +327,7 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
         band_lo=0.25,
         band_hi=0.75,
         calibrated=True,
+        fit_sha256=fit_noul.fit_sha256,
     )
     policy_path = out / "policy.json"
     save_policies([policy_entry], policy_path)
@@ -492,6 +493,7 @@ def _categorical_workspace(out: Path, seed: int, qid_choice: str, options: list[
                 threshold=select_threshold(conf, correct, budget=0.10),
                 error_budget=0.10,
                 calibrated=True,
+                fit_sha256=fit_for(fits, grp.key).fit_sha256,
             )
         )
     policy_path = out / "policy_categorical.json"

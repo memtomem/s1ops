@@ -9,9 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from scipy.optimize import minimize, minimize_scalar
 from scipy.special import expit, log_expit, log_softmax, logit, softmax
-from sklearn.isotonic import IsotonicRegression
 
 from s1ops.contracts._validation import pydantic_errors
 from s1ops.contracts.records import Group, GroupKey, ItemKey, Record
@@ -48,6 +46,23 @@ class Fit:
     def key(self) -> GroupKey:
         return (self.question_id, self.model_served, self.primitive)
 
+    @property
+    def fit_sha256(self) -> str:
+        """First 16 hex of SHA-256 over the fields that decide what `transform` returns, so a refit
+        or another method for the same group gets another value; `fitted_at`, `items`, `n` and
+        the NLLs do not change the map and are left out. `s1 apply` writes it into each record's
+        `calib`, and `s1 policy tune --use-calib` into the policy it compiles."""
+        core = {
+            "question_id": self.question_id,
+            "model_served": self.model_served,
+            "primitive": self.primitive,
+            "method": self.method,
+            "classes": self.classes,
+            "params": self.params,
+        }
+        canonical = json.dumps(core, separators=(",", ":"), sort_keys=True)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
 
 def _z(p: np.ndarray) -> np.ndarray:
     return logit(np.clip(p, EPS, 1 - EPS))
@@ -81,6 +96,10 @@ def _checked(Q: np.ndarray) -> np.ndarray:
 
 
 def _fit_params(method: str, primitive: str, P: np.ndarray, y: np.ndarray) -> tuple[dict, list[str]]:
+    # Fitting only: importing these at the top would load them on `DecisionGate`'s path.
+    from scipy.optimize import minimize, minimize_scalar
+    from sklearn.isotonic import IsotonicRegression
+
     warnings: list[str] = []
     if method == "isotonic":
         iso = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip").fit(P[:, 1], y)
@@ -311,7 +330,13 @@ def apply_to_record(fit: Fit, record: Record, *, in_fit_sample: bool = False) ->
     order = {c: i for i, c in enumerate(record.classes)}
     P = np.array([[record.probs[order[c]] for c in fit.classes]])
     Q = transform(fit.method, fit.primitive, fit.params, P)[0]
-    calib: dict = {"method": fit.method, "fit_split": fit.split, "fit_n": fit.n, "fitted_at": fit.fitted_at}
+    calib: dict = {
+        "method": fit.method,
+        "fit_split": fit.split,
+        "fit_n": fit.n,
+        "fitted_at": fit.fitted_at,
+        "fit_sha256": fit.fit_sha256,
+    }
     if in_fit_sample:
         calib["in_fit_sample"] = True
     if fit.primitive == "noul":

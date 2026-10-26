@@ -418,7 +418,10 @@ def test_noul_decision_gains_only_null_fields(tmp_path: Path, p, action, predict
     ws = generate_workspace(tmp_path / "ws")
     gate = DecisionGate.from_files(ws["policy"], ws["fits"])
     qid = json.loads(Path(ws["policy"]).read_text())["policies"][0]["question_id"]
-    # The values the gate on main returned for the seeded demo, plus the two new null fields.
+    # The values the gate on main returned for the seeded demo, plus the two new null fields. The
+    # demo policy now records its fit's hash, which hashes fitted parameters whose last bits differ
+    # by platform, so `policy_sha256` is compared with the generated file's, not a literal.
+    (pol,) = load_policies(ws["policy"])
     assert gate.evaluate_noul(question_id=qid, model_served="jev-1.13.0", p_raw=p).as_dict() == {
         "question_id": "q-30076be2728be682",
         "model_served": "jev-1.13.0",
@@ -429,7 +432,7 @@ def test_noul_decision_gains_only_null_fields(tmp_path: Path, p, action, predict
         "p_raw": p,
         "p_calibrated": p_calibrated,
         "p_effective": p_calibrated,
-        "policy_sha256": "d411d78ef9968964",
+        "policy_sha256": pol.policy_sha256,
         "probabilities": None,
         "expected_score": None,
     }

@@ -118,7 +118,7 @@
     - 정책으로 판정한 choice/score export의 `p_effective`·`brier`는 판정한(재정규화된) 분포 기준, gate와 같은 값(이전엔 저장된 값이라 합이 1이 아니면 달랐음: `{"A":0.6,"B":0.39}` → 0.6 대신 0.606061). `p_raw`·`p_calib`는 저장된 값 그대로
     - 데모 canary의 `jev-1.13.0` 80건에 `calib`(fits.json)를 넣음. raw 값은 그대로(calib 뺀 digest가 main과 같음). 현재 쪽이 보정 80 + raw 40이 되어 기본 PSI 값이 바뀜(혼합 비교 자체는 #20)
     - 후속(별도 이슈): drift/export의 `--fit`(calib 없는 레코드를 gate처럼 보정), in-sample 항목 처리, 모델이 섞인 파일에서 `s1 apply`가 exit 3으로 멈추는 문제
-  - 범위 밖으로 남긴 것: 데모 워크스페이스에 choice/score 레코드 없음(#16)
+  - [x] **데모 choice/score 레코드** (#16): 별도 파일 `records_categorical_train.jsonl` / `records_categorical.jsonl`(choice `support_intent`, score `urgency` 각 150 + 150, `jev-1.13.0`)과 `fits_categorical.json` / `policy_categorical.json`. README walkthrough가 categorical fit → apply → audit → tune → `gate --probs` → export를 실제 정책으로 실행. `questions.json`에 score 질문 `urgency` 추가(`s1 probe` 호출 160건 증가). 별도 난수열이라 기존 noul 파일은 그대로(파일별 digest가 main과 같음). web workbench는 noul 파일만 읽음
 
 ---
 

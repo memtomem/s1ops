@@ -40,7 +40,7 @@ def test_demo_matches_generator(tmp_path: Path, capsys) -> None:
     stdout, stderr = capsys.readouterr()
     paths = json.loads(stdout)
     assert sorted(Path(p).name for p in paths.values()) == sorted(p.name for p in out.iterdir())
-    assert len(paths) == 11
+    assert len(paths) == 15
     assert stderr == ""
 
     generate_workspace(tmp_path / "direct")

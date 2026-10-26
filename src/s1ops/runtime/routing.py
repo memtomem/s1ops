@@ -81,7 +81,8 @@ def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tup
         raise RoutingInputError(
             record.line,
             f"policy for {policy.question_id} ({policy.model_served}) was tuned on calibrated "
-            "probabilities and this record has none; run `s1 apply` on this model's records first",
+            "probabilities and this record has none; run `s1 apply` first "
+            "(`--pass-through-unfitted` keeps records of models it has no fit for)",
         )
     parsed = parse_record(record.raw, record.line, use_calib=policy.calibrated)
     return parsed.classes, parsed.probs

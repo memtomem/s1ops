@@ -301,6 +301,8 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     in_sample_map = fitted_items(fits)
 
     out_objs: list[dict[str, Any]] = []
+    calibrated = 0
+    passed: dict[tuple, dict[str, Any]] = {}
     for rec in records:
         if rec.model_served is None:
             out_objs.append(rec.raw)
@@ -308,6 +310,12 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         fit = fit_for(fits, rec.key)
         if fit is None:
             msg = refusal(fits, rec.key, rec.classes) or f"no fit for {rec.key}"
+            if args.pass_through_unfitted:
+                qid, served, primitive = rec.key
+                group = passed.setdefault(rec.key, {"question_id": qid, "model_served": served, "primitive": primitive, "n": 0, "reason": msg})
+                group["n"] += 1
+                out_objs.append(rec.raw)
+                continue
             code = EXIT_MODEL_MISMATCH if "model_served" in msg else EXIT_ERROR
             return _fail(f"refusing to apply fit: {msg}", code)
 
@@ -324,12 +332,15 @@ def _cmd_apply(args: argparse.Namespace) -> int:
             )
 
         out_objs.append(apply_to_record(fit, rec, in_fit_sample=in_sample))
+        calibrated += 1
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
         for o in out_objs:
             fh.write(json.dumps(o, sort_keys=True) + "\n")
+    if args.pass_through_unfitted:
+        print(json.dumps({"calibrated": calibrated, "passed_through": list(passed.values())}, indent=2, sort_keys=True))
     return 0
 
 
@@ -973,6 +984,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_app.add_argument("--fit", required=True, help=_H_FIT_IN)
     p_app.add_argument("-o", "--output", required=True, help="calibrated records JSONL to write")
     p_app.add_argument("--allow-in-sample", action="store_true", help="apply even to items the fit was trained on (otherwise exit 2); they are marked in_fit_sample")
+    p_app.add_argument("--pass-through-unfitted", action="store_true", help="write records the fit file has no fit for (another model, question or primitive) unchanged, without adding or replacing `calib`, instead of exiting 3 or 1; prints a JSON summary of what was calibrated and passed through")
     p_app.set_defaults(func=_cmd_apply)
 
     # policy

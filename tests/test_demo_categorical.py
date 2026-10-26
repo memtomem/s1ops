@@ -24,24 +24,36 @@ from test_demo import _load, _strip_clock, _workspace
 CHOICE, SCORE = "q-a70bd97f0b7f1055", "q-5c05e56162b3eaa0"
 README = Path(__file__).resolve().parents[1] / "README.md"
 
-# Every noul-era file as main @ 04e23a8 generated it, clock keys stripped.
+# Every noul-era file as main @ 04e23a8 generated it, clock keys stripped and floats cut to 12
+# significant digits: calibrated values come out of libm, whose last bits differ between macOS and
+# Linux (records.jsonl's `calib.p` did), while a changed rng stream moves every value.
 MAIN_DIGESTS = {
     "features.jsonl": "51c3a928536f1f8d8a18d87fc459daec04e6bfa8dea3d66a56cdaf4608435510",
-    "fits.json": "f62a5a22d82f776b8cd571a0782a35050e09ae5ee3ab33e846841d14963fb129",
+    "fits.json": "19aa3c850296af41afa53af03198766caf7b2e0a32aea399e9320b3680925c7e",
     "judge_grades.jsonl": "6789b7f00c88b9cdf7bce131959ec7b39fe9cc483541ad001d54a33e2dc9abcf",
-    "policy.json": "d3da5cd88f81bdd93057fe51af61af047bfde487914f1d85c8929a287bf64d93",
+    "policy.json": "770ceabd32ff3d4a5ac524fc3986ec67c2cdd86c61e791efbd154f721706515c",
     "probe_records.jsonl": "b1d58b94e592473634675a37d921edb19555eb9a9d2953e1b9fb25edc9a9ff47",
     "questions.json": "25436640f677c4d79b16805c053d9a75c4ad118a4d5c9f382009df650eba7cfe",
-    "records.jsonl": "780927ee3d457ab0cc1f0abd65498c7f569e7b24a49e5187f25ebe51e6ab46da",
-    "records_canary.jsonl": "c6c48a5432dfac4b6ea25ec8d107183b866db0a69df178d5f60ac3669eb1d582",
+    "records.jsonl": "a392e59919555a7510fd571596ec16b0a01452a67645c625f84d0463d3988615",
+    "records_canary.jsonl": "3d98c7fbad6232ba86307fabd1ca1f77c766c357400b1dc0c9abe8b4e570d721",
     "records_kev.jsonl": "82c43a365f05ea7da8675f966a302a078729d0a5eeaa7d6a3da142ef48bf6198",
     "records_train.jsonl": "4d45fd1f3e2daaaa0d5cf18ea743c0db9052607f4f7cb643079e4ae5576ac082",
     "states_local.jsonl": "37052540734f2edb2b615662f2c3fd560f68e5bf1cc013deed5645f9fb6a3b8e",
 }
 
 
+def _canonical(value):
+    if isinstance(value, float):
+        return float(f"{value:.12g}")
+    if isinstance(value, dict):
+        return {k: _canonical(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_canonical(v) for v in value]
+    return value
+
+
 def _digest(value) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(_canonical(value), sort_keys=True).encode()).hexdigest()
 
 
 @pytest.fixture(scope="module")

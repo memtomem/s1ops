@@ -133,16 +133,24 @@
 
 ---
 
-### Track 4. TypeScript 경량 런타임 SDK (`@memtomem/sys1`) 및 `agent-harness` 연동
+### Track 4. TypeScript 경량 런타임 SDK (`s1ops` npm) 및 `agent-harness` 연동
 
 - **목표**: Python(`s1ops`)에서 오프라인으로 컴파일한 `fits.json`과 `policy.json`을 Node.js / Edge 런타임이나 `agent-harness` 생태계(`decision-plane`, `tracegraph`)에서 즉시 소비할 수 있도록 연결합니다.
+- **소유자 결정 (2026-10-26): TS SDK 보류.** 알려진 TS 소비자가 없고 `decision-plane`·`tracegraph`는 둘 다 Python. 아래 세 결정은 착수 시 적용할 사전 결정. 착수 조건: Python 없이 `fits.json`/`policy.json`을 평가해야 하는 실사용처가 생기고, 그 런타임(Node / Edge 엔진), 필요한 primitive·calibrator, 동기·비동기 API가 정해질 때
 - **세부 설계**:
-  - [ ] **`packages/ts` (`@memtomem/sys1`) 스캐폴딩**: (npm `@memtomem` scope 소유 여부는 미확인; 2026-10-25 기준 `@memtomem/sys1`은 404, scope 내 패키지 0개)
+  - [ ] **`packages/ts` 스캐폴딩** (보류)
     - 외부 무거운 의존성 없이 `fits.json`(`temperature` / `platt` / `isotonic`)과 `policy.json`(`s1-policy/1`, `policy_sha256` 검증)을 로드하는 TypeScript `DecisionGate` 클래스 구현
-    - `import { System1, DecisionGate } from '@memtomem/sys1'` 지원
-  - [ ] **`agent-harness` 연동 어댑터**:
-    - `decision-plane`: 라우팅 정책 로더에서 `s1-policy/1` 아티팩트 로드 및 `model_served` 불일치 시 서킷 브레이커 작동
-    - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.escalated`) 수집 및 시각화 연동
+    - **이름: unscoped `s1ops`** (`import { DecisionGate } from 's1ops'`). PyPI 이름과 같게. 2026-10-26 기준 `s1ops`·`@s1ops/runtime`·`@memtomem/sys1` 모두 registry 404(미등록, 선점 가능). npm `@memtomem` org는 존재하며 owner는 npm 계정 `memtomem`(`npm org ls memtomem`) → 선점이 문제가 되면 `@memtomem/s1ops`
+    - **레이아웃: 이 repo의 `packages/ts`**. `routing_rule`·`s1-policy/1`·해시 규칙이 바뀌는 커밋에서 Python과 TS를 함께 검증
+    - **parity는 두 층**: (A) 보정된 분포의 라우팅은 bit 동일을 CI 게이트로 강제하며 두 단계를 따로 대조: ① choice/score 재정규화(`records.parse_record`, `gate._normalized`·`gate._calibrated`가 `probability_total` = `math.fsum`로 나눔; noul은 `(1 - p, p)`로 만들 뿐 재정규화하지 않음) — JS에 CPython `math.fsum`과 같은 결과의 정확 합산 필요, ② 이미 정규화된 같은 입력에 대한 `routing.route`(비교만 함, tie-safe). `route` 안에서 다시 정규화하면 경계 판정이 달라짐. (B) 보정 포함 평가는 `temperature`·`platt`의 `exp`/`log`가 엔진마다 마지막 비트가 다를 수 있어 "지원 런타임에서 검증"만 약속(허용 오차 비교는 threshold 경계의 결정을 바꾸므로 쓰지 않음). 기준값은 Python 3.11이 만든 golden vector + 경계값 생성 테스트, 지원 런타임별로 실행
+    - `policy_sha256`은 해시 대상 바이트 규칙(필드, 키 순서, 숫자 직렬화)을 먼저 명세하고 두 언어가 같은 바이트를 만드는지 테스트
+    - **배포: 인증 방식 미정.** private repo에서 npm trusted publishing(OIDC)이 되는지, provenance가 repo 경로를 공개하는지 확인한 뒤 OIDC / 토큰 선택. 버전은 Python과 독립(호환성은 지원하는 `s1-policy/1`·`routing_rule`·fits 형식 표로), `ts-vX.Y.Z` 태그 + 수동 dispatch(태그·`package.json`·검증 커밋 일치), `files` 허용 목록과 `npm pack` 결과물 전체를 검사하는 repo 이름 노출 게이트
+  - [ ] **`agent-harness` 연동 어댑터**: 2026-10-26 확인 — 둘 다 아직 s1ops 아티팩트를 소비하지 않음. `decision-plane`(`jev-toolgate`)의 runtime 의존성은 `typesafe-sdk`뿐이고 `policy_sha256`이라는 필드는 없음(evals receipt의 `baseline_`/`hypothesis_`/`strata_policy_sha256`은 rules 파일 바이트의 해시, `s1-policy/1`과 무관). `tracegraph`의 OTLP 어댑터는 OpenInference 종류(`openinference.span.kind`)와 그래프·실행 메타데이터(`graph.node.*`, `syncmill.run_id`, 예외 속성)를 읽지만 `s1.*` 속성은 다루지 않음. 연동은 Python(PyPI `s1ops`)으로
+    - `decision-plane` (소유자 결정 2026-10-26: 목표 재정의): **raw p 임계값 `ask_at`(기본 0.3, `jev_toolgate/worker.py`·`policy.py`)을 s1ops 보정 라우팅(`fits.json` + `policy.json` → `routing.route`)으로 교체**. decision-plane에는 별도의 라우팅 정책 로더가 없고, 붙일 자리는 이 판정
+      - 연동 조건: **판정 매핑을 명시.** 이름이 반대 방향이라 그대로 연결하면 위험 판단이 뒤집힘. decision-plane은 `p_risky ≥ ask_at`이면 ASK(모델 단독 DENY는 `deny_at`으로만, 기본 꺼짐)인데, s1ops noul `route`는 높은 p에 `ALLOW`(예측 참), 낮은 p에 `BLOCK`, 불확실하면 `ESCALATE`를 냄(`error_budget`·band 모두). 질문이 "위험한가"일 때 매핑: `ALLOW`(위험 예측) → ASK(DENY는 명시적으로 켰을 때만), `BLOCK`(안전 예측) → ALLOW, `ESCALATE` → ASK. 결정적 규칙의 하한과 판정 실패 시 ASK(`judgment_failed`)는 그대로 유지. 지금은 세 질문의 raw p 최댓값 하나로 판정(`worker.py`)하므로, 질문별 보정·라우팅 결과를 합치는 규칙(예: 하나라도 ASK면 ASK)도 정해야 함
+      - 전제 조건: **numpy·scipy·sklearn과 `s1ops/__init__` 연쇄 없이 import되는 runtime 경로.** 훅이 도구 호출마다 worker 자식 프로세스를 띄우므로(`hook.py`, `DEFAULT_DEADLINE_S = 5.0`) import 시간이 매 호출에 붙음. 실측(2026-10-26, 데워진 캐시, `python -X importtime`, 4회): `import s1ops.runtime.gate` 0.548–0.571초, 그중 `s1ops.improve.calibrate` 약 0.46초(`sklearn.isotonic` 약 0.27초 + 맨 위의 `scipy.optimize`·`scipy.special`·numpy). sklearn만 빼면 절반가량 남음. 현재 경로를 그대로 쓰면 decision-plane runtime 의존성에 numpy·scipy·sklearn이 추가됨
+      - 알려진 한계(선행 조건 아님): `model_served` 검사는 이미 있음(`backend.py`의 `"served a different model"`). 하지만 Kev는 요청한 모델 이름을 그대로 `model`로 돌려주므로(decision-plane README) policy의 `model_served`와 비교해도 설정의 이름 불일치만 잡고 checkpoint 교체는 못 잡음
+    - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.policy_action` — 위임 여부는 `== "ESCALATE"`) 수집 및 시각화 연동
   - [ ] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**:
     - Langfuse Annotation Queue에서 검수 완료된 항목을 가져와 로컬 골드셋 패치 → `s1 fit` → `s1 policy tune` 재컴파일 루프 자동화
 

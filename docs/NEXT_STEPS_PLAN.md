@@ -108,7 +108,11 @@
   - [x] **`parse_record`이 `calib.probabilities` 키가 raw `probabilities` 키와 다르면 `RecordError`**(줄 번호 포함): 이전엔 `s1 drift`(기본 `use_calib`) 등이 `KeyError` traceback으로 죽었고, exporter가 parse된 레코드로 판정하게 되면서 export에도 번질 뻔함
   - [x] **`s1 gate --probs '{"A":0.7,"B":0.3}'`**: `--p`와 상호 배타. 질문의 primitive와 맞지 않는 플래그는 exit 1로 올바른 플래그를 안내. `--probs`는 JSON 객체만, NaN·중복 키 거부
   - [x] **noul 확률 검사** (#15): `evaluate_noul`이 `p_raw`를 검사하지 않아 `1.5`는 ALLOW, NaN은 `error_budget`에서 BLOCK(모든 비교가 거짓)되고 band에선 `s1 gate`가 잘못된 JSON(`NaN`)을 출력했음 → choice/score와 같은 `_probability`로 거부(`ValueError`, exit 1). 정책 조회가 먼저라 `model_served` 불일치는 여전히 exit 3. 숫자 타입은 `numbers.Real`(NumPy 스칼라, `Fraction`)을 받고 bool은 거부, 결과는 plain `float`. 같은 결함이 exporter에도 있었음: noul `calib.p`를 `float()`로만 읽어 `"nan"`이 BLOCK, `1.5`가 ALLOW로 export됨 → choice/score처럼 `parse_record(use_calib=True)`로 다시 파싱해 `RecordError`(줄 번호). 정상 레코드의 export 값은 그대로
-  - 범위 밖으로 남긴 것: `records.parse_record`가 score 키 `"0"`과 `"00"`을 한 레벨로 접어 확률 합이 줄어듦(`{"0":0.2,"00":0.3,"1":0.5}` → 합 0.8, #13); 데모 워크스페이스에 choice/score 레코드 없음(#16)
+  - [x] **score 레벨 규칙 하나** (#13, #18): `records.score_level` / `score_levels`를 파서, gate, `compare_records`, exporter가 함께 씀. 키는 음이 아닌 int 또는 1~20자 ASCII 숫자 문자열, 값은 `0..2**53`, 같은 레벨을 가리키는 두 키는 거부
+    - 이전: 파서가 `"0"`과 `"00"`을 한 레벨로 접어 확률 합이 줄어듦(`{"0":0.2,"00":0.3,"1":0.5}` → 합 0.8); 4300자리를 넘는 키는 줄 번호 없이 Python의 `int()` 메시지로 실패; 파서는 401자리 레벨도 받아 `s1 fit`·`policy tune`·`drift`·`export`가 그대로 썼고 `s1 audit`는 `OverflowError` traceback(gate는 #12부터 float 최댓값까지만 받음); `compare_records`에 dict를 넘기면 score 키를 검사하지 않음
+    - 상한 `2**53`: 모든 레벨이 정확한 float이라 두 레벨이 같은 float로 반올림되지 않고(`float(2**53+1) == float(2**53)`), 레벨 합산이 overflow하지 않음(float 최댓값 근처 레벨 세 개로 MAE가 inf가 됨). gate의 #12 상한(float 최댓값)보다 좁아짐(미배포)
+    - 20자 제한: 0을 길게 덧붙인 키를 정규화하는 대신 거부. `int()`가 20자를 넘는 문자열을 보지 않으므로 `sys.get_int_max_str_digits()` 설정과 무관
+  - 범위 밖으로 남긴 것: 데모 워크스페이스에 choice/score 레코드 없음(#16)
 
 ---
 

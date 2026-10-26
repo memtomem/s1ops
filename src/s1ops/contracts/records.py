@@ -28,6 +28,10 @@ ANSWER_KEYS = {
     "score": ("score", "probabilities", "confidence"),
 }
 DEFAULT_SUM_TOL = 0.02
+MAX_SCORE_LEVEL = 2**53
+"""Every level up to it is an exact float, so two levels never round to one and no sum over levels
+overflows."""
+_MAX_LEVEL_DIGITS = 20
 
 
 class RecordError(ValueError):
@@ -106,10 +110,48 @@ def _string(value: object, what: str, line: int) -> str:
     return value
 
 
-def _level(key: str, line: int) -> int:
-    if not (isinstance(key, str) and key.isascii() and key.isdigit()):
-        raise RecordError(line, f"score level keys must be non-negative integers as strings, got {key!r}")
-    return int(key)
+def score_level(key: object) -> int:
+    """The level a score key names: a non-negative int (never a bool) or a string of 1 to 20 ASCII
+    digits (`"01"` is level 1), at most `MAX_SCORE_LEVEL`.
+
+    The length is checked before `int()`, which raises its own error past
+    `sys.get_int_max_str_digits()`.
+    """
+    if isinstance(key, str) and key.isascii() and key.isdigit():
+        if len(key) > _MAX_LEVEL_DIGITS:
+            raise ValueError(f"score level {short_repr(key)} is too large: keys have at most {_MAX_LEVEL_DIGITS} digits")
+        level = int(key)
+    elif isinstance(key, int) and not isinstance(key, bool) and key >= 0:
+        level = key
+    else:
+        raise ValueError(f"score levels must be non-negative integers or their decimal strings, got {short_repr(key)}")
+    if level > MAX_SCORE_LEVEL:
+        raise ValueError(f"score level {short_repr(key)} is too large: the largest is 2**53")
+    return level
+
+
+def short_repr(value: object) -> str:
+    """`repr` cut to about 40 characters for an error message. A large int is described by its size:
+    `repr` would convert all of it to decimal first, which is slow when the digit limit is off."""
+    if isinstance(value, str):
+        return repr(value[:40]) + (f"... ({len(value)} characters)" if len(value) > 40 else "")
+    if isinstance(value, int) and value.bit_length() > 64:
+        return f"<int of {value.bit_length()} bits>"
+    try:
+        return f"{value!r:.40}"
+    except ValueError:  # an int past sys.get_int_max_str_digits()
+        return f"<{type(value).__name__} too large to print>"
+
+
+def score_levels(keys: Iterable[object]) -> dict[int, object]:
+    """Map each key's level to the key, refusing two keys that name one level (`"0"` and `"00"`)."""
+    named: dict[int, object] = {}
+    for key in keys:
+        level = score_level(key)
+        if level in named:
+            raise ValueError(f"score keys {short_repr(named[level])} and {short_repr(key)} both name level {level}")
+        named[level] = key
+    return named
 
 
 def probability_total(values: Iterable[float]) -> float:
@@ -212,7 +254,13 @@ def parse_record(
         classes: tuple = tuple(dist_raw)
         probs = tuple(dist[c] / total for c in classes)
     else:
-        levels = {_level(k, line): v for k, v in dist.items()}
+        not_str = next((k for k in dist if not isinstance(k, str)), None)
+        if not_str is not None:
+            raise RecordError(line, f"score level keys must be strings of digits, got {short_repr(not_str)}")
+        try:
+            levels = {level: dist[k] for level, k in score_levels(dist).items()}
+        except ValueError as e:
+            raise RecordError(line, str(e)) from None
         _number(row["score"], "score", line)
         if label is not None and (isinstance(label, bool) or not isinstance(label, int)):
             raise RecordError(line, f"score label must be an integer level, got {label!r}")

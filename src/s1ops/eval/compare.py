@@ -6,7 +6,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from s1ops.contracts.records import SCHEMAS, read_records
+from s1ops.contracts.records import SCHEMAS, read_records, score_level, score_levels
 
 SUM_TOLERANCE = 0.02
 
@@ -60,6 +60,11 @@ def validate(record: dict) -> None:
             raise CompareInputError(f"{kind} probabilities sum to {sum(dist.values()):.4f}, outside 1 ± {SUM_TOLERANCE}")
         if kind == "choice" and record.get("choice") not in dist:
             raise CompareInputError(f"choice {record.get('choice')!r} is not one of its probability labels")
+        if kind == "score":
+            try:
+                score_levels(dist)
+            except ValueError as e:
+                raise CompareInputError(str(e)) from None
     else:
         raise CompareInputError(f"unknown primitive {kind!r}")
 
@@ -86,7 +91,7 @@ def compare(primary: dict, shadow: dict) -> Disagreement:
         )
     if kind == "score":
         a, b = primary["probabilities"], shadow["probabilities"]
-        pa, pb = int(_top(a)), int(_top(b))
+        pa, pb = score_level(_top(a)), score_level(_top(b))
         return Disagreement(
             primary.get("dataset"), primary["item_id"], primary["question_id"], kind, _tvd(a, b), pa != pb, pa, pb, label
         )

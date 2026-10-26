@@ -17,7 +17,7 @@ from typing import Any
 
 import numpy as np
 
-from s1ops.contracts.records import DEFAULT_SUM_TOL, GroupKey, probability_total
+from s1ops.contracts.records import DEFAULT_SUM_TOL, GroupKey, probability_total, score_levels, short_repr
 from s1ops.contracts.schemas import PolicyEntry, load_policies
 from s1ops.improve.calibrate import Fit, load_fits, transform
 from s1ops.runtime.routing import route
@@ -183,12 +183,7 @@ class DecisionGate:
         """Route a score answer. Keys are levels: non-negative integers or their decimal strings."""
         if not isinstance(probs_raw, Mapping):
             raise ValueError(f"score probabilities must be a mapping of level to probability, got {probs_raw!r}")
-        levels: dict[int, float] = {}
-        for k, v in probs_raw.items():
-            level = _level(k)
-            if level in levels:
-                raise ValueError(f"score level {k!r} repeats level {level}")
-            levels[level] = v
+        levels = {level: probs_raw[k] for level, k in score_levels(probs_raw).items()}
         classes = sorted(levels)
         return self._evaluate_categorical(
             (question_id, model_served, "score"),
@@ -253,25 +248,11 @@ def _calibrated(fit: Fit, classes: list, raw: list[float]) -> list[float]:
     return [Q[c] / total for c in classes]
 
 
-def _level(key: object) -> int:
-    if isinstance(key, int) and not isinstance(key, bool) and key >= 0:
-        level = key
-    elif isinstance(key, str) and key.isascii() and key.isdigit():
-        level = int(key)
-    else:
-        raise ValueError(f"score levels must be non-negative integers or their decimal strings, got {key!r:.40}")
-    try:
-        float(level)  # expected_score multiplies by it
-    except OverflowError:
-        raise ValueError(f"score level {key!r:.40} is too large") from None
-    return level
-
-
 def _probability(value: object, what: str) -> float:
     """A probability as a plain float. Any real number type is taken (NumPy scalars, `Fraction`),
     never a bool."""
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
-        raise ValueError(f"{what} must be a number, got {_shown(value)}")
+        raise ValueError(f"{what} must be a number, got {short_repr(value)}")
     try:
         x = float(value)
         # The range is checked on the value itself: a Fraction just above 1 rounds to 1.0.
@@ -279,15 +260,8 @@ def _probability(value: object, what: str) -> float:
     except (TypeError, ValueError, OverflowError):
         ok = False
     if not ok:
-        raise ValueError(f"{what} must be a finite number in [0, 1], got {_shown(value)}")
+        raise ValueError(f"{what} must be a finite number in [0, 1], got {short_repr(value)}")
     return x
-
-
-def _shown(value: object) -> str:
-    try:
-        return f"{value!r:.40}"
-    except ValueError:  # an int past sys.get_int_max_str_digits()
-        return f"<{type(value).__name__} too large to print>"
 
 
 def _normalized(classes: Sequence, values: Sequence[object]) -> list[float]:

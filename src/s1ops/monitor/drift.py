@@ -21,13 +21,53 @@ from typing import Any
 
 import numpy as np
 
-from s1ops.contracts.records import GroupKey, Record, read_records
+from s1ops.contracts.records import GroupKey, Record, has_calib, parse_record, read_records
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.runtime.routing import RoutingInputError, route_record
 
 PSI_EPS = 1e-4
 PSI_WARN = 0.10
 PSI_CRITICAL = 0.25
+
+
+class DriftInputError(ValueError):
+    """`audit_drift(use_calib=True)` was given an answered record without calibrated
+    probabilities. Carries the 1-based line and the side (`"reference"` or `"current"`)."""
+
+    def __init__(self, line: int, message: str, side: str) -> None:
+        self.line, self.message, self.side = line, message, side
+        super().__init__(f"{side} records: line {line}: {message}")
+
+
+def _answered(rec: Record) -> bool:
+    return rec.model_served is not None and bool(rec.probs)
+
+
+def _compared(records: Sequence[Record], use_calib: bool, side: str) -> list[Record]:
+    """`records` with each answered one re-parsed from its `raw` on the distribution the run
+    compares, so the result does not depend on how the caller parsed them.
+
+    A stored `calib` is validated in both modes. With `use_calib`, every answered record must carry
+    one: falling back to raw per record would compare calibrated against raw probabilities.
+    """
+    out: list[Record] = []
+    for r in records:
+        if not _answered(r):
+            out.append(r)
+            continue
+        checked = parse_record(r.raw, r.line, use_calib=True)
+        if not use_calib:
+            out.append(parse_record(r.raw, r.line))
+        elif has_calib(r.raw, r.primitive):
+            out.append(checked)
+        else:
+            raise DriftInputError(
+                r.line,
+                "a calibrated comparison needs calibrated probabilities and this record has none; "
+                "run `s1 apply` on both files, or compare raw probabilities",
+                side,
+            )
+    return out
 
 
 def _shannon_entropy(probs: Sequence[float]) -> float:
@@ -175,18 +215,25 @@ def audit_drift(
     *,
     policies: Sequence[PolicyEntry] | None = None,
     bins: int = 10,
-    use_calib: bool = True,
+    use_calib: bool = False,
 ) -> dict[str, Any]:
-    """Compare reference records against current records per `question_id`."""
-    if isinstance(ref_records, (str, Path)):
-        refs = read_records(ref_records, require_answer=True, use_calib=use_calib)
-    else:
-        refs = list(ref_records)
-    if isinstance(cur_records, (str, Path)):
-        curs = read_records(cur_records, require_answer=True, use_calib=use_calib)
-    else:
-        curs = list(cur_records)
+    """Compare reference records against current records per `question_id`.
 
+    The distributions compared (PSI, JS divergence, quantiles, entropy) are the raw ones, or with
+    `use_calib` the calibrated ones, which every answered record on both sides must then carry
+    (`DriftInputError` otherwise). The escalation rate routes what each policy was tuned on either
+    way.
+
+    Records passed in are re-parsed from their `raw` with the default `sum_tol`, validating any
+    stored `calib` in both modes, so one the caller parsed without `use_calib` or with a looser
+    tolerance can raise `RecordError` here.
+    """
+    if isinstance(ref_records, (str, Path)):
+        ref_records = read_records(ref_records, require_answer=True)
+    if isinstance(cur_records, (str, Path)):
+        cur_records = read_records(cur_records, require_answer=True)
+    refs = _compared(list(ref_records), use_calib, "reference")
+    curs = _compared(list(cur_records), use_calib, "current")
 
     pol_by_key: dict[GroupKey, PolicyEntry] = {(p.question_id, p.model_served, p.primitive): p for p in policies or ()}
 
@@ -205,8 +252,8 @@ def audit_drift(
         c_all = cur_by_q[qid]
         prim = r_all[0].primitive
 
-        r_ok = [r for r in r_all if r.model_served is not None and r.probs]
-        c_ok = [r for r in c_all if r.model_served is not None and r.probs]
+        r_ok = [r for r in r_all if _answered(r)]
+        c_ok = [r for r in c_all if _answered(r)]
 
         fail_ref = (len(r_all) - len(r_ok)) / len(r_all) if r_all else 0.0
         fail_cur = (len(c_all) - len(c_ok)) / len(c_all) if c_all else 0.0
@@ -295,6 +342,7 @@ def audit_drift(
     counts = Counter(r.status for r in reports)
     return {
         "schema": "s1-drift-report/1",
+        "distribution": "calibrated" if use_calib else "raw",
         "summary": {
             "n_questions": len(reports),
             "ok": counts["OK"],

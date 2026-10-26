@@ -12,7 +12,7 @@ distribution.
 import json
 import math
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -162,6 +162,13 @@ def probability_total(values: Iterable[float]) -> float:
     would change the last bit, and with it which side of a tuned threshold an answer lands on.
     """
     return math.fsum(values)
+
+
+def has_calib(row: Mapping[str, object], primitive: str) -> bool:
+    """Whether a record row carries the calibrated distribution `parse_record(use_calib=True)`
+    reads for its primitive: `calib.p` for noul, `calib.probabilities` for choice and score."""
+    calib = row.get("calib")
+    return isinstance(calib, dict) and ("p" if primitive == "noul" else "probabilities") in calib
 
 
 def _distribution(value: object, line: int, sum_tol: float) -> dict[str, float]:

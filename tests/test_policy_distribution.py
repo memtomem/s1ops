@@ -203,11 +203,15 @@ def test_demo_drift_routes_only_the_policys_model(demo, capsys) -> None:
     (q,) = json.loads(capsys.readouterr().out)["questions"]
     assert q["escalation_rate_ref"] == gate_rate(demo["rows"])
     assert q["escalation_rate_cur"] == gate_rate(own)
-    # --raw-only changes what PSI compares, not what the policy routes.
+    # The default compares raw probabilities, which --raw-only (from 0.1.0) still names.
     assert cli_main(["drift", ws["records"], ws["records_canary"], "--policy", ws["policy"], "--raw-only"]) == 0
     (raw_only,) = json.loads(capsys.readouterr().out)["questions"]
-    assert (raw_only["escalation_rate_ref"], raw_only["escalation_rate_cur"]) == (q["escalation_rate_ref"], q["escalation_rate_cur"])
-    assert raw_only["psi"] != q["psi"]
+    assert raw_only == q
+    # --calibrated changes what PSI compares, not what the policy routes; the demo canary's
+    # jev-1.14.0-rc1 records have no calib, so it is refused at the first of them.
+    first = next(n for n, r in enumerate(canary, start=1) if "calib" not in r)
+    assert cli_main(["drift", ws["records"], ws["records_canary"], "--policy", ws["policy"], "--calibrated"]) == 1
+    assert capsys.readouterr().err.startswith(f"s1: current records: line {first}: a calibrated comparison")
 
 
 def test_demo_canary_calibrates_only_the_policys_model(demo) -> None:

@@ -51,4 +51,4 @@ No linter or type checker is configured in `pyproject.toml`. CI (`.github/workfl
 
 ## Related repos
 
-This SDK consolidates prototypes from `jev-utils` (`/Users/pdstudio/work/jev-utils`) and keeps `jev-record/1` / `jev-calib-fit/2` compatibility. Downstream consumers: `decision-plane` (loads `fits.json` + `policy.json`) and `tracegraph` (ingests `s1 export phoenix` spans), both under `/Users/pdstudio/Work/agent-harness/`.
+This SDK consolidates prototypes from `jev-utils` (`/Users/pdstudio/work/jev-utils`) and keeps `jev-record/1` / `jev-calib-fit/2` compatibility. Planned downstream consumers, neither integrated yet (checked 2026-10-26): `decision-plane` (to load `fits.json` + `policy.json`) and `tracegraph` (to ingest `s1 export phoenix` spans), both under `/Users/pdstudio/Work/agent-harness/`.

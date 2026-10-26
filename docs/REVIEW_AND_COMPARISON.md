@@ -56,6 +56,6 @@ System 1의 아이덴티티(**서브 100ms 반응성, 반사신경(Reflex), 직�
 - **`jev-utils` (`/Users/pdstudio/work/jev-utils`)**:
   - `jev-calib`, `jev-lint`, `jev-labelaudit`, `jev-shadow`, `jev-escalate`, `jev-ops`, `jev-answerable`, `jev-judge`에 흩어져 있던 프로토타입의 수학적 불변식과 데이터 계약을 `s1ops` 단일 SDK 및 CLI로 통합 계승했습니다.
 - **`decision-plane` (`/Users/pdstudio/Work/agent-harness/decision-plane`)**:
-  - 런타임 라우터/게이트 역할을 담당하며, `s1ops`가 오프라인에서 컴파일한 `fits.json`과 `policy.json` (`policy_sha256` 지문 포함)을 소비하여 온라인 트래픽을 제어합니다.
+  - 런타임 라우터/게이트 역할. `s1ops`가 오프라인에서 컴파일한 `fits.json`과 `policy.json` (`policy_sha256` 지문 포함)을 소비해 온라인 트래픽을 제어하는 연동을 계획 중이며, 2026-10-26 기준 미구현([NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md) Track 4).
 - **`tracegraph` (`/Users/pdstudio/Work/agent-harness/tracegraph`)**:
-  - `s1 export phoenix`가 출력하는 `safe-v1` OpenInference JSONL 스팬(단일 통화 비용 가드, `OK`/`ERROR`/`UNSET` 상태 정규화)을 그대로 수집·시각화할 수 있습니다.
+  - `s1 export phoenix`가 출력하는 `safe-v1` OpenInference JSONL 스팬(단일 통화 비용 가드, `OK`/`ERROR`/`UNSET` 상태 정규화)의 수집·시각화 연동을 계획 중. 2026-10-26 기준 `s1.*` 속성 처리는 없고, 그대로 수집되는지는 검증하지 않음.

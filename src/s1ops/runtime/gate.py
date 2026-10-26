@@ -9,6 +9,7 @@ through the shared `route` rule (`error_budget` or `escalation_band`) in sub-mil
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -124,15 +125,16 @@ class DecisionGate:
     ) -> GateDecision:
         key: GroupKey = (question_id, model_served, "noul")
         pol = self._policy(key, expected_policy_sha256)
+        p = _probability(p_raw, "p_raw")
 
         p_cal: float | None = None
         fit = self._fits.get(key)
         if fit is not None:
-            P = np.array([[1.0 - float(p_raw), float(p_raw)]], dtype=float)
+            P = np.array([[1.0 - p, p]], dtype=float)
             Q = transform(fit.method, "noul", fit.params, P)
             p_cal = float(Q[0, 1])
 
-        p_eff = p_cal if (pol.calibrated and p_cal is not None) else float(p_raw)
+        p_eff = p_cal if (pol.calibrated and p_cal is not None) else p
         routed = route(pol, (False, True), (1.0 - p_eff, p_eff))
 
         return GateDecision(
@@ -142,7 +144,7 @@ class DecisionGate:
             action=routed.action,
             escalated=routed.escalated,
             predicted=routed.predicted,
-            p_raw=round(float(p_raw), 6),
+            p_raw=round(p, 6),
             p_calibrated=round(p_cal, 6) if p_cal is not None else None,
             p_effective=round(p_eff, 6),
             policy_sha256=pol.policy_sha256,
@@ -265,21 +267,34 @@ def _level(key: object) -> int:
     return level
 
 
+def _probability(value: object, what: str) -> float:
+    """A probability as a plain float. Any real number type is taken (NumPy scalars, `Fraction`),
+    never a bool."""
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        raise ValueError(f"{what} must be a number, got {_shown(value)}")
+    try:
+        x = float(value)
+        # The range is checked on the value itself: a Fraction just above 1 rounds to 1.0.
+        ok = math.isfinite(x) and 0 <= value <= 1
+    except (TypeError, ValueError, OverflowError):
+        ok = False
+    if not ok:
+        raise ValueError(f"{what} must be a finite number in [0, 1], got {_shown(value)}")
+    return x
+
+
+def _shown(value: object) -> str:
+    try:
+        return f"{value!r:.40}"
+    except ValueError:  # an int past sys.get_int_max_str_digits()
+        return f"<{type(value).__name__} too large to print>"
+
+
 def _normalized(classes: Sequence, values: Sequence[object]) -> list[float]:
     """Validate a distribution and renormalize it exactly as `parse_record` does."""
     if len(classes) < 2:
         raise ValueError(f"need at least two classes, got {list(classes)!r}")
-    probs: list[float] = []
-    for c, v in zip(classes, values):
-        if isinstance(v, bool) or not isinstance(v, (int, float)):
-            raise ValueError(f"probability for {c!r} must be a number, got {v!r}")
-        try:
-            finite = math.isfinite(v)
-        except OverflowError:
-            finite = False
-        if not finite or not 0.0 <= v <= 1.0:
-            raise ValueError(f"probability for {c!r} must be a finite number in [0, 1], got {v!r:.40}")
-        probs.append(float(v))
+    probs = [_probability(v, f"probability for {c!r}") for c, v in zip(classes, values)]
     total = probability_total(probs)
     if abs(total - 1.0) > DEFAULT_SUM_TOL:
         raise ValueError(f"probabilities sum to {total:.6g}, not 1 within {DEFAULT_SUM_TOL}")

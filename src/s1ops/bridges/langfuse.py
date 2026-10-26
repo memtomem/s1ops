@@ -39,7 +39,8 @@ def _predict_info(
 
     if record.primitive == "noul":
         p_raw = float(raw_row["p"])
-        p_cal = float(calib["p"]) if calib and "p" in calib else None
+        # The parser checks calib.p, as drift sees it.
+        p_cal = parse_record(raw_row, record.line, use_calib=True).probs[1] if calib and "p" in calib else None
         p_eff = p_cal if p_cal is not None else p_raw
         brier_val: float | None = None
         if isinstance(record.label, bool):

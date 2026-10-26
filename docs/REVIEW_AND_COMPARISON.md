@@ -47,7 +47,7 @@ System 1의 아이덴티티(**서브 100ms 반응성, 반사신경(Reflex), 직�
 - **PyPI 패키지**: `s1ops` (`pip install s1ops` / `uv add s1ops`)
 - **Python 임포트**: `import s1ops` 및 단축 별칭 `import s1` 동시 지원
 - **CLI 명령어**: `s1` 및 `s1ops` 동시 등록 (`$ s1 audit`, `$ s1 fit`, `$ s1 policy tune`, `$ s1 web` 등)
-- **향후 Node/TS 패키지 (Phase 3)**: `@memtomem/sys1` (최초 채택안 `@pandas-studio/sys1`에서 변경)
+- **향후 Node/TS 패키지**: unscoped `s1ops` (2026-10-26 결정, PyPI 이름과 같게; 이전 안 `@pandas-studio/sys1` → `@memtomem/sys1`). TS SDK 자체는 보류, [NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md) Track 4
 
 ---
 

@@ -133,14 +133,19 @@
 
 ---
 
-### Track 4. TypeScript 경량 런타임 SDK (`@memtomem/sys1`) 및 `agent-harness` 연동
+### Track 4. TypeScript 경량 런타임 SDK (`s1ops` npm) 및 `agent-harness` 연동
 
 - **목표**: Python(`s1ops`)에서 오프라인으로 컴파일한 `fits.json`과 `policy.json`을 Node.js / Edge 런타임이나 `agent-harness` 생태계(`decision-plane`, `tracegraph`)에서 즉시 소비할 수 있도록 연결합니다.
+- **소유자 결정 (2026-10-26): TS SDK 보류.** 알려진 TS 소비자가 없고 `decision-plane`·`tracegraph`는 둘 다 Python. 아래 세 결정은 착수 시 적용할 사전 결정. 착수 조건: Python 없이 `fits.json`/`policy.json`을 평가해야 하는 실사용처가 생기고, 그 런타임(Node / Edge 엔진), 필요한 primitive·calibrator, 동기·비동기 API가 정해질 때
 - **세부 설계**:
-  - [ ] **`packages/ts` (`@memtomem/sys1`) 스캐폴딩**: (npm `@memtomem` scope 소유 여부는 미확인; 2026-10-25 기준 `@memtomem/sys1`은 404, scope 내 패키지 0개)
+  - [ ] **`packages/ts` 스캐폴딩** (보류)
     - 외부 무거운 의존성 없이 `fits.json`(`temperature` / `platt` / `isotonic`)과 `policy.json`(`s1-policy/1`, `policy_sha256` 검증)을 로드하는 TypeScript `DecisionGate` 클래스 구현
-    - `import { System1, DecisionGate } from '@memtomem/sys1'` 지원
-  - [ ] **`agent-harness` 연동 어댑터**:
+    - **이름: unscoped `s1ops`** (`import { DecisionGate } from 's1ops'`). PyPI 이름과 같게. 2026-10-26 기준 `s1ops`·`@s1ops/runtime`·`@memtomem/sys1` 모두 registry 404(미등록, 선점 가능). npm `@memtomem` org는 존재하며 owner는 npm 계정 `memtomem`(`npm org ls memtomem`) → 선점이 문제가 되면 `@memtomem/s1ops`
+    - **레이아웃: 이 repo의 `packages/ts`**. `routing_rule`·`s1-policy/1`·해시 규칙이 바뀌는 커밋에서 Python과 TS를 함께 검증
+    - **parity는 두 층**: (A) 보정된 분포의 라우팅(`routing.route`: `fsum` 재정규화, tie-safe 비교)은 bit 동일을 CI 게이트로 강제. JS에 CPython `math.fsum`과 같은 결과의 정확 합산 필요. (B) 보정 포함 평가는 `temperature`·`platt`의 `exp`/`log`가 엔진마다 마지막 비트가 다를 수 있어 "지원 런타임에서 검증"만 약속(허용 오차 비교는 threshold 경계의 결정을 바꾸므로 쓰지 않음). 기준값은 Python 3.11이 만든 golden vector + 경계값 생성 테스트, 지원 런타임별로 실행
+    - `policy_sha256`은 해시 대상 바이트 규칙(필드, 키 순서, 숫자 직렬화)을 먼저 명세하고 두 언어가 같은 바이트를 만드는지 테스트
+    - **배포: 인증 방식 미정.** private repo에서 npm trusted publishing(OIDC)이 되는지, provenance가 repo 경로를 공개하는지 확인한 뒤 OIDC / 토큰 선택. 버전은 Python과 독립(호환성은 지원하는 `s1-policy/1`·`routing_rule`·fits 형식 표로), `ts-vX.Y.Z` 태그 + 수동 dispatch(태그·`package.json`·검증 커밋 일치), `files` 허용 목록과 `npm pack` 결과물 전체를 검사하는 repo 이름 노출 게이트
+  - [ ] **`agent-harness` 연동 어댑터**: 2026-10-26 확인 — 둘 다 아직 s1ops 아티팩트를 소비하지 않음. `decision-plane`(`jev-toolgate`)의 의존성은 `typesafe-sdk`뿐이고 `policy_sha256`은 자체 규칙 파일의 해시(`s1-policy/1` 아님). `tracegraph`의 OTLP 어댑터는 `openinference.span.kind`만 읽고 `s1.*` 속성은 다루지 않음. 연동은 Python(PyPI `s1ops`)으로
     - `decision-plane`: 라우팅 정책 로더에서 `s1-policy/1` 아티팩트 로드 및 `model_served` 불일치 시 서킷 브레이커 작동
     - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.escalated`) 수집 및 시각화 연동
   - [ ] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**:

@@ -12,6 +12,9 @@ Generates a complete, 100% offline System 1 evaluation workspace:
 - `states_local.jsonl`: local-only synthetic item states for blind review sheet generation
 - `judge_grades.jsonl`: rubric judge vs human grades (0..4) across 3 criteria
 - `fits.json` + `policy.json`: compiled calibration and routing policy artifacts
+- `records_categorical_train.jsonl` / `records_categorical.jsonl`: choice (`support_intent`) and score
+  (`urgency`) calibration and held-out folds (`jev-1.13.0`), the held-out one calibrated via
+  `fits_categorical.json`; `policy_categorical.json` is tuned on it, as `s1 policy tune --use-calib`
 """
 
 from __future__ import annotations
@@ -23,11 +26,11 @@ import random
 from pathlib import Path
 from typing import Any
 
-from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, question_id
+from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, ScoreQuestion, question_id
 from s1ops.contracts.records import parse_record, read_records, select
 from s1ops.contracts.schemas import PolicyEntry, save_policies
 from s1ops.eval.metrics import top_label
-from s1ops.improve.calibrate import apply_to_record, fit_group, save_fits
+from s1ops.improve.calibrate import apply_to_record, fit_for, fit_group, save_fits, sha256_file
 from s1ops.improve.policy import select_threshold
 
 
@@ -54,6 +57,15 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
             "account": "Account login or profile settings",
         },
     )
+    q_score = ScoreQuestion(
+        instructions="How urgent is the customer's request?",
+        criteria=[
+            "Not urgent: nothing is time-sensitive",
+            "Low: can wait a few days",
+            "High: needs action today",
+            "Critical: money or account access is at risk right now",
+        ],
+    )
     q_twin_choice = ChoiceQuestion(
         instructions="Does the user message request a financial wire transfer?",
         criteria={"yes": "Requests a wire transfer", "no": "Does not request a wire transfer"},
@@ -69,6 +81,7 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
     questions_doc = {
         "wire_transfer": q_noul.wire_dict(),
         "support_intent": q_choice.wire_dict(),
+        "urgency": q_score.wire_dict(),
         # Intentional lint examples for JL010, JL020, JL030, JL040
         "bad_negation_compound": {
             "type": "noul",
@@ -368,6 +381,8 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
         for obj in canary_objs:
             fh.write(json.dumps(obj, sort_keys=True) + "\n")
 
+    categorical = _categorical_workspace(out, seed, question_id(q_choice), list(q_choice.criteria), question_id(q_score))
+
     return {
         "questions": str(q_path),
         "records_train": str(train_path),
@@ -380,4 +395,110 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
         "fits": str(fits_path),
         "policy": str(policy_path),
         "judge_grades": str(judge_path),
+        **categorical,
+    }
+
+
+def _write_jsonl(path: Path, objs: list[dict[str, Any]]) -> None:
+    with path.open("w", encoding="utf-8") as fh:
+        for obj in objs:
+            fh.write(json.dumps(obj, sort_keys=True) + "\n")
+
+
+def _categorical_rows(
+    rng: random.Random, qid: str, primitive: str, classes: list, dataset: str, split: str, n: int
+) -> list[dict[str, Any]]:
+    """Overconfident categorical answers: nine in ten lean to the gold class, the rest to another
+    one, and the distribution is sharper than the evidence, so a temperature above 1 calibrates it.
+    Rounded to three decimals as an API returns them, so ties and non-unit sums occur."""
+    rows: list[dict[str, Any]] = []
+    k = len(classes)
+    for i in range(n):
+        y = rng.randrange(k)
+        lean = y if rng.random() < 0.9 else rng.choice([j for j in range(k) if j != y])
+        logits = [1.6 * (rng.gauss(0.0, 1.0) + (2.6 if j == lean else 0.0)) for j in range(k)]
+        top_logit = max(logits)
+        weights = [math.exp(x - top_logit) for x in logits]
+        probs = [round(w / sum(weights), 3) for w in weights]
+        top = max(range(k), key=lambda j: probs[j])
+        probs[top] = round(probs[top] + 1.0 - sum(probs), 3)
+        top = max(range(k), key=lambda j: probs[j])  # a negative residual can hand the top to a tied class
+        item_id = f"{dataset}-{primitive}-{i:04d}"
+        row: dict[str, Any] = {
+            "schema": "s1-record/1",
+            "dataset": dataset,
+            "split": split,
+            "item_id": item_id,
+            "state_sha256": _sha256(f"[{split.upper()} {primitive} {i}] Synthetic support message #{i}"),
+            "question_id": qid,
+            "primitive": primitive,
+            "model_requested": "jev-1.13.0",
+            "model_served": "jev-1.13.0",
+            "probabilities": {str(c): p for c, p in zip(classes, probs)},
+            "confidence": probs[top],
+            "label": classes[y],
+            "latency_ms": round(rng.uniform(20.0, 45.0), 2),
+            "timestamp": "2026-10-25T02:00:00Z",
+        }
+        if primitive == "choice":
+            row["choice"] = classes[top]
+        else:
+            # The expected level, as a score endpoint reports it.
+            row["score"] = round(sum(c * p for c, p in zip(classes, probs)), 6)
+        rows.append(row)
+    return rows
+
+
+def _categorical_workspace(out: Path, seed: int, qid_choice: str, options: list[str], qid_score: str) -> dict[str, str]:
+    """Choice and score folds, fitted, applied and tuned through written files, as the README's
+    `s1 fit` / `s1 apply` / `s1 policy tune --use-calib` run them. A separate rng leaves every
+    noul file as it was."""
+    rng = random.Random(f"categorical:{seed}")
+    levels = [0, 1, 2, 3]
+
+    train_path = out / "records_categorical_train.jsonl"
+    _write_jsonl(
+        train_path,
+        _categorical_rows(rng, qid_choice, "choice", options, "support-cal", "cal", 150)
+        + _categorical_rows(rng, qid_score, "score", levels, "support-cal", "cal", 150),
+    )
+    src_sha = sha256_file(train_path)
+    fits = [
+        fit_group(grp, method="temperature", split="cal", source_sha256=src_sha, min_n=30)
+        for grp in select(read_records(train_path), allow_model_mismatch=True).groups
+    ]
+    fits_path = out / "fits_categorical.json"
+    save_fits(fits, fits_path)
+
+    rec_path = out / "records_categorical.jsonl"
+    _write_jsonl(
+        rec_path,
+        _categorical_rows(rng, qid_choice, "choice", options, "support-eval", "eval", 150)
+        + _categorical_rows(rng, qid_score, "score", levels, "support-eval", "eval", 150),
+    )
+    _write_jsonl(rec_path, [apply_to_record(fit_for(fits, r.key), r) for r in read_records(rec_path, require_answer=True)])
+
+    policies = []
+    for grp in select(read_records(rec_path, use_calib=True), allow_model_mismatch=True).groups:
+        conf, correct = top_label(grp.P, grp.y)
+        policies.append(
+            PolicyEntry(
+                question_id=grp.question_id,
+                model_served=grp.model_served,
+                primitive=grp.primitive,
+                mode="error_budget",
+                split="eval",
+                n=grp.n,
+                threshold=select_threshold(conf, correct, budget=0.10),
+                error_budget=0.10,
+                calibrated=True,
+            )
+        )
+    policy_path = out / "policy_categorical.json"
+    save_policies(policies, policy_path)
+    return {
+        "records_categorical_train": str(train_path),
+        "records_categorical": str(rec_path),
+        "fits_categorical": str(fits_path),
+        "policy_categorical": str(policy_path),
     }

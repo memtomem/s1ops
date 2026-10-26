@@ -74,6 +74,8 @@ s1 demo s1-demo
 - `states_local.jsonl`: Synthetic item states for the blind review sheet and the probe runner.
 - `judge_grades.jsonl`: 90 paired rubric judge vs human grades across 3 criteria (`faithfulness`, `policy_compliance`, `tone`).
 - `fits.json` + `policy.json`: A compiled calibration fit and routing policy.
+- `records_categorical_train.jsonl` / `records_categorical.jsonl`: 150 + 150 choice (`support_intent`) and score (`urgency`) records per fold (`jev-1.13.0`, overconfident on purpose), the held-out fold with calibrated probabilities from `fits_categorical.json`.
+- `fits_categorical.json` + `policy_categorical.json`: their temperature fits and error-budget policies, tuned on calibrated probabilities. The web workbench reads the noul files only.
 
 ### 3. Run the End-to-End CLI Pipeline
 
@@ -91,6 +93,12 @@ s1 audit s1-demo/records.jsonl --fit s1-demo/fits.json
 # 3) Error-Budget Threshold & System 1->2 Escalation Band Compilation
 s1 policy tune s1-demo/records.jsonl -o s1-demo/policy.json --error-budget 0.10 --use-calib
 s1 policy curve s1-demo/records.jsonl --use-calib
+
+# 3b) The same for choice and score answers
+s1 fit s1-demo/records_categorical_train.jsonl -o s1-demo/fits_categorical.json --method temperature
+s1 apply s1-demo/records_categorical.jsonl --fit s1-demo/fits_categorical.json -o s1-demo/records_categorical_calibrated.jsonl
+s1 audit s1-demo/records_categorical.jsonl --fit s1-demo/fits_categorical.json
+s1 policy tune s1-demo/records_categorical.jsonl -o s1-demo/policy_categorical.json --error-budget 0.10 --use-calib
 
 # 4) Answerability Pre-Flight & Benjamini-Hochberg FDR Error Slice Mining
 s1 slice answerable s1-demo/records.jsonl --features s1-demo/features.jsonl
@@ -117,12 +125,18 @@ s1 probe s1-demo/questions.json --states s1-demo/states_local.jsonl \
   -o s1-demo/probe_live.jsonl --ledger s1-demo/probe_ledger.jsonl --cap-usd 0.50
 s1 gate s1-demo/policy.json --fit s1-demo/fits.json \
   --question q-30076be2728be682 --model jev-1.13.0 --p 0.52
-# a choice or score question takes its distribution instead of --p:
-#   s1 gate policy.json --fit fits.json --question <qid> --model <model> --probs '{"A": 0.7, "B": 0.3}'
+# a choice or score question takes its distribution instead of --p
+s1 gate s1-demo/policy_categorical.json --fit s1-demo/fits_categorical.json \
+  --question q-a70bd97f0b7f1055 --model jev-1.13.0 \
+  --probs '{"billing": 0.97, "technical": 0.02, "account": 0.01}'   # SELECT:billing
+s1 gate s1-demo/policy_categorical.json --fit s1-demo/fits_categorical.json \
+  --question q-5c05e56162b3eaa0 --model jev-1.13.0 \
+  --probs '{"0": 0.1, "1": 0.45, "2": 0.4, "3": 0.05}'   # ESCALATE
 
 # 9) Safe-v1 Body-Free Export to Langfuse & Arize Phoenix (OpenInference)
 s1 export langfuse s1-demo/records.jsonl -o s1-demo/langfuse_export.json --policy s1-demo/policy.json
 s1 export phoenix s1-demo/records.jsonl -o s1-demo/phoenix_spans.jsonl --policy s1-demo/policy.json
+s1 export phoenix s1-demo/records_categorical.jsonl -o s1-demo/phoenix_categorical.jsonl --policy s1-demo/policy_categorical.json
 ```
 
 **Live probes.** `s1 probe --backend systemone` sends each state and question to `POST /v1/systemone` (key in `TYPESAFE_API_KEY`, endpoint in `TYPESAFE_BASE_URL` or `--base-url`); `--backend openai` sends them to OpenAI's `POST /v1/decisions` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`, model `gpt-6-luna` by default) with prompt caching disabled, so the measured cost is exact. A question that API cannot take as written — a Noul with `criteria`, object (rather than string or input-part list) instructions, or option and level counts outside its limits — is refused before anything is reserved, rather than sent in a different form under the same `question_id`. A refused answer is recorded with `error_code: "refusal"`. `/v1/systemone` resolves an alias to the version that answered (`jev-latest` came back as `jev-1.14.0`), so a silent upgrade shows in `model_served`; `/v1/decisions` returned the alias `gpt-6-luna` itself, so a model change behind it is visible only as distribution drift. The APIs report billable input tokens, not dollars, so `--usd-per-input-token` is required. Every attempt reserves its worst case first (`--worst-usd-per-token`, plus `--reserve-overhead-tokens` for the prompt tokens a server bills on top of the state and question: 300 for systemone and 200 for openai by default: a short state was billed up to 216 and 98 tokens more than estimated, and about 236 and 118 extrapolated to an empty one) and is settled as measured, or, when the request may have been billed without a usable reported cost (timeout, connection error, HTTP error), at its full reservation. Timeouts, connection errors, 408, 429 and 5xx are retried up to `--max-retries` times. An item that still fails is written as a record with `model_served: null` and an `error_code`, which `s1 drift` counts as a failure. Records are written as they arrive, so a run stopped by `--cap-usd` or by a measured cost above its reservation keeps what it paid for. Error messages carry only an error code, never server text, since a server may echo the request.

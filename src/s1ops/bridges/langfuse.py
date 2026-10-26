@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from s1ops.contracts.records import Record, probability_total
+from s1ops.contracts.records import Record, parse_record
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.runtime.routing import ROUTING_RULE, route
 
@@ -85,17 +85,11 @@ def _predict_info(
     predicted = top_label
     action = f"SELECT:{top_label}"
     if policy is not None:
-        # Route on the distribution the tuner saw: renormalized, score levels as ascending integers.
-        # Exported labels stay as the record wrote them ("01" is not reported as "1").
-        if record.primitive == "score":
-            label_of = {int(k): k for k in probs_eff}
-            classes: list = sorted(label_of)
-        else:
-            label_of = {k: k for k in probs_eff}
-            classes = list(probs_eff)
-        values = [float(probs_eff[label_of[c]]) for c in classes]
-        total = probability_total(values)
-        routed = route(policy, classes, [v / total for v in values])
+        # Route the parsed distribution, as drift does; export labels as the record wrote them
+        # ("01" is not reported as "1").
+        parsed = parse_record(record.raw, record.line, use_calib=True) if probs_cal is not None else record
+        routed = route(policy, parsed.classes, parsed.probs)
+        label_of = {int(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
         predicted = label_of[routed.predicted]
         action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
 

@@ -253,10 +253,16 @@ def _calibrated(fit: Fit, classes: list, raw: list[float]) -> list[float]:
 
 def _level(key: object) -> int:
     if isinstance(key, int) and not isinstance(key, bool) and key >= 0:
-        return key
-    if isinstance(key, str) and key.isascii() and key.isdigit():
-        return int(key)
-    raise ValueError(f"score levels must be non-negative integers or their decimal strings, got {key!r}")
+        level = key
+    elif isinstance(key, str) and key.isascii() and key.isdigit():
+        level = int(key)
+    else:
+        raise ValueError(f"score levels must be non-negative integers or their decimal strings, got {key!r:.40}")
+    try:
+        float(level)  # expected_score multiplies by it
+    except OverflowError:
+        raise ValueError(f"score level {key!r:.40} is too large") from None
+    return level
 
 
 def _normalized(classes: Sequence, values: Sequence[object]) -> list[float]:

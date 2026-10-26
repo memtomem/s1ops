@@ -315,6 +315,8 @@ def test_choice_inputs_are_validated(probs: dict, message: str) -> None:
         ({True: 0.5, 2: 0.5}, "non-negative integers"),
         ({0: 0.2, "0": 0.3, 1: 0.5}, "repeats level 0"),
         ({"0": 0.2, "00": 0.3, "1": 0.5}, "repeats level 0"),
+        ({0: 0.1, 10**400: 0.9}, "too large"),
+        ({"0": 0.1, "1" + "0" * 400: 0.9}, "too large"),
     ],
 )
 def test_score_levels_are_validated(probs: dict, message: str) -> None:
@@ -470,6 +472,26 @@ def test_exporters_route_categorical_ties_and_null_threshold() -> None:
     assert _predict_info(padded, None)["predicted"] == "01"
     info = _predict_info(padded, _policy("score", threshold=0.8))
     assert (info["policy_action"], info["predicted"]) == ("SELECT:01", "01")
+
+
+@pytest.mark.parametrize("probs", [{"0": 0.2, "00": 0.3, "1": 0.5}, {"0": 1, "00": 0, "1": 0}])
+def test_exporters_and_drift_agree_on_colliding_score_keys(probs: dict) -> None:
+    # The parser folds "0" and "00" into one level (out of scope here); exporters must route
+    # whatever it produced, as drift does, rather than renormalize their own copy.
+    r = _record("score", score=1, confidence=0.5, probabilities=probs)
+    pol = _policy("score", threshold=0.6)
+    escalated = _escalation_rate([r], pol) == 1.0
+    assert (_predict_info(r, pol)["policy_action"] == "ESCALATE") is escalated
+
+
+def test_cli_gate_refuses_a_huge_score_level_in_one_line(tuned, capsys) -> None:
+    if tuned["primitive"] != "score":
+        pytest.skip("score only")
+    probs = '{"0": 0.1, "1' + "0" * 400 + '": 0.9}'
+    rc = cli_main(["gate", tuned["policy_raw"], "--question", QID["score"], "--model", "m1", "--probs", probs])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "too large" in err and "Traceback" not in err
 
 
 def test_exporters_route_on_the_renormalized_top_probability() -> None:

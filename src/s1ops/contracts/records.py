@@ -198,6 +198,8 @@ def parse_record(
     _probability(row["confidence"], "confidence", line)
     dist_raw = _distribution(row["probabilities"], line, sum_tol)
     dist = _distribution(calib["probabilities"], line, sum_tol) if calib and "probabilities" in calib else dist_raw
+    if set(dist) != set(dist_raw):
+        raise RecordError(line, f"calib.probabilities keys {sorted(dist)} differ from probabilities keys {sorted(dist_raw)}")
     total = probability_total(dist.values())
     if primitive == "choice":
         choice = _string(row["choice"], "choice", line)

@@ -105,6 +105,7 @@
     - choice/score 동률: exporter는 사전순 가장 큰 라벨 선택 → ESCALATE
     - 판정 대상 분포(raw/보정)는 호출자가 고름. drift와 exporter가 이를 `policy.calibrated`에 맞춰 고르지 않는 점은 그대로 남음
     - export에 `routing_rule: "2"` 표시(Phoenix `s1.routing_rule`, Langfuse `metadata.routing_rule`, 정책으로 판정한 레코드만). `policy_sha256`은 같은데 판정이 달라질 수 있어 이전 export와 구분하기 위함
+  - [x] **`parse_record`이 `calib.probabilities` 키가 raw `probabilities` 키와 다르면 `RecordError`**(줄 번호 포함): 이전엔 `s1 drift`(기본 `use_calib`) 등이 `KeyError` traceback으로 죽었고, exporter가 parse된 레코드로 판정하게 되면서 export에도 번질 뻔함
   - [x] **`s1 gate --probs '{"A":0.7,"B":0.3}'`**: `--p`와 상호 배타. 질문의 primitive와 맞지 않는 플래그는 exit 1로 올바른 플래그를 안내. `--probs`는 JSON 객체만, NaN·중복 키 거부
   - 범위 밖으로 남긴 것: `records.parse_record`가 score 키 `"0"`과 `"00"`을 한 레벨로 접어 확률 합이 줄어듦(`{"0":0.2,"00":0.3,"1":0.5}` → 합 0.8); `evaluate_noul`이 `p_raw` 범위를 검사하지 않음; 데모 워크스페이스에 choice/score 레코드 없음
 

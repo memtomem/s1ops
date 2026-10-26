@@ -69,10 +69,19 @@ def _predict_info(
         dict(calib["probabilities"]) if calib and "probabilities" in calib else None
     )
     probs_eff = probs_cal if probs_cal is not None else probs_raw
-    top_label = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]
-    p_raw = float(probs_raw[top_label])
-    p_cal = float(probs_cal[top_label]) if probs_cal is not None else None
-    p_eff = float(probs_eff[top_label])
+    # The parser checks the calibrated keys against the raw ones and renormalizes, as drift sees it.
+    parsed = parse_record(raw_row, record.line, use_calib=True) if probs_cal is not None else record
+    predicted = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]
+    action = f"SELECT:{predicted}"
+    if policy is not None:
+        # Export labels as the record wrote them ("01" is not reported as "1").
+        routed = route(policy, parsed.classes, parsed.probs)
+        label_of = {int(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
+        predicted = label_of[routed.predicted]
+        action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
+    p_raw = float(probs_raw[predicted])
+    p_cal = float(probs_cal[predicted]) if probs_cal is not None else None
+    p_eff = float(probs_eff[predicted])
 
     brier_val = None
     if record.label is not None and str(record.label) in probs_eff:
@@ -81,17 +90,6 @@ def _predict_info(
             (float(p) - (1.0 if k == lbl_str else 0.0)) ** 2
             for k, p in probs_eff.items()
         )
-
-    predicted = top_label
-    action = f"SELECT:{top_label}"
-    if policy is not None:
-        # Route the parsed distribution, as drift does; export labels as the record wrote them
-        # ("01" is not reported as "1").
-        parsed = parse_record(record.raw, record.line, use_calib=True) if probs_cal is not None else record
-        routed = route(policy, parsed.classes, parsed.probs)
-        label_of = {int(k): k for k in probs_eff} if record.primitive == "score" else {k: k for k in probs_eff}
-        predicted = label_of[routed.predicted]
-        action = "ESCALATE" if routed.escalated else f"SELECT:{predicted}"
 
     return {
         "p_raw": round(p_raw, 6),

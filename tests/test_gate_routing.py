@@ -494,6 +494,35 @@ def test_cli_gate_refuses_a_huge_score_level_in_one_line(tuned, capsys) -> None:
     assert "too large" in err and "Traceback" not in err
 
 
+def test_exported_probabilities_belong_to_the_exported_label() -> None:
+    r = _record(
+        "choice", choice="A", confidence=0.9,
+        probabilities={"A": 0.9, "B": 0.1}, calib={"probabilities": {"A": 0.5, "B": 0.5}},
+    )
+    info = _predict_info(r, _policy("choice", threshold=0.4))
+    assert (info["policy_action"], info["predicted"]) == ("ESCALATE", "A")
+    assert (info["p_raw"], info["p_calib"], info["p_effective"]) == (0.9, 0.5, 0.5)
+
+
+@pytest.mark.parametrize("command", [["export", "langfuse"], ["export", "phoenix"], ["drift"]])
+def test_calibrated_keys_that_differ_from_the_raw_ones_are_one_line(tmp_path: Path, command: list, capsys) -> None:
+    row = {
+        "schema": "s1-record/1", "item_id": "i", "question_id": "q", "primitive": "choice",
+        "model_requested": "m", "model_served": "m", "choice": "A", "confidence": 0.8,
+        "probabilities": {"A": 0.8, "B": 0.2}, "calib": {"probabilities": {"A": 1.0}},
+    }
+    records = _write(tmp_path / "r.jsonl", [row])
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"schema": "s1-policy/1", "policies": [_policy("choice", question_id="q", threshold=0.5).to_dict()]}))
+    if command == ["drift"]:
+        args = ["drift", records, records]
+    else:
+        args = [*command, records, "-o", str(tmp_path / "out"), "--policy", str(policy)]
+    assert cli_main(args) == 1
+    err = capsys.readouterr().err
+    assert "calib.probabilities keys" in err and "line 1" in err and "Traceback" not in err
+
+
 def test_exporters_route_on_the_renormalized_top_probability() -> None:
     # 0.495 / 0.49 sums to 0.985; renormalized, A is 0.5025..., above a 0.5 threshold.
     r = _record("choice", choice="A", confidence=0.495, probabilities={"A": 0.495, "B": 0.49})

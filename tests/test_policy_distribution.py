@@ -255,3 +255,148 @@ def test_web_drift_keeps_a_computation_bug_a_500(tmp_path: Path, monkeypatch) ->
 
 def test_the_routing_rule_is_3() -> None:
     assert ROUTING_RULE == "3"
+
+
+# Fit provenance (#28): a report refuses a `calib` made by another fit than the policy records,
+# as `DecisionGate._fit` refuses another fit. The hashes here are arbitrary strings; fitted ones
+# are compared within the run (they differ in the last bits across platforms).
+FIT_A, FIT_B = "a" * 16, "b" * 16
+
+
+def _hashed_row(primitive: str, fit_sha256=FIT_A, *, drop: bool = False, **calib_extra) -> dict:
+    calib = {**_calib(primitive), **calib_extra}
+    if not drop:
+        calib["fit_sha256"] = fit_sha256
+    return _row(primitive, calib=calib)
+
+
+@pytest.mark.parametrize("primitive", ["noul", "choice", "score"])
+@pytest.mark.parametrize(
+    ("row_kw", "message"),
+    [
+        ({"fit_sha256": FIT_B}, f"but this record was calibrated through '{FIT_B}'"),
+        ({"fit_sha256": FIT_B, "in_fit_sample": True}, f"but this record was calibrated through '{FIT_B}'"),
+        ({"fit_sha256": None}, "and this record's calib names no fit"),
+        ({"drop": True}, "and this record's calib names no fit"),
+        ({"drop": True, "in_fit_sample": True}, "and this record's calib names no fit"),
+    ],
+    ids=["other", "other-in-sample", "null", "missing", "missing-in-sample"],
+)
+def test_a_hashed_policy_refuses_a_calib_from_another_fit(primitive: str, row_kw: dict, message: str) -> None:
+    rec = parse_record(_hashed_row(primitive, **row_kw), 5)
+    pol = _policy(primitive, calibrated=True, fit_sha256=FIT_A)
+    expected = rf"^line 5: policy for q \(m\) was tuned through fit '{FIT_A}', {message}; re-run `s1 apply` with the fits.json"
+    for call in (lambda: policy_distribution(pol, rec), lambda: route_record(pol, rec), lambda: _predict_info(rec, pol)):
+        with pytest.raises(RoutingInputError, match=expected) as exc:
+            call()
+        assert exc.value.line == 5 and exc.value.side is None
+    ok = parse_record(_hashed_row(primitive), 1)
+    for side, ref, cur in (("reference", [rec], [ok]), ("current", [ok], [rec])):
+        with pytest.raises(RoutingInputError, match=rf"^{side} records: line 5: policy for q \(m\) was tuned through fit") as exc:
+            audit_drift(ref, cur, policies=[pol])
+        assert exc.value.side == side
+
+
+@pytest.mark.parametrize("primitive", ["noul", "choice", "score"])
+@pytest.mark.parametrize("bad", [7, True, ["x"], {"x": 1}])
+def test_a_non_string_calib_fit_sha256_is_refused(primitive: str, bad) -> None:
+    rec = parse_record(_hashed_row(primitive, bad), 3)
+    with pytest.raises(RoutingInputError, match=r"^line 3: calib.fit_sha256 must be a string, got "):
+        route_record(_policy(primitive, calibrated=True, fit_sha256=FIT_A), rec)
+
+
+@pytest.mark.parametrize("primitive", ["noul", "choice", "score"])
+def test_only_a_hashed_calibrated_policy_checks_the_fit(primitive: str) -> None:
+    rows = {
+        "a": _hashed_row(primitive),
+        "a-in-sample": _hashed_row(primitive, in_fit_sample=True),
+        "b": _hashed_row(primitive, FIT_B),
+        "null": _hashed_row(primitive, None),
+        "missing": _hashed_row(primitive, drop=True),
+        "non-string": _hashed_row(primitive, 7),
+    }
+    recs = {k: parse_record(row) for k, row in rows.items()}
+    hashed = _policy(primitive, calibrated=True, fit_sha256=FIT_A)
+    unhashed = _policy(primitive, calibrated=True)
+    # A matching calib routes and exports exactly as under a policy that records no fit.
+    for k in ("a", "a-in-sample"):
+        assert route_record(hashed, recs[k]) == route_record(unhashed, recs[k])
+        info, base = _predict_info(recs[k], hashed), _predict_info(recs[k], unhashed)
+        assert info == base, k
+    # A policy that records no fit takes a calib from any fit, and routes and exports it the same.
+    raw_policy = _policy(primitive, fit_sha256=FIT_A)
+    for pol, keys in ((unhashed, ("a", "a-in-sample", "b", "null", "missing")), (raw_policy, tuple(rows))):
+        outs = {k: (route_record(pol, recs[k]), _predict_info(recs[k], pol)) for k in keys}
+        assert len({repr(v) for v in outs.values()}) == 1, (pol, outs)
+
+
+@pytest.mark.parametrize("command", ["drift", "export langfuse", "export phoenix"])
+def test_cli_refuses_a_later_record_from_another_fit_in_one_line(tmp_path: Path, command: str, capsys) -> None:
+    records = tmp_path / "r.jsonl"
+    rows = [{**_hashed_row("noul"), "item_id": "i1"}, {**_hashed_row("noul", FIT_B), "item_id": "i2"}]
+    records.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    policy = tmp_path / "policy.json"
+    policy.write_text(json.dumps({"schema": "s1-policy/1", "policies": [_policy("noul", calibrated=True, fit_sha256=FIT_A).to_dict()]}))
+    out = tmp_path / "o"
+    out.write_bytes(b"sentinel\n")
+    r = str(records)
+    args = {
+        "drift": ["drift", r, r, "--policy", str(policy)],
+        "export langfuse": ["export", "langfuse", r, "-o", str(out), "--policy", str(policy)],
+        "export phoenix": ["export", "phoenix", r, "-o", str(out), "--policy", str(policy)],
+    }[command]
+    assert cli_main(args) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("\n") == 1 and "Traceback" not in captured.err
+    prefix = "s1: reference records: line 2: " if command == "drift" else "s1: line 2: "
+    assert captured.err.startswith(prefix + f"policy for q (m) was tuned through fit '{FIT_A}', but this record was calibrated through '{FIT_B}'")
+    assert out.read_bytes() == b"sentinel\n"
+
+
+def _refit(fit):
+    """Another fit for the same group: the same method with its parameters moved."""
+    other = dataclasses.replace(fit, params={k: v * 1.5 for k, v in fit.params.items()})
+    assert other.fit_sha256 != fit.fit_sha256
+    return other
+
+
+def test_demo_reports_refuse_noul_records_applied_through_another_fit(demo) -> None:
+    (fit,) = demo["fits"]
+    band = demo["band"]
+    assert band.calibrated and band.fit_sha256 == fit.fit_sha256
+    raw = [{k: v for k, v in row.items() if k != "calib"} for row in demo["rows"]]
+    applied = [parse_record(apply_to_record(_refit(fit), parse_record(row)), n) for n, row in enumerate(raw, 1)]
+    with pytest.raises(RoutingInputError, match=rf"^line 1: .* but this record was calibrated through '{_refit(fit).fit_sha256}'"):
+        route_record(band, applied[0])
+    with pytest.raises(RoutingInputError, match=r"^current records: line 1: "):
+        audit_drift(read_records(demo["ws"]["records"], use_calib=True), applied, policies=[band])
+
+
+def test_demo_reports_refuse_categorical_records_applied_through_another_fit(demo) -> None:
+    ws = demo["ws"]
+    fits = {f.key: f for f in load_fits(ws["fits_categorical"])}
+    policies = load_policies(ws["policy_categorical"])
+    assert {p.primitive for p in policies} == {"choice", "score"}
+    records = read_records(ws["records_categorical"], use_calib=True)
+    for pol in policies:
+        fit = fits[(pol.question_id, pol.model_served, pol.primitive)]
+        assert pol.calibrated and pol.fit_sha256 == fit.fit_sha256
+        rec = next(r for r in records if r.key == fit.key and r.probs)
+        route_record(pol, rec)  # the demo's own records match
+        other = parse_record(apply_to_record(_refit(fit), parse_record({k: v for k, v in rec.raw.items() if k != "calib"})), rec.line)
+        with pytest.raises(RoutingInputError, match=rf"but this record was calibrated through '{_refit(fit).fit_sha256}'"):
+            _predict_info(other, pol)
+
+
+def test_web_drift_names_the_file_with_a_calib_from_another_fit(tmp_path: Path) -> None:
+    ws = generate_workspace(tmp_path / "ws")
+    rows = _rows(ws["records_canary"])
+    n = next(i for i, r in enumerate(rows) if r["model_served"] == MODEL)
+    rows[n]["calib"]["fit_sha256"] = FIT_B
+    Path(ws["records_canary"]).write_text("".join(json.dumps(r) + "\n" for r in rows))
+    r = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get("/api/drift")
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail.startswith(f"records_canary.jsonl: line {n + 1}: policy for ")
+    assert f"but this record was calibrated through '{FIT_B}'" in detail

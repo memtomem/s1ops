@@ -4,7 +4,8 @@
 through `route`, so a policy means the same thing at runtime and in every report. The policy also
 chooses what is routed: the calibrated distribution exactly when it was tuned on one
 (`policy.calibrated`). The gate calibrates a live answer with its fit; the reports route a record
-through `route_record`, which takes the record's stored `calib`.
+through `route_record`, which takes the record's stored `calib` and, as the gate checks its fit,
+refuses one made by a different fit than the policy records (`fit_sha256`).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from s1ops.contracts.records import Record, has_calib, parse_record
+from s1ops.contracts.records import Record, has_calib, parse_record, short_repr
 from s1ops.contracts.schemas import PolicyEntry
 
 ROUTING_RULE = "3"
@@ -72,7 +73,8 @@ def route(policy: PolicyEntry, classes: Sequence, probs: Sequence[float]) -> Rou
 
 def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tuple[float, ...]]:
     """The classes and distribution `policy` was tuned on: the record's `calib` exactly when
-    `policy.calibrated`, as the gate routes.
+    `policy.calibrated`, as the gate routes, and only when that `calib` came from the fit the policy
+    was tuned through (a policy with `fit_sha256: null` takes any).
 
     Re-parsed from `record.raw` with the default `sum_tol`, so the result does not depend on how the
     caller parsed the record (one parsed with a looser tolerance can be refused here).
@@ -84,8 +86,32 @@ def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tup
             "probabilities and this record has none; run `s1 apply` first "
             "(`--pass-through-unfitted` keeps records of models it has no fit for)",
         )
+    if policy.calibrated and policy.fit_sha256 is not None:
+        _check_fit(policy, record)
     parsed = parse_record(record.raw, record.line, use_calib=policy.calibrated)
     return parsed.classes, parsed.probs
+
+
+def _check_fit(policy: PolicyEntry, record: Record) -> None:
+    """Refuse a record whose `calib` was not made by the fit `policy` was tuned through, as the
+    gate refuses a different fit. A `calib` naming no fit cannot show which one made it, so it is
+    refused too; `in_fit_sample` exempts nothing."""
+    name = f"policy for {policy.question_id} ({policy.model_served})"
+    h = record.raw["calib"].get("fit_sha256")
+    if h is not None and not isinstance(h, str):
+        raise RoutingInputError(record.line, f"calib.fit_sha256 must be a string, got {short_repr(h)}")
+    if h is None:
+        raise RoutingInputError(
+            record.line,
+            f"{name} was tuned through fit {policy.fit_sha256!r}, and this record's calib names no fit; "
+            "re-run `s1 apply` with the fits.json the policy was tuned through",
+        )
+    if h != policy.fit_sha256:
+        raise RoutingInputError(
+            record.line,
+            f"{name} was tuned through fit {policy.fit_sha256!r}, but this record was calibrated "
+            f"through {h!r}; re-run `s1 apply` with the fits.json the policy was tuned through",
+        )
 
 
 def route_record(policy: PolicyEntry, record: Record) -> Routed:

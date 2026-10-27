@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from scipy.special import expit, log_expit, log_softmax, logit, softmax
 
 from s1ops.contracts._validation import pydantic_errors
-from s1ops.contracts.records import Group, GroupKey, ItemKey, Record
+from s1ops.contracts.records import Group, GroupKey, ItemKey, Record, without_state
 from s1ops.eval.metrics import EPS, log_loss
 
 FIT_SCHEMAS = ("jev-calib-fit/2", "s1-calib-fit/1")
@@ -327,6 +327,8 @@ def fitted_items(fits: list[Fit]) -> dict[GroupKey, frozenset[ItemKey]]:
 
 
 def apply_to_record(fit: Fit, record: Record, *, in_fit_sample: bool = False) -> dict:
+    """A new row: `record.raw` with `calib` added or replaced and the item `state` left out
+    (`safe-v1`); `record` is not modified."""
     order = {c: i for i, c in enumerate(record.classes)}
     P = np.array([[record.probs[order[c]] for c in fit.classes]])
     Q = transform(fit.method, fit.primitive, fit.params, P)[0]
@@ -346,4 +348,4 @@ def apply_to_record(fit: Fit, record: Record, *, in_fit_sample: bool = False) ->
     else:
         calib["probabilities"] = {str(c): float(q) for c, q in zip(fit.classes, Q)}
         calib["score"] = float((np.asarray(fit.classes, dtype=float) * Q).sum())
-    return {**record.raw, "calib": calib}
+    return {**without_state(record.raw), "calib": calib}

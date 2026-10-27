@@ -25,7 +25,7 @@
 
 ### 1.2 `Record` (`jev-record/1` & `s1-record/1`, `src/s1ops/contracts/records.py`)
 
-- **엄격한 그룹 키 (`GroupKey`)**: `(question_id, model_served, primitive)`. 서로 다른 질문 문구, 선택지 순서, 또는 실제 서빙된 모델 버전(`model_served`)은 어떤 통계·보정·임계값·익스포터에서도 절대 합산(pool)하지 않습니다.
+- **엄격한 그룹 키 (`GroupKey`)**: `(question_id, model_served, primitive)`. 서로 다른 질문 문구, 선택지 순서, 또는 실제 서빙된 모델 버전(`model_served`)은 어떤 통계·보정·임계값·익스포터에서도 절대 합산(pool)하지 않습니다. 예외는 `s1 drift` 리포트로, 모델 교체가 드러나도록 `question_id`별로 모델을 합쳐 비교합니다(정책 조회와 `--calibrated`의 fit 검사는 그룹 키 단위).
 - **Zero-State 프라이버시 기본값 (`safe-v1`)**: 레코드 파일에는 원문 `state` 텍스트를 절대 기록하지 않으며 `(dataset, item_id)` 식별자와 `state_sha256` 해시만 유지합니다.
 - **응답 무결성 검증**: `NaN`/`Inf`, JSON `bool`이 숫자로 둔갑한 경우, 확률 합이 $1 \pm 0.02$를 벗어난 경우 1-based 줄 번호와 함께 즉시 `RecordError`를 발생시킵니다.
 
@@ -108,7 +108,7 @@ s1ops/
 - [x] `web` & `cli`: 로컬 웹 워크벤치(`127.0.0.1`) 및 통합 CLI (`s1`), 시드 고정 데모 생성기, 100% 오프라인 테스트 검증
 
 ### Phase 2: 온라인/카나리 드리프트 모니터 & 예산 안전 프로브 러너 (✅ 완료)
-- [x] **Rolling Distribution Drift (`s1 drift`, `src/s1ops/monitor/drift.py`)**: 운영/카나리 로그의 `(question_id, model_served, primitive)`별 예측 확률 분포 **PSI(Population Stability Index)**, **Jensen-Shannon Divergence (JSD)**, 분위수(`p10`/`p50`/`p90`) 이동, 엔트로피 드리프트, 에스컬레이션 밴드 유입률(`escalation_rate_delta`) 및 기권/실패율(`fail_rate_delta`) 급증 감지
+- [x] **Rolling Distribution Drift (`s1 drift`, `src/s1ops/monitor/drift.py`)**: 운영/카나리 로그의 `question_id`별(그 질문의 모델을 합쳐, 모델 교체는 CRITICAL) 예측 확률 분포 **PSI(Population Stability Index)**, **Jensen-Shannon Divergence (JSD)**, 분위수(`p10`/`p50`/`p90`) 이동, 엔트로피 드리프트, 에스컬레이션 밴드 유입률(`escalation_rate_delta`) 및 기권/실패율(`fail_rate_delta`) 급증 감지
 - [x] **Silent Model-Served Drift Alert**: 동일 `question_id`에서 기존 베이스라인 `model_served`가 사라지거나 신규 모델 버전(`unexpected_models_in_target`, 예: `jev-1.14.0-rc1`)이 유입될 때 즉시 `CRITICAL` 경보 발생 (`--fail-on-critical` 시 Exit Code 4)
 - [x] **Budget-Guarded Probe & Batch Runner (`s1 probe`, `src/s1ops/monitor/runner.py`)**: `Ledger` (`reserve` → `settle`) 하에서 상한 예산(`cap_usd`)을 절대 초과하지 않고 Twin/Inverse 프로브를 자동 확장·실행하며 원문 `state`를 저장하지 않는(`safe-v1`) 실행기
 

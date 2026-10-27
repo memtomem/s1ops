@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from s1ops.contracts.records import GroupKey, Record, has_calib, parse_record, read_records
+from s1ops.contracts.records import GroupKey, Record, has_calib, parse_record, read_records, short_repr
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.runtime.routing import RoutingInputError, route_record
 
@@ -32,7 +32,8 @@ PSI_CRITICAL = 0.25
 
 class DriftInputError(ValueError):
     """`audit_drift(use_calib=True)` was given an answered record without calibrated
-    probabilities. Carries the 1-based line and the side (`"reference"` or `"current"`)."""
+    probabilities, or records of one group calibrated through different fits. Carries the 1-based
+    line and the side (`"reference"` or `"current"`)."""
 
     def __init__(self, line: int, message: str, side: str) -> None:
         self.line, self.message, self.side = line, message, side
@@ -68,6 +69,36 @@ def _compared(records: Sequence[Record], use_calib: bool, side: str) -> list[Rec
                 side,
             )
     return out
+
+
+def _fit_name(fit_sha256: str | None) -> str:
+    return f"fit {fit_sha256!r}" if fit_sha256 is not None else "no fit"
+
+
+def _one_fit(refs: Sequence[Record], curs: Sequence[Record]) -> None:
+    """With `use_calib`, every answered record of a `(question_id, model_served, primitive)` group,
+    on both sides, must name one `calib.fit_sha256`, as `s1 policy tune --use-calib` requires:
+    otherwise a refit shows as drift. A group whose records all name none (applied before the
+    hash) passes. Groups, not questions: a question's report pools models, and another model's
+    records were calibrated by another fit by design."""
+    first: dict[GroupKey, tuple[str | None, str, int]] = {}
+    for side, records in (("reference", refs), ("current", curs)):
+        for r in records:
+            if not _answered(r):
+                continue
+            h = r.raw["calib"].get("fit_sha256")
+            if h is not None and not isinstance(h, str):
+                raise DriftInputError(r.line, f"calib.fit_sha256 must be a string, got {short_repr(h)}", side)
+            seen, seen_side, seen_line = first.setdefault(r.key, (h, side, r.line))
+            if h != seen:
+                raise DriftInputError(
+                    r.line,
+                    f"calibrated through {_fit_name(h)}, but {seen_side} records line {seen_line} of the same "
+                    f"group ({r.question_id!r}, {r.model_served!r}) through {_fit_name(seen)}; a calibrated "
+                    "comparison needs one fit per group: run `s1 apply` on both files with one "
+                    "fits.json, or compare raw probabilities",
+                    side,
+                )
 
 
 def _shannon_entropy(probs: Sequence[float]) -> float:
@@ -220,8 +251,9 @@ def audit_drift(
     """Compare reference records against current records per `question_id`.
 
     The distributions compared (PSI, JS divergence, quantiles, entropy) are the raw ones, or with
-    `use_calib` the calibrated ones, which every answered record on both sides must then carry
-    (`DriftInputError` otherwise). The escalation rate routes what each policy was tuned on either
+    `use_calib` the calibrated ones, which every answered record on both sides must then carry,
+    made by one fit per `(question_id, model_served, primitive)` group (`DriftInputError`
+    otherwise). The escalation rate routes what each policy was tuned on either
     way.
 
     Records passed in are re-parsed from their `raw` with the default `sum_tol`, validating any
@@ -234,6 +266,8 @@ def audit_drift(
         cur_records = read_records(cur_records, require_answer=True)
     refs = _compared(list(ref_records), use_calib, "reference")
     curs = _compared(list(cur_records), use_calib, "current")
+    if use_calib:
+        _one_fit(refs, curs)
 
     pol_by_key: dict[GroupKey, PolicyEntry] = {(p.question_id, p.model_served, p.primitive): p for p in policies or ()}
 

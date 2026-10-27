@@ -120,6 +120,7 @@
     - 후속(별도 이슈): drift/export의 `--fit`(calib 없는 레코드를 gate처럼 보정), in-sample 항목 처리, 모델이 섞인 파일에서 `s1 apply`가 exit 3으로 멈추는 문제
   - [x] **drift가 한 분포끼리만 비교** (#20, 소유자 결정: raw 기본): drift는 기본 `use_calib`로 읽고 `calib`가 없는 레코드만 raw로 대체해, 보정 reference와 raw current(데모 canary는 한쪽 안에서도 보정 80 + raw 40)를 섞어 PSI·JSD·분위수·엔트로피를 계산했음(데모 PSI 4.17284, raw끼리 6.649894)
     - 기본은 raw. `--calibrated`(SDK `use_calib=True`)는 양쪽 파일의 응답 레코드 전부에 `calib`가 있어야 하고, 없으면 `DriftInputError`(reference/current, 줄 번호, exit 1). 질문 교집합 전에 검사하므로 한쪽에만 있는 질문도 빠지지 않음. 응답 없는 레코드는 검사하지 않음
+    - (#29) `--calibrated`는 그룹(`question_id`, `model_served`, `primitive`)마다 양쪽의 `calib.fit_sha256`이 하나여야 함(null도 한 값, `tune`과 같은 규칙). 다르면 `DriftInputError`: 같은 모델의 재적합이 drift로 보였음(같은 raw 답, 다른 fit에서 PSI 0.147809 WARN). 질문 단위가 아니라 그룹 단위라 모델이 바뀐 비교는 그대로 통과(CRITICAL)
     - `--raw-only`(0.1.0 배포)는 기본과 같은 뜻으로 남기고 `--calibrated`와 함께 쓸 수 없음
     - 비교 분포는 `audit_drift`가 각 레코드의 `raw`에서 다시 파싱하므로 경로로 넘기든 미리 파싱한 `Record`로 넘기든 같음. 저장된 `calib`는 두 모드 모두 검증(`calib.p: "nan"`은 raw 모드에서도 `RecordError`)
     - 리포트에 `distribution: "raw" | "calibrated"` 추가(스키마 id는 `s1-drift-report/1` 유지; 없으면 이전 버전 리포트). web Drift 탭은 raw, 탭에 표시

@@ -79,15 +79,23 @@ EXIT_DRIFT_CRITICAL = 4
 
 
 class CliError(Exception):
-    """A user-facing failure: printed as one `s1: <message>` line, no traceback."""
+    """A user-facing failure: printed as one `s1: <message>` line (escaped by `_one_line`), no
+    traceback."""
 
     def __init__(self, message: str, code: int = EXIT_ERROR) -> None:
         super().__init__(message)
         self.code = code
 
 
+def _one_line(message: str) -> str:
+    """`message` with every non-printable character escaped (`\\n`, `\\x1b`, `\\u202e`, ...), so an
+    error line stays one line, and cannot recolor or reorder the terminal, whatever ids or paths
+    it interpolates. Printable text, non-ASCII included, and backslashes are kept as they are."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode("ascii") for c in message)
+
+
 def _fail(message: str, code: int = EXIT_ERROR) -> int:
-    print(f"s1: {message}", file=sys.stderr)
+    print(f"s1: {_one_line(message)}", file=sys.stderr)
     return code
 
 
@@ -96,7 +104,7 @@ class _Parser(argparse.ArgumentParser):
 
     def error(self, message: str) -> None:  # type: ignore[override]
         self.print_usage(sys.stderr)
-        self.exit(EXIT_ERROR, f"s1: {message}\n")
+        self.exit(EXIT_ERROR, f"s1: {_one_line(message)}\n")
 
 
 # Input arguments by dest name: (what it is, the command that produces it).

@@ -534,7 +534,7 @@ def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned
             "selection": "max_false_pass",
             "max_false_pass": args.max_false_pass,
             "use_cp_upper": args.use_cp_upper,
-            "cp_alpha": args.cp_alpha,
+            "cp_alpha": args.cp_alpha if args.use_cp_upper else None,  # unchecked and unused otherwise
             "n_true": cut.n_true,
             "n_false": cut.n_false,
             "true_pass": cut.true_pass,

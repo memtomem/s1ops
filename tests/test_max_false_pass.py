@@ -202,15 +202,18 @@ def test_calibrated_cli_cutoff_matches_the_oracle_and_routes(pipeline, capsys, u
     assert (m["selection"], m["max_false_pass"], m["use_cp_upper"]) == ("max_false_pass", 0.05, use_cp)
     assert m["false_pass_rate"] == want.false_pass / want.n_false <= 0.05
     gate = DecisionGate([pol], load_fits(pipeline["fits"]))
+    passed = {True: 0, False: 0}
     for r in rows:
         d = gate.evaluate_noul(question_id=QID, model_served=MODEL, p_raw=r["p"])
         assert d.action in ("ALLOW", "BLOCK")  # lo == hi never escalates
-        if abs(r["calib"]["p"] - want.cutoff) > 1e-9:  # the boundary itself is pinned by the unit tests
-            assert (d.action != "BLOCK") == (r["calib"]["p"] >= want.cutoff)
+        assert (d.action != "BLOCK") == (r["calib"]["p"] >= want.cutoff), r
+        passed[r["label"]] += d.action != "BLOCK"
+    assert (passed[True], passed[False]) == (want.true_pass, want.false_pass)
 
 
 def test_raw_cli_cutoff_matches_the_oracle(pipeline, capsys) -> None:
     (pol,) = _tune(capsys, pipeline["eval"], pipeline["tmp"] / "policy.json", "--max-false-pass", "0.02")
+    assert pol.metrics_on_split["cp_alpha"] is None
     rows = _rows(pipeline["eval"])
     want = oracle([r["p"] for r in rows], [r["label"] for r in rows], 0.02)
     assert (pol.band_lo, pol.band_hi, pol.calibrated, pol.fit_sha256) == (want.cutoff, want.cutoff, False, None)
@@ -285,6 +288,12 @@ def test_cli_reports_an_unreachable_cp_cap(tmp_path: Path, capsys, rate, alpha) 
     err = _error(capsys)
     assert QID in err and "no cutoff" in err and f"{sum(not r['label'] for r in rows)} label-false" in err
     assert not out.exists()
+
+
+@pytest.mark.parametrize("alpha", ["nan", "inf", "-inf", "2"])
+def test_an_unused_cp_alpha_still_writes_a_loadable_policy(pipeline, capsys, alpha) -> None:
+    (pol,) = _tune(capsys, pipeline["eval"], pipeline["tmp"] / "policy.json", "--max-false-pass", "0.02", f"--cp-alpha={alpha}")
+    assert pol.metrics_on_split["cp_alpha"] is None and pol.metrics_on_split["use_cp_upper"] is False
 
 
 @pytest.mark.parametrize("alpha", ["0", "1", "nan"])

@@ -17,10 +17,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from s1ops.cli import main as cli_main
-from s1ops.contracts.records import RecordError, read_records
+from s1ops.contracts.records import RecordError, parse_record, read_records
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.demo import generate_workspace
 from s1ops.monitor.drift import DriftInputError, audit_drift, jensen_shannon, psi
+from s1ops.runtime.routing import RoutingInputError
 from s1ops.web.app import create_app
 
 OPTIONS = {"choice": ("A", "B", "C"), "score": ("0", "1", "2")}
@@ -259,3 +260,146 @@ def test_web_drift_names_the_file_with_a_malformed_calib(ws, tmp_path: Path) -> 
     resp = TestClient(create_app(workspace_dir=bad), raise_server_exceptions=False).get("/api/drift")
     assert resp.status_code == 400
     assert resp.json()["detail"] == f"{bad / 'records_canary.jsonl'}: line {n + 1}: calib.p must be a number, got 'nan'"
+
+
+# One fit per group (#29): a calibrated comparison of records calibrated through different fits
+# measures the refit, not drift. The hashes here are arbitrary strings.
+FIT_A, FIT_B = "a" * 16, "b" * 16
+_DROP = object()
+
+
+def _fitted(rows: list[dict], fit_sha256=FIT_A, **changes) -> list[dict]:
+    out = []
+    for r in rows:
+        r = {**r, **changes}
+        if "calib" in r:
+            calib = {k: v for k, v in r["calib"].items() if k != "fit_sha256"}
+            if fit_sha256 is not _DROP:
+                calib["fit_sha256"] = fit_sha256
+            r["calib"] = calib
+        out.append(r)
+    return out
+
+
+def _parsed(rows: list[dict]) -> list:
+    return [parse_record(r, n) for n, r in enumerate(rows, 1)]
+
+
+def _one_fit_message(line: int, side: str, h, seen_side: str, seen_line: int, seen, qid: str = "q", model: str = "m") -> str:
+    def name(x):
+        return f"fit {x!r}" if x is not None else "no fit"
+
+    return (
+        f"{side} records: line {line}: calibrated through {name(h)}, but {seen_side} records line {seen_line} "
+        f"of the same group ({qid}, {model}) through {name(seen)}; a calibrated comparison needs one fit "
+        "per group: run `s1 apply` on both files with one fits.json, or compare raw probabilities"
+    )
+
+
+@pytest.mark.parametrize("primitive", ["noul", "choice", "score"])
+@pytest.mark.parametrize("case", ["across", "inside-reference", "inside-current", "null-reference", "null-current"])
+def test_calibrated_refuses_one_group_calibrated_through_two_fits(primitive: str, case: str) -> None:
+    base = _rows(primitive, 1, 0.0, n=6)
+    other_model = _fitted(base, FIT_B, model_served="m0")
+    ref, cur = _fitted(base), _fitted(base)
+    if case == "across":
+        cur = _fitted(base, FIT_B)
+        where, expected = ("current", 1), _one_fit_message(1, "current", FIT_B, "reference", 1, FIT_A)
+    elif case == "inside-reference":
+        ref = [*_fitted(base[:4]), *_fitted(base[4:], FIT_B)]
+        where, expected = ("reference", 5), _one_fit_message(5, "reference", FIT_B, "reference", 1, FIT_A)
+    elif case == "inside-current":
+        # The group's first record is on the current side: the reference has only another model.
+        ref = other_model
+        cur = [*_fitted(base[:2]), *_fitted(base[2:], FIT_B)]
+        where, expected = ("current", 3), _one_fit_message(3, "current", FIT_B, "current", 1, FIT_A)
+    elif case == "null-reference":
+        ref = _fitted(base, _DROP)
+        where, expected = ("current", 1), _one_fit_message(1, "current", FIT_A, "reference", 1, None)
+    else:
+        cur = _fitted(base, None)
+        where, expected = ("current", 1), _one_fit_message(1, "current", None, "reference", 1, FIT_A)
+    refs, curs = _parsed(ref), _parsed(cur)
+    with pytest.raises(DriftInputError) as exc:
+        audit_drift(refs, curs, use_calib=True)
+    assert str(exc.value) == expected
+    assert (exc.value.side, exc.value.line) == where
+    # The raw comparison never reads the hashes: the report is the one without them.
+    assert audit_drift(refs, curs) == audit_drift(_parsed(_fitted(ref, _DROP)), _parsed(_fitted(cur, _DROP)))
+
+
+@pytest.mark.parametrize("bad", [7, True, ["x"], {"x": 1}])
+def test_calibrated_refuses_a_non_string_fit_sha256(bad) -> None:
+    base = _rows("noul", 1, 0.0, n=3)
+    with pytest.raises(DriftInputError, match=r"^current records: line 2: calib\.fit_sha256 must be a string, got "):
+        audit_drift(_parsed(_fitted(base)), _parsed([*_fitted(base[:1]), *_fitted(base[1:], bad)]), use_calib=True)
+
+
+@pytest.mark.parametrize("primitive", ["noul", "choice", "score"])
+def test_calibrated_passes_one_fit_per_group(primitive: str) -> None:
+    ref, cur = _rows(primitive, 1, 0.0), _rows(primitive, 2, 1.5)
+    unhashed = audit_drift(_parsed(_fitted(ref, _DROP)), _parsed(_fitted(cur, _DROP)), use_calib=True)
+    # One hash, or none at all (records applied before the hash existed): the same report.
+    for h in (FIT_A, None):
+        assert audit_drift(_parsed(_fitted(ref, h)), _parsed(_fitted(cur, h)), use_calib=True) == unhashed
+    # A model change: the current model's records were calibrated by its own fit.
+    moved = audit_drift(_parsed(_fitted(ref)), _parsed(_fitted(cur, FIT_B, model_served="m2")), use_calib=True)
+    assert moved == audit_drift(_parsed(_fitted(ref, _DROP)), _parsed(_fitted(cur, _DROP, model_served="m2")), use_calib=True)
+    (q,) = moved["questions"]
+    assert q["status"] == "CRITICAL" and q["model_drift_detected"]
+    # Two questions of one model, each through its own fit.
+    two = [*_fitted(ref), *_fitted(ref, FIT_B, question_id="q2")]
+    two_cur = [*_fitted(cur), *_fitted(cur, FIT_B, question_id="q2")]
+    rep = audit_drift(_parsed(two), _parsed(two_cur), use_calib=True)
+    assert [q["question_id"] for q in rep["questions"]] == ["q", "q2"]
+    assert rep == audit_drift(_parsed(_fitted(two, _DROP)), _parsed(_fitted(two_cur, _DROP)), use_calib=True)
+
+
+def test_calibrated_checks_a_question_only_one_side_has() -> None:
+    shared = _rows("noul", 1, 0.0, n=4)
+    lone = _rows("noul", 2, 0.0, n=2)
+    ref = [*_fitted(shared), *_fitted(lone[:1], question_id="only-here"), *_fitted(lone[1:], FIT_B, question_id="only-here")]
+    with pytest.raises(DriftInputError) as exc:
+        audit_drift(_parsed(ref), _parsed(_fitted(shared)), use_calib=True)
+    assert str(exc.value) == _one_fit_message(6, "reference", FIT_B, "reference", 5, FIT_A, qid="only-here")
+
+
+def test_calibrated_skips_failed_records_in_the_fit_check() -> None:
+    rows = [*_fitted(_rows("noul", 1, 0.0, n=4)), _row("noul", 9, None, None, served=None)]
+    # An SDK caller can pass a record of the group itself that has no answer (and so no calib).
+    unanswered = parse_record({**_row("noul", 8, None, None), "model_served": "m"}, 6, require_answer=False)
+    assert unanswered.key == ("q", "m", "noul") and not unanswered.probs
+    recs = [*_parsed(rows), unanswered]
+    (q,) = audit_drift(recs, recs, use_calib=True)["questions"]
+    assert (q["n_ref"], q["failure_rate_ref"]) == (6, round(2 / 6, 6))
+
+
+def test_cli_calibrated_refuses_two_fits_in_one_line(tmp_path: Path, capsys) -> None:
+    base = _rows("noul", 1, 0.0, n=3)
+    ref = _write(tmp_path / "ref.jsonl", _fitted(base))
+    cur = _write(tmp_path / "cur.jsonl", _fitted(base, FIT_B))
+    assert cli_main(["drift", ref, cur, "--calibrated"]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "s1: " + _one_fit_message(1, "current", FIT_B, "reference", 1, FIT_A) + "\n"
+    assert cli_main(["drift", ref, cur]) == 0  # raw
+    capsys.readouterr()
+
+
+def test_calibrated_one_fit_runs_before_the_policys_fit_check() -> None:
+    base = _rows("noul", 1, 0.0, n=4)
+    pol = PolicyEntry(question_id="q", model_served="m", primitive="noul", mode="error_budget", split="eval",
+                      n=1, threshold=0.75, calibrated=True, fit_sha256=FIT_A)
+    # One fit on both sides, but not the policy's (#28): refused by the policy check.
+    for h in (FIT_B, None):
+        recs = _parsed(_fitted(base, h))
+        with pytest.raises(RoutingInputError, match=r"^reference records: line 1: policy for q \(m\) was tuned through fit"):
+            audit_drift(recs, recs, policies=[pol], use_calib=True)
+    # Two fits: the comparison is refused first.
+    with pytest.raises(DriftInputError, match=r"^current records: line 1: calibrated through fit 'b"):
+        audit_drift(_parsed(_fitted(base)), _parsed(_fitted(base, FIT_B)), policies=[pol], use_calib=True)
+
+
+def test_the_categorical_demo_compares_calibrated(ws) -> None:
+    rep = audit_drift(ws["records_categorical"], ws["records_categorical"], use_calib=True)
+    assert sorted(q["primitive"] for q in rep["questions"]) == ["choice", "score"]

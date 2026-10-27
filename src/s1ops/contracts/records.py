@@ -164,6 +164,12 @@ def probability_total(values: Iterable[float]) -> float:
     return math.fsum(values)
 
 
+def without_state(row: Mapping[str, object]) -> dict:
+    """A copy of a record row without its top-level `state`, the item text `safe-v1` never writes
+    (`state_sha256` and every other field are kept). For commands that copy input rows out."""
+    return {k: v for k, v in row.items() if k != "state"}
+
+
 def has_calib(row: Mapping[str, object], primitive: str) -> bool:
     """Whether a record row carries the calibrated distribution `parse_record(use_calib=True)`
     reads for its primitive: `calib.p` for noul, `calib.probabilities` for choice and score."""

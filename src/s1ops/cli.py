@@ -19,7 +19,7 @@ from typing import Any
 from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
-from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr
+from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr, without_state
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -344,10 +344,12 @@ def _cmd_apply(args: argparse.Namespace) -> int:
 
     out_objs: list[dict[str, Any]] = []
     calibrated = 0
+    # `safe-v1`: no row is written with its item `state` (every path below leaves it out).
+    state_dropped = sum(1 for rec in records if "state" in rec.raw)
     passed: dict[tuple, dict[str, Any]] = {}
     for rec in records:
         if rec.model_served is None:
-            out_objs.append(rec.raw)
+            out_objs.append(without_state(rec.raw))
             continue
         fit = fit_for(fits, rec.key)
         if fit is None:
@@ -356,7 +358,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
                 qid, served, primitive = rec.key
                 group = passed.setdefault(rec.key, {"question_id": qid, "model_served": served, "primitive": primitive, "n": 0, "reason": msg})
                 group["n"] += 1
-                out_objs.append(rec.raw)
+                out_objs.append(without_state(rec.raw))
                 continue
             code = EXIT_MODEL_MISMATCH if "model_served" in msg else EXIT_ERROR
             return _fail(f"refusing to apply fit: {msg}", code)
@@ -381,8 +383,13 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     with out_path.open("w", encoding="utf-8") as fh:
         for o in out_objs:
             fh.write(json.dumps(o, sort_keys=True) + "\n")
+    summary: dict[str, Any] = {"calibrated": calibrated}
     if args.pass_through_unfitted:
-        print(json.dumps({"calibrated": calibrated, "passed_through": list(passed.values())}, indent=2, sort_keys=True))
+        summary["passed_through"] = list(passed.values())
+    if state_dropped:
+        summary["state_dropped"] = state_dropped
+    if len(summary) > 1:
+        print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
@@ -1081,9 +1088,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_app = sub.add_parser("apply", help="Apply calibration fit to held-out records", **_FMT)
     p_app.add_argument("records", help=f"held-out {_H_RECORDS}")
     p_app.add_argument("--fit", required=True, help=_H_FIT_IN)
-    p_app.add_argument("-o", "--output", required=True, help="calibrated records JSONL to write")
+    p_app.add_argument("-o", "--output", required=True, help="calibrated records JSONL to write; item `state` is never written (safe-v1), and a JSON summary with `state_dropped` is printed when any input record had one")
     p_app.add_argument("--allow-in-sample", action="store_true", help="apply even to items the fit was trained on (otherwise exit 2); they are marked in_fit_sample")
-    p_app.add_argument("--pass-through-unfitted", action="store_true", help="write records the fit file has no fit for (another model, question or primitive) unchanged, without adding or replacing `calib`, instead of exiting 3 or 1; prints a JSON summary of what was calibrated and passed through")
+    p_app.add_argument("--pass-through-unfitted", action="store_true", help="write records the fit file has no fit for (another model, question or primitive) unchanged except for `state`, without adding or replacing `calib`, instead of exiting 3 or 1; prints a JSON summary of what was calibrated and passed through")
     p_app.set_defaults(func=_cmd_apply)
 
     # policy

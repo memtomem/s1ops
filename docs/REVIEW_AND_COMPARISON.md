@@ -12,7 +12,7 @@ Langfuse, Arize Phoenix, LangSmith, Braintrust 등 기존 LLMOps 플랫폼은 **
 
 | # | 문제 영역 | 기존 System 2 LLMOps의 한계 | `s1ops`의 해결 방식 |
 | --- | --- | --- | --- |
-| 1 | **집계 단위 오류 (Pooling Hazard)** | Trace 이름이나 모델 이름으로만 묶어 질문 문구가 조금 바뀌어도 스코어를 평균냄 | 정규화된 wire-form 해시 **`question_id` (`q-<16hex>`)**를 강제하고, **`(question_id, model_served, primitive)`** 단위로만 지표를 산출 (이종 그룹 간 합산 원천 금지) |
+| 1 | **집계 단위 오류 (Pooling Hazard)** | Trace 이름이나 모델 이름으로만 묶어 질문 문구가 조금 바뀌어도 스코어를 평균냄 | 정규화된 wire-form 해시 **`question_id` (`q-<16hex>`)**를 강제하고, **`(question_id, model_served, primitive)`** 단위로만 지표를 산출 (이종 그룹 간 합산 원천 금지; `s1 drift` 리포트만 모델 교체를 드러내려고 질문별로 모델을 합침) |
 | 2 | **소표본 ECE 착시 (Small-$n$ Bias)** | 샘플 수 $n=100 \sim 300$에서 계산한 단순 ECE가 이항 표집 분산 때문에 $0.05 \sim 0.08$로 높게 나오는 현상을 모델 오보정으로 오판 | 동일한 예측 확률에서 베르누이 샘플링을 반복해 완벽히 보정된 모델이 가질 기대 ECE 분포(**Monte Carlo `ece_floor` `p95`**)를 함께 산출하여 진성 오보정만 식별 |
 | 3 | **확률 반올림 동점 클러스터 (Tie-Mass)** | 상용 System 1 API(예: `jev-1.13.0`)가 소수점 2자리 반올림 확률을 반환해 `p=1.00`, `p=0.50`에 수백 건이 묶일 때 분위수(quantile) 분할과 순위 기반 임계값이 깨짐 | **`tie_mass`** 진단기로 최빈 동점 비율을 감지하고, 임계값 선택([`select_threshold`](../src/s1ops/improve/policy.py)) 시 동일 확률 그룹 전체를 원자적으로 수용/거절하도록 강제 |
 | 4 | **In-Sample 보정 누수 (Calibration Leakage)** | Temperature / Isotonic 피팅에 사용한 데이터셋에 그대로 보정을 적용해 평가 지표를 부풀림 | `fits.json`에 피팅에 사용된 모든 `[dataset, item_id]`와 `model_served`를 기록하고, `s1 apply` 시 In-sample 중복은 **Exit 2**, 모델 불일치는 **Exit 3**으로 차단 |

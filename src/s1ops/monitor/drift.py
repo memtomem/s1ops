@@ -94,7 +94,7 @@ def _one_fit(refs: Sequence[Record], curs: Sequence[Record]) -> None:
                 raise DriftInputError(
                     r.line,
                     f"calibrated through {_fit_name(h)}, but {seen_side} records line {seen_line} of the same "
-                    f"group ({r.question_id}, {r.model_served}) through {_fit_name(seen)}; a calibrated "
+                    f"group ({r.question_id!r}, {r.model_served!r}) through {_fit_name(seen)}; a calibrated "
                     "comparison needs one fit per group: run `s1 apply` on both files with one "
                     "fits.json, or compare raw probabilities",
                     side,

@@ -291,7 +291,7 @@ def _one_fit_message(line: int, side: str, h, seen_side: str, seen_line: int, se
 
     return (
         f"{side} records: line {line}: calibrated through {name(h)}, but {seen_side} records line {seen_line} "
-        f"of the same group ({qid}, {model}) through {name(seen)}; a calibrated comparison needs one fit "
+        f"of the same group ({qid!r}, {model!r}) through {name(seen)}; a calibrated comparison needs one fit "
         "per group: run `s1 apply` on both files with one fits.json, or compare raw probabilities"
     )
 
@@ -384,6 +384,17 @@ def test_cli_calibrated_refuses_two_fits_in_one_line(tmp_path: Path, capsys) -> 
     assert captured.err == "s1: " + _one_fit_message(1, "current", FIT_B, "reference", 1, FIT_A) + "\n"
     assert cli_main(["drift", ref, cur]) == 0  # raw
     capsys.readouterr()
+
+
+def test_cli_two_fits_message_stays_one_line_for_any_identifier(tmp_path: Path, capsys) -> None:
+    base = _rows("noul", 1, 0.0, n=2)
+    qid, model = "q\nextra", "m\r2"
+    ref = _write(tmp_path / "ref.jsonl", _fitted(base, question_id=qid, model_served=model))
+    cur = _write(tmp_path / "cur.jsonl", _fitted(base, FIT_B, question_id=qid, model_served=model))
+    assert cli_main(["drift", ref, cur, "--calibrated"]) == 1
+    err = capsys.readouterr().err
+    assert err == "s1: " + _one_fit_message(1, "current", FIT_B, "reference", 1, FIT_A, qid=qid, model=model) + "\n"
+    assert err.count("\n") == 1 and "\r" not in err
 
 
 def test_calibrated_one_fit_runs_before_the_policys_fit_check() -> None:

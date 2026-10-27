@@ -118,7 +118,7 @@ s1 compare s1-demo/records.jsonl s1-demo/records_kev.jsonl
 s1 judge audit s1-demo/judge_grades.jsonl
 
 # 7) Distribution & Silent Model-Served Drift Monitor (PSI on raw probabilities;
-#    --calibrated compares calibrated ones and needs `calib` from one fit per model on every answered record of both files)
+#    --calibrated compares calibrated ones and needs `calib` on every answered record of both files, from one fit per question and model)
 s1 drift s1-demo/records.jsonl s1-demo/records_canary.jsonl --policy s1-demo/policy.json
 #    (a live canary has no `calib` yet: run `s1 apply canary.jsonl --fit s1-demo/fits.json -o canary_calibrated.jsonl
 #    --pass-through-unfitted` first, which keeps the records of models without a fit)

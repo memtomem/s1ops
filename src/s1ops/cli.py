@@ -51,6 +51,7 @@ from s1ops.improve.policy import (
     Prices,
     choose,
     grid as band_grid,
+    select_false_pass_cutoff,
     select_threshold,
     sweep,
     threshold_curve,
@@ -412,13 +413,23 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         print(json.dumps({"groups": curves}, indent=2, sort_keys=True))
         return 0
 
+    false_pass = args.max_false_pass
+    if false_pass is not None and args.max_escalation is not None:
+        raise CliError("--max-escalation sizes the F1 band, which --max-false-pass replaces; pass one of them")
+    max_escalation = 0.35 if args.max_escalation is None else args.max_escalation
     src_sha = sha256_file(args.records)
     tuned_rows = _tuned_rows(records) if args.use_calib else {}
+    selected = [
+        grp
+        for grp in sel.groups
+        if not (args.question and grp.question_id != args.question) and not (args.model and grp.model_served != args.model)
+    ]
+    if false_pass is not None and selected and not any(grp.primitive == "noul" for grp in selected):
+        raise CliError("--max-false-pass applies to noul groups, and none is selected")
     policies: list[PolicyEntry] = []
-    for grp in sel.groups:
-        if args.question and grp.question_id != args.question:
-            continue
-        if args.model and grp.model_served != args.model:
+    for grp in selected:
+        if false_pass is not None and grp.primitive == "noul":
+            policies.append(_false_pass_policy(args, grp, src_sha, tuned_rows))
             continue
         conf, correct = top_label(grp.P, grp.y)
         tau = select_threshold(
@@ -448,7 +459,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
                 band_grid(0.10),
                 Prices(jev_usd=args.cost_s1, llm_usd=args.cost_sys2),
             )
-            best = choose(swept, metric="f1", max_escalation_rate=args.max_escalation)
+            best = choose(swept, metric="f1", max_escalation_rate=max_escalation)
             if best is not None:
                 band_lo = best.band.lo
                 band_hi = best.band.hi
@@ -487,6 +498,51 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned_rows: dict) -> PolicyEntry:
+    """A noul policy that passes (does not block) `p >= cutoff`, the smallest cutoff at which at
+    most `--max-false-pass` of the group's label-false items pass. Written as a band with
+    `band_lo == band_hi`, so it never escalates and the gate routes it unchanged."""
+    name = f"{grp.question_id} ({grp.model_served})"
+    p, label = grp.P[:, 1], grp.y == 1
+    try:
+        cut = select_false_pass_cutoff(p, label, args.max_false_pass, use_cp_upper=args.use_cp_upper, alpha=args.cp_alpha)
+    except ValueError as e:
+        raise CliError(f"{name}: {e}") from None
+    if cut is None:
+        bound = f"the Clopper-Pearson upper bound (alpha {args.cp_alpha:g})" if args.use_cp_upper else "the false-pass rate"
+        raise CliError(
+            f"{name}: no cutoff keeps {bound} at or under {args.max_false_pass:g} with {int((~label).sum())} "
+            "label-false items; more label-false items, a larger --max-false-pass or a larger --cp-alpha may help"
+        )
+    return PolicyEntry(
+        question_id=grp.question_id,
+        model_served=grp.model_served,
+        primitive=grp.primitive,
+        mode="escalation_band",
+        split="eval",
+        n=grp.n,
+        threshold=None,
+        error_budget=None,
+        band_lo=cut.cutoff,
+        band_hi=cut.cutoff,
+        calibrated=args.use_calib,
+        fit_sha256=_tuned_fit_sha256(grp, tuned_rows[grp.key]) if args.use_calib else None,
+        source_sha256=src_sha,
+        metrics_on_split={
+            "selection": "max_false_pass",
+            "max_false_pass": args.max_false_pass,
+            "use_cp_upper": args.use_cp_upper,
+            "cp_alpha": args.cp_alpha,
+            "n_true": cut.n_true,
+            "n_false": cut.n_false,
+            "true_pass": cut.true_pass,
+            "false_pass": cut.false_pass,
+            "true_pass_rate": cut.true_pass_rate,
+            "false_pass_rate": cut.false_pass_rate,
+        },
+    )
 
 
 def _cmd_slice(args: argparse.Namespace) -> int:
@@ -1038,12 +1094,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_pt.add_argument("-o", "--output", required=True, help="policy.json to write")
     p_pt.add_argument("--question", default=None, help=_H_QUESTION)
     p_pt.add_argument("--model", default=None, help=_H_MODEL)
-    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it")
-    p_pt.add_argument("--use-cp-upper", action="store_true", help="judge the budget against the Clopper-Pearson upper bound instead of the point estimate")
+    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it (choice and score groups only under --max-false-pass)")
+    p_pt.add_argument("--use-cp-upper", action="store_true", help="judge the budget (or --max-false-pass) against the Clopper-Pearson upper bound instead of the point estimate")
     p_pt.add_argument("--cp-alpha", type=float, default=0.05, help="significance level of the Clopper-Pearson bound")
     p_pt.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
     p_pt.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
-    p_pt.add_argument("--max-escalation", type=float, default=0.35, help="largest fraction of items the noul escalation band may send to System 2")
+    p_pt.add_argument("--max-escalation", type=float, default=None, help="largest fraction of items the noul escalation band may send to System 2 (default: 0.35)")
+    p_pt.add_argument(
+        "--max-false-pass",
+        type=float,
+        default=None,
+        help="for noul groups, in place of the F1 band: the smallest cutoff at which at most this share of label-false items pass (p >= cutoff), written as a band with band_lo == band_hi",
+    )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve", **_FMT)
     p_pc.add_argument("records", help=_H_RECORDS)

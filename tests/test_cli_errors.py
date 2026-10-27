@@ -342,3 +342,172 @@ def test_probe_bad_states_row_is_one_line_before_ledger_or_output(tmp_path: Path
     err = capsys.readouterr().err.strip().splitlines()
     assert err == [f"s1: {states}: {message}"]
     assert out.read_text() == "previous\n" and not ledger.exists()
+
+
+# One line, whatever a message interpolates (#32): `_fail` and the parser escape every
+# non-printable character. Record ids may carry any of them (`parse_record` accepts them).
+@pytest.mark.parametrize(
+    ("message", "line"),
+    [
+        ("a\nb", "a\\nb"),
+        ("a\r\nb", "a\\r\\nb"),
+        ("a\x0bb\x0cc\x1cd\x85e\u2028f\u2029g", "a\\x0bb\\x0cc\\x1cd\\x85e\\u2028f\\u2029g"),
+        ("q\x1b[31mRED\x1b[0m", "q\\x1b[31mRED\\x1b[0m"),
+        ("q\u202eevil", "q\\u202eevil"),
+        ("tab\there", "tab\\there"),
+        ("nul\x00", "nul\\x00"),
+        ("bom\ufeff", "bom\\ufeff"),
+        ("tag\U000e0001", "tag\\U000e0001"),
+        ("lone\ud800", "lone\\ud800"),
+        ("unassigned\u0378", "unassigned\\u0378"),
+        ("질문 é 漢字 🙂", "질문 é 漢字 🙂"),
+        ("", ""),
+    ],
+    ids=["newline", "crlf", "separators", "ansi", "bidi", "tab", "nul", "bom", "non-bmp-format", "surrogate", "unassigned", "printable-unicode", "empty"],
+)
+def test_one_line_escapes_only_non_printable_characters(message: str, line: str) -> None:
+    from s1ops.cli import _one_line
+
+    assert _one_line(message) == line
+    assert line.isprintable()
+
+
+def test_one_line_is_one_printable_line_for_every_code_point() -> None:
+    import codecs
+
+    from s1ops.cli import _one_line
+
+    for cp in range(0x110000):
+        c = chr(cp)
+        out = _one_line(f"a{c}b")
+        assert out.isprintable() and len(f"s1: {out}".splitlines()) == 1, hex(cp)
+        assert out[0] == "a" and out[-1] == "b", hex(cp)
+        middle = out[1:-1]
+        if c.isprintable():
+            assert middle == c, hex(cp)
+        else:
+            # An ASCII escape that decodes back to the character, not some other printable stand-in.
+            assert middle.isascii() and middle.startswith("\\"), hex(cp)
+            assert codecs.decode(middle, "unicode_escape") == c, hex(cp)
+
+
+def test_backslashes_are_kept_so_a_literal_backslash_n_looks_escaped(tmp_path: Path, monkeypatch, capsys) -> None:
+    from s1ops.cli import CliError
+
+    def raise_(args):
+        raise CliError("path C:\\temp\\new and a\nbreak")
+
+    monkeypatch.setattr("s1ops.cli._cmd_audit", raise_)
+    records = tmp_path / "r.jsonl"
+    records.write_text("")
+    assert cli_main(["audit", str(records)]) == 1
+    assert capsys.readouterr().err == "s1: path C:\\temp\\new and a\\nbreak\n"
+
+
+def _branch_errors():
+    from s1ops.cli import CliError
+    from s1ops.contracts.records import RecordError
+    from s1ops.ledger.journal import BudgetExceeded
+    from s1ops.runtime.gate import ModelServedMismatchError, PolicyIntegrityError
+
+    return [
+        (CliError("a\nb"), 1, "a\\nb"),
+        (CliError("a\nb", 2), 2, "a\\nb"),
+        (ModelServedMismatchError("a\nb"), 3, "a\\nb"),
+        (OSError(2, "No such\nfile", "/tmp/x\ny"), 1, "/tmp/x\\ny: No such\\nfile"),
+        (RecordError(4, "a\nb"), 1, "line 4: a\\nb"),
+        (FitError("a\nb"), 1, "a\\nb"),
+        (PolicyIntegrityError("a\nb"), 1, "a\\nb"),
+        (BudgetExceeded("a\nb"), 1, "a\\nb"),
+    ]
+
+
+@pytest.mark.parametrize("index", range(8), ids=["cli", "cli-code-2", "model-mismatch", "os", "record", "fit", "integrity", "budget"])
+def test_every_mapped_error_is_one_escaped_line(tmp_path: Path, monkeypatch, capsys, index: int) -> None:
+    error, code, line = _branch_errors()[index]
+
+    def raise_(args):
+        raise error
+
+    monkeypatch.setattr("s1ops.cli._cmd_audit", raise_)
+    records = tmp_path / "r.jsonl"
+    records.write_text("")
+    assert cli_main(["audit", str(records)]) == code
+    out, err = capsys.readouterr()
+    assert (out, err) == ("", f"s1: {line}\n")
+
+
+def test_s1_debug_reraises_library_errors_with_their_own_text(tmp_path: Path, monkeypatch, capsys) -> None:
+    from s1ops.cli import CliError
+    from s1ops.contracts.records import RecordError
+
+    records = tmp_path / "r.jsonl"
+    records.write_text("")
+    monkeypatch.setenv("S1_DEBUG", "1")
+    raised: list[Exception] = [RecordError(1, "a\nb"), CliError("a\nb")]
+
+    def raise_(args):
+        raise raised.pop(0)
+
+    monkeypatch.setattr("s1ops.cli._cmd_audit", raise_)
+    with pytest.raises(RecordError) as exc:
+        cli_main(["audit", str(records)])
+    assert str(exc.value) == "line 1: a\nb"
+    assert cli_main(["audit", str(records)]) == 1
+    assert capsys.readouterr().err == "s1: a\\nb\n"
+
+
+def test_a_usage_error_message_is_one_escaped_line(tmp_path: Path, capsys) -> None:
+    path = tmp_path / "q.json"
+    path.write_text("{}")
+    with pytest.raises(SystemExit) as exc:
+        cli_main(["lint", "check", str(path), "x\ny\x1b[2J"])
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("usage: ")
+    assert err.splitlines()[-1] == "s1: unrecognized arguments: x\\ny\\x1b[2J"
+    assert err.endswith("s1: unrecognized arguments: x\\ny\\x1b[2J\n")
+
+
+QID = "q\nextra"
+FIT_A, FIT_B = "a" * 16, "b" * 16
+
+
+def _record(i: int, **extra) -> dict:
+    return {
+        "schema": "s1-record/1", "item_id": f"i{i}", "question_id": QID, "primitive": "noul",
+        "model_requested": "m", "model_served": "m", "p": 0.7, **extra,
+    }
+
+
+def _write_rows(path: Path, rows: list[dict]) -> str:
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return str(path)
+
+
+def _policy_file(path: Path, **fields) -> str:
+    row = {"question_id": QID, "model_served": "m", "primitive": "noul", "mode": "error_budget",
+           "split": "eval", "n": 1, "threshold": 0.5, "calibrated": True, **fields}
+    path.write_text(json.dumps({"schema": "s1-policy/1", "policies": [row]}))
+    return str(path)
+
+
+@pytest.mark.parametrize("path", ["missing-calib", "other-fit", "tune-two-fits"])
+def test_the_issue_paths_print_one_line(tmp_path: Path, capsys, path: str) -> None:
+    out = str(tmp_path / "o")
+    if path == "missing-calib":
+        args = ["export", "phoenix", _write_rows(tmp_path / "r.jsonl", [_record(1)]), "-o", out,
+                "--policy", _policy_file(tmp_path / "p.json")]
+        expected = ("s1: line 1: policy for q\\nextra (m) was tuned on calibrated probabilities and this record has "
+                    "none; run `s1 apply` first (`--pass-through-unfitted` keeps records of models it has no fit for)\n")
+    elif path == "other-fit":
+        args = ["export", "phoenix", _write_rows(tmp_path / "r.jsonl", [_record(1, calib={"p": 0.6, "fit_sha256": FIT_B})]),
+                "-o", out, "--policy", _policy_file(tmp_path / "p.json", fit_sha256=FIT_A)]
+        expected = (f"s1: line 1: policy for q\\nextra (m) was tuned through fit '{FIT_A}', but this record was calibrated "
+                    f"through '{FIT_B}'; re-run `s1 apply` with the fits.json the policy was tuned through\n")
+    else:
+        rows = [_record(i, label=i % 2 == 0, split="eval", calib={"p": 0.6, "fit_sha256": FIT_A if i < 5 else FIT_B}) for i in range(10)]
+        args = ["policy", "tune", _write_rows(tmp_path / "r.jsonl", rows), "-o", out, "--error-budget", "0.1", "--use-calib"]
+        expected = f"s1: q\\nextra (m): records were calibrated through different fits ('{FIT_A}', '{FIT_B}'); apply one fit file\n"
+    assert cli_main(args) == 1
+    assert capsys.readouterr() == ("", expected)

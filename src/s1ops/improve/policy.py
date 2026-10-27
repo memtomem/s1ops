@@ -6,6 +6,9 @@ Supports two complementary policy modes:
    Pick the lowest threshold where empirical error rate (or Clopper-Pearson upper bound) <= `budget`.
 2. Hybrid Escalation Band (`Band`, `Route`, `BandResult`, `sweep`, `pareto`, `choose`):
    For binary (`noul`) cascades: `p < lo` -> FALSE, `p >= hi` -> TRUE, `lo <= p < hi` -> ESCALATE to LLM.
+3. False-Pass Cap (`select_false_pass_cutoff`, `FalsePassCut`):
+   For a `noul` consumer that acts only on FALSE: the smallest cutoff at which at most a given share of
+   label-false items reach `p >= cutoff`, written as a band with `lo == hi`.
 """
 
 import json
@@ -69,6 +72,75 @@ def select_threshold(
     else:
         ok = np.flatnonzero((errors[ends] <= budget * accepted) & (accepted >= min_accepted))
     return float(ordered[ends[ok[-1]]]) if len(ok) else None
+
+
+@dataclass(frozen=True)
+class FalsePassCut:
+    """A noul cutoff `c` where an item passes (is not blocked) iff `p >= c`, with its counts."""
+
+    cutoff: float
+    n_true: int
+    n_false: int
+    true_pass: int
+    false_pass: int
+
+    @property
+    def true_pass_rate(self) -> float | None:
+        return self.true_pass / self.n_true if self.n_true else None
+
+    @property
+    def false_pass_rate(self) -> float:
+        return self.false_pass / self.n_false
+
+
+def select_false_pass_cutoff(
+    p,
+    label,
+    max_false_pass: float,
+    *,
+    use_cp_upper: bool = False,
+    alpha: float = 0.05,
+) -> FalsePassCut | None:
+    """Smallest cutoff at which at most `max_false_pass` of the label-false items pass.
+
+    For a consumer that acts only on BLOCK (`p < band_lo`) and treats ALLOW and ESCALATE alike.
+    Candidates are the observed `p` values and `1.0`; an item at exactly the cutoff passes, as in
+    routing. A candidate is feasible when `false_pass <= max_false_pass * n_false` (or its
+    Clopper-Pearson upper bound is `<= max_false_pass` when `use_cp_upper=True`); the smallest
+    feasible one passes the most label-true items. `None` means no candidate is feasible.
+    """
+    if not math.isfinite(max_false_pass) or not 0 <= max_false_pass < 1:
+        raise ValueError(f"max_false_pass must be in [0, 1), got {max_false_pass!r}")
+    if use_cp_upper and not (math.isfinite(alpha) and 0 < alpha < 1):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
+    p, label = np.asarray(p, dtype=float), np.asarray(label)
+    if p.ndim != 1 or label.shape != p.shape:
+        raise ValueError("p and label must be equal-length 1-D vectors")
+    if not np.isfinite(p).all() or ((p < 0) | (p > 1)).any():
+        raise ValueError("p must be finite and in [0, 1]")
+    if label.dtype != bool:
+        raise ValueError("label must be boolean")
+    false_p, true_p = np.sort(p[~label]), np.sort(p[label])
+    if not len(false_p):
+        raise ValueError("no label-false items: nothing bounds the false-pass rate")
+    candidates = np.unique(np.r_[p, 1.0])
+    false_pass = len(false_p) - np.searchsorted(false_p, candidates, side="left")
+    if use_cp_upper:
+        ok = np.array([clopper_pearson_upper(int(k), len(false_p), alpha) <= max_false_pass for k in false_pass], dtype=bool)
+    else:
+        ok = false_pass <= max_false_pass * len(false_p)
+    feasible = np.flatnonzero(ok)
+    if not len(feasible):
+        return None
+    i = int(feasible[0])
+    c = float(candidates[i])
+    return FalsePassCut(
+        cutoff=c,
+        n_true=len(true_p),
+        n_false=len(false_p),
+        true_pass=int(len(true_p) - np.searchsorted(true_p, c, side="left")),
+        false_pass=int(false_pass[i]),
+    )
 
 
 def expected_cost(

@@ -227,10 +227,14 @@
     <section id="tab-policy" class="tab-pane">
       <div class="controls">
         <div class="control-group">
+          <label>Group (question_id · model_served · primitive)</label>
+          <select id="inp-group"><option value="">First noul group</option></select>
+        </div>
+        <div class="control-group band-control">
           <label>band_lo (Auto-FALSE below): <span id="lbl-tau-low">0.25</span></label>
           <input type="range" id="inp-tau-low" min="0.05" max="0.90" step="0.05" value="0.25" />
         </div>
-        <div class="control-group">
+        <div class="control-group band-control">
           <label>band_hi (Auto-TRUE at/above): <span id="lbl-tau-high">0.75</span></label>
           <input type="range" id="inp-tau-high" min="0.10" max="0.95" step="0.05" value="0.75" />
         </div>
@@ -288,6 +292,11 @@
       return k === null || k === undefined ? "N/A" : k.toFixed(3);
     }
 
+    // A rate in [0, 1] as a percentage; null (no policy for the group) as "N/A".
+    function fmtRate(r) {
+      return r === null || r === undefined ? "N/A" : (r * 100).toFixed(1) + "%";
+    }
+
     function showError(containerId, err) {
       document.getElementById(containerId).innerHTML =
         `<div class="card"><span class="badge badge-err">ERROR</span> ${esc(err.message)}</div>`;
@@ -342,6 +351,21 @@
           <text x="${pad}" y="${size-10}" fill="#8ea0be" font-size="10" font-family="monospace">Predicted Probability →</text>
         </svg>
       `;
+    }
+
+    // Groups from /api/groups, indexed by the picker's option values.
+    let GROUPS = [];
+
+    function fillGroupPicker(groups) {
+      GROUPS = groups || [];
+      const picker = document.getElementById("inp-group");
+      GROUPS.forEach((g, i) => {
+        const option = document.createElement("option");
+        option.value = String(i);
+        // textContent, never innerHTML: these are workspace identifiers.
+        option.textContent = [g.question_id, g.model_served, g.primitive].join(" · ");
+        picker.appendChild(option);
+      });
     }
 
     async function loadOverview() {
@@ -418,7 +442,12 @@
       }).join("");
     }
 
+    // Each simulator request takes a number; a response (or error) for an older request is
+    // dropped, so a slow answer for the previous group never overwrites the current one.
+    let policySeq = 0;
+
     async function loadPolicy() {
+      const seq = ++policySeq;
       const low = parseFloat(document.getElementById("inp-tau-low").value);
       const high = parseFloat(document.getElementById("inp-tau-high").value);
       const costS2 = parseFloat(document.getElementById("inp-cost-s2").value);
@@ -426,10 +455,61 @@
       document.getElementById("lbl-tau-low").textContent = low.toFixed(2);
       document.getElementById("lbl-tau-high").textContent = high.toFixed(2);
 
-      const url = `/api/simulate-policy?tau_low=${low}&tau_high=${high}&cost_sys2=${costS2}&error_budget=${budget}`;
-      const d = await fetchJson(url);
-      const b = d.active_band;
+      const params = new URLSearchParams({tau_low: low, tau_high: high, cost_sys2: costS2, error_budget: budget});
+      const picked = GROUPS[parseInt(document.getElementById("inp-group").value, 10)];
+      if (picked) {
+        params.set("question_id", picked.question_id);
+        params.set("model_served", picked.model_served);
+        params.set("primitive", picked.primitive);
+      }
+      let d;
+      try {
+        d = await fetchJson(`/api/simulate-policy?${params}`);
+      } catch (err) {
+        if (seq !== policySeq) return;
+        throw err;
+      }
+      if (seq !== policySeq) return;
       const t = d.tuned_threshold;
+      const thresholdHtml = `
+            <div>
+              <div class="sub">Error-Budget Threshold (budget ≤ ${(budget*100).toFixed(0)}%)</div>
+              <div class="kpi">${t.threshold !== null ? 'τ = ' + t.threshold.toFixed(3) : 'Delegate All'}</div>
+              <span class="badge ${t.threshold !== null ? 'badge-ok' : 'badge-warn'}">
+                ${t.threshold !== null ? 'Feasible' : 'No threshold meets error budget'}
+              </span>
+            </div>`;
+      const b = d.band_supported ? d.active_band : null;
+      // The band sliders only mean something for a noul group.
+      document.querySelectorAll(".band-control").forEach(el => { el.style.display = d.band_supported ? "" : "none"; });
+      if (!b) {
+        // Choice and score policies are error_budget only: show the threshold and its operating curve.
+        document.getElementById("policy-container").innerHTML = `
+          <div class="card">
+            <h3>Error-Budget Threshold on ${esc(d.group.question_id)} (${esc(d.group.model_served)}, ${esc(d.group.primitive)})</h3>
+            <div class="sub">${d.band_supported ? 'No band result for this group.' : 'Escalation bands are noul-only; this group routes by an error-budget threshold on its top probability.'}</div>
+            <div class="grid-3">${thresholdHtml}</div>
+            <h3>Threshold Operating Curve</h3>
+            <table>
+              <thead>
+                <tr><th>Threshold</th><th>Coverage</th><th>Error Rate</th><th>CP Upper 95%</th><th>Cost / 1k ($)</th></tr>
+              </thead>
+              <tbody>
+                ${(d.threshold_curve || []).map(c => `
+                  <tr>
+                    <td class="mono">${c.threshold.toFixed(3)}</td>
+                    <td class="mono">${(c.coverage * 100).toFixed(1)}%</td>
+                    <td class="mono">${(c.error_rate * 100).toFixed(2)}%</td>
+                    <td class="mono">${(c.cp_upper_95 * 100).toFixed(2)}%</td>
+                    <td class="mono">$${c.cost_per_1k_usd.toFixed(4)}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+        return;
+      }
       const escPct = (b.escalation_rate * 100).toFixed(1);
       const autoPct = (100 - b.escalation_rate * 100).toFixed(1);
 
@@ -451,13 +531,7 @@
               <div class="kpi">$${b.cost_usd.toFixed(4)}</div>
               <span class="sub">Escalated: ${b.escalated} / ${b.n}</span>
             </div>
-            <div>
-              <div class="sub">Error-Budget Threshold (budget ≤ ${(budget*100).toFixed(0)}%)</div>
-              <div class="kpi">${t.threshold !== null ? 'τ = ' + t.threshold.toFixed(3) : 'Delegate All'}</div>
-              <span class="badge ${t.threshold !== null ? 'badge-ok' : 'badge-warn'}">
-                ${t.threshold !== null ? 'Feasible' : 'No threshold meets error budget'}
-              </span>
-            </div>
+            ${thresholdHtml}
           </div>
           <h3>Pareto Frontier (Cost vs F1)</h3>
           <table>
@@ -465,7 +539,7 @@
               <tr><th>Band [lo, hi)</th><th>Hybrid Accuracy</th><th>F1</th><th>Escalation Rate</th><th>Batch Cost ($)</th></tr>
             </thead>
             <tbody>
-              ${d.pareto_frontier.map(p => `
+              ${(d.pareto_frontier || []).map(p => `
                 <tr>
                   <td class="mono">${esc(p.band)}</td>
                   <td class="mono">${(p.accuracy * 100).toFixed(2)}%</td>
@@ -483,6 +557,7 @@
     ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
       document.getElementById(id).addEventListener("input", () => run(loadPolicy, "policy-container"));
     });
+    document.getElementById("inp-group").addEventListener("change", () => run(loadPolicy, "policy-container"));
 
     async function loadLint() {
       const d = await fetchJson("/api/lint");
@@ -697,6 +772,13 @@
                 <span class="sub">p95 Latency: ${q.latency_ref.p95_ms || '-'} ms → ${q.latency_cur.p95_ms || '-'} ms</span>
               </div>
             </div>
+            <div class="grid-3">
+              <div>
+                <div class="sub">Escalation Rate under policy.json (Ref → Cur)</div>
+                <div class="kpi">${fmtRate(q.escalation_rate_ref)} → ${fmtRate(q.escalation_rate_cur)}</div>
+                <span class="sub">${q.escalation_rate_ref === null || q.escalation_rate_ref === undefined ? 'No policy for this group' : 'Share of answers the policy sends to System 2'}</span>
+              </div>
+            </div>
           </div>
         `;
       }).join('');
@@ -707,6 +789,8 @@
     });
     run(loadAudit, "calib-container");
     run(loadPolicy, "policy-container");
+    // The picker reads records.jsonl only, so a fits.json error in the overview leaves it usable.
+    fetchJson("/api/groups").then(d => fillGroupPicker(d.groups)).catch(err => showError("policy-container", err));
     run(loadLint, "lint-container");
     run(loadSlicesAndLabels, "slices-container");
     run(loadCompare, "compare-container");

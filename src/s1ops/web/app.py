@@ -156,6 +156,20 @@ def create_app(
         html_path = STATIC_DIR / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
+    @app.get("/api/groups")
+    def api_groups() -> dict[str, Any]:
+        """The labeled groups the policy simulator can run on, from records.jsonl alone, so a bad
+        fits.json (which /api/overview reports) does not empty the simulator's group picker."""
+        records = _get_records()
+        if not records:
+            return {"groups": []}
+        return {
+            "groups": [
+                {"question_id": g.question_id, "model_served": g.model_served, "primitive": g.primitive, "n": g.n}
+                for g in _select(records).groups
+            ]
+        }
+
     @app.get("/api/overview")
     def api_overview() -> dict[str, Any]:
         records = _get_records()
@@ -248,6 +262,7 @@ def create_app(
     def api_simulate_policy(
         question_id: str | None = Query(default=None),
         model_served: str | None = Query(default=None),
+        primitive: str | None = Query(default=None),
         tau_low: float = Query(default=0.25, ge=0.0, le=1.0),
         tau_high: float = Query(default=0.75, ge=0.0, le=1.0),
         cost_s1: float = Query(default=0.00004, ge=0.0, allow_inf_nan=False),
@@ -260,19 +275,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="No records loaded")
 
         sel = _select(records)
-        chosen_grp = None
-        for grp in sel.groups:
-            if question_id and grp.question_id != question_id:
-                continue
-            if model_served and grp.model_served != model_served:
-                continue
-            if grp.primitive == "noul":
-                chosen_grp = grp
-                break
-        if chosen_grp is None and sel.groups:
-            chosen_grp = sel.groups[0]
-        if chosen_grp is None:
+        matching = [
+            grp
+            for grp in sel.groups
+            if (question_id is None or grp.question_id == question_id)
+            and (model_served is None or grp.model_served == model_served)
+            and (primitive is None or grp.primitive == primitive)
+        ]
+        if not matching:
             raise HTTPException(status_code=404, detail="No matching labeled group found")
+        # With no filter, open on a noul group, the only kind the band simulation applies to.
+        filtered = question_id is not None or model_served is not None or primitive is not None
+        chosen_grp = matching[0] if filtered else next((g for g in matching if g.primitive == "noul"), matching[0])
 
         conf, correct = top_label(chosen_grp.P, chosen_grp.y)
         tau = select_threshold(conf, correct, budget=error_budget)
@@ -282,18 +296,38 @@ def create_app(
             c_s1=cost_s1,
             c_delegate=cost_sys2,
         )
+        out: dict[str, Any] = {
+            "group": {
+                "question_id": chosen_grp.question_id,
+                "model_served": chosen_grp.model_served,
+                "primitive": chosen_grp.primitive,
+                "n": chosen_grp.n,
+            },
+            "band_supported": chosen_grp.primitive == "noul",
+            "active_band": None,
+            "tuned_threshold": {
+                "threshold": tau,
+                "error_budget": error_budget,
+            },
+            "recommended_band_under_35pct_esc": None,
+            "pareto_frontier": None,
+            "threshold_curve": curve,
+        }
+        if chosen_grp.primitive != "noul":
+            # An escalation band is a noul rule (`policy tune` compiles none for choice or score):
+            # binarizing a choice or score label here would report metrics of no policy.
+            return out
 
         # Build DevRecords for hybrid escalation band evaluation
         low = min(tau_low, tau_high)
         high = max(tau_low, tau_high)
         dev_records: list[DevRecord] = []
         for idx, (_, item_id) in enumerate(chosen_grp.items):
-            p_yes = float(chosen_grp.P[idx, 1]) if chosen_grp.primitive == "noul" else float(conf[idx])
             lbl = bool(chosen_grp.y[idx] == 1)
             dev_records.append(
                 DevRecord(
                     id=item_id,
-                    p_jev=p_yes,
+                    p_jev=float(chosen_grp.P[idx, 1]),
                     label=lbl,
                     llm=lbl,
                     jev_cost_usd=cost_s1,
@@ -304,25 +338,11 @@ def create_app(
         prices = Prices(jev_usd=cost_s1, llm_usd=cost_sys2)
         active_res = evaluate_band(dev_records, Band(low, high), prices)
         swept = sweep(dev_records, band_grid(0.10), prices)
-        frontier = [r.as_row() for r in pareto(swept, metric="f1")]
         recommended = choose(swept, metric="f1", max_escalation_rate=0.35)
-
-        return {
-            "group": {
-                "question_id": chosen_grp.question_id,
-                "model_served": chosen_grp.model_served,
-                "primitive": chosen_grp.primitive,
-                "n": chosen_grp.n,
-            },
-            "active_band": active_res.as_row() if active_res else None,
-            "tuned_threshold": {
-                "threshold": tau,
-                "error_budget": error_budget,
-            },
-            "recommended_band_under_35pct_esc": recommended.as_row() if recommended else None,
-            "pareto_frontier": frontier,
-            "threshold_curve": curve,
-        }
+        out["active_band"] = active_res.as_row() if active_res else None
+        out["recommended_band_under_35pct_esc"] = recommended.as_row() if recommended else None
+        out["pareto_frontier"] = [r.as_row() for r in pareto(swept, metric="f1")]
+        return out
 
     @app.get("/api/lint")
     def api_lint() -> dict[str, Any]:

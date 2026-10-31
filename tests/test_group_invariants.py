@@ -125,3 +125,34 @@ def test_drift_still_pools_a_questions_models(ws) -> None:
 def test_demo_compare_and_drift_unchanged(ws) -> None:
     assert compare_records(ws["records"], ws["records_kev"])["questions"]
     assert audit_drift(ws["records"], ws["records_canary"])["questions"]
+
+
+def test_drift_refuses_sides_that_each_hold_one_other_primitive(ws, tmp_path: Path) -> None:
+    # Each side is internally consistent; only comparing across sides finds the conflict.
+    noul = _rows(ws["records"])
+    choice = next(r for r in _rows(ws["records_categorical"]) if r["primitive"] == "choice")
+    choice = {k: v for k, v in choice.items() if k != "calib"}
+    choice.update(question_id=noul[0]["question_id"], model_served=noul[0]["model_served"], item_id="zz-1")
+    cur = _write(tmp_path / "cur.jsonl", [choice])
+    with pytest.raises(DriftInputError) as e:
+        audit_drift(ws["records"], cur)
+    assert (e.value.side, e.value.line) == ("current", 1)
+    assert e.value.message.startswith(f"question {noul[0]['question_id']} is answered as choice here and as noul elsewhere")
+
+
+def test_cli_and_web_compare_refuse_two_primitives_for_one_question(ws, capsys) -> None:
+    categorical = _rows(ws["records_categorical"])
+    primary = _choice_under(_rows(ws["records"]), categorical, 0)
+    shadow = _choice_under(_rows(ws["records_kev"]), categorical, 0)
+    shadow[0]["model_served"] = shadow[1]["model_served"]
+    _write(ws["records"], primary)
+    _write(ws["records_kev"], shadow)
+    expected = (
+        f"primary records answer question {_qid(ws)} as more than one primitive ['choice', 'noul']; "
+        "a question_id names one wire question, so one primitive: the file is hand-edited or mislabeled"
+    )
+    assert cli_main(["compare", ws["records"], ws["records_kev"]]) == 1
+    assert _error(capsys) == f"s1: {expected}"
+    r = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get("/api/compare")
+    assert r.status_code == 400
+    assert r.json()["detail"] == f"records.jsonl vs records_kev.jsonl: {expected}"

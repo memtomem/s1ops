@@ -118,17 +118,54 @@ def format_text(result: LintResult) -> str:
     return "\n".join(lines)
 
 
+PROBE_ROLES = ("noul", "twin", "inverse")
+
+
+class ProbeInputError(ValueError):
+    """A probe record `audit_probe_records` cannot pair: an unknown role, a mistyped tag, a role
+    answered with the wrong primitive, or one role twice for an item. Names the line and field."""
+
+
+def _probe_base(line: int, raw: dict, question_id: str) -> str:
+    for name in ("probe_question", "probe_base_question_id"):
+        if name in raw and (not isinstance(raw[name], str) or not raw[name]):
+            raise ProbeInputError(f"line {line}: '{name}' must be a non-empty string, got {type(raw[name]).__name__}")
+    return raw.get("probe_question") or raw.get("probe_base_question_id") or question_id
+
+
+def _check_probe_answer(line: int, role: str, primitive: str, classes: tuple) -> None:
+    if role in ("noul", "inverse") and primitive != "noul":
+        raise ProbeInputError(f"line {line}: probe_role '{role}' needs a noul answer, got {primitive}")
+    if role == "twin" and (primitive != "choice" or "yes" not in classes):
+        raise ProbeInputError(f"line {line}: probe_role 'twin' needs a choice answer with a 'yes' option, got {primitive}")
+
+
 def audit_probe_records(path: str | Path) -> list[dict]:
-    """Offline coherence analysis of probe records (`probe_role`: `noul`, `twin`, `inverse`)."""
+    """Offline coherence analysis of probe records (`probe_role`: `noul`, `twin`, `inverse`).
+
+    Records without `probe_role` are not probes and are skipped, as are failed probes
+    (`model_served: null`) once their tags check out. A tagged record that cannot be paired
+    raises `ProbeInputError` before anything is computed.
+    """
     records = read_records(path)
     by_q_item: dict[tuple[str, str], dict[tuple[str | None, str], dict[str, dict]]] = defaultdict(lambda: defaultdict(dict))
+    first_line: dict[tuple[str, str, tuple[str | None, str], str], int] = {}
     for r in records:
+        line = r.line
+        if "probe_role" not in r.raw:
+            continue
+        role = r.raw["probe_role"]
+        if role not in PROBE_ROLES:
+            raise ProbeInputError(f"line {line}: 'probe_role' must be one of {', '.join(PROBE_ROLES)}")
+        base_q = _probe_base(line, r.raw, r.question_id)
         if r.model_served is None:
             continue
-        role = r.raw.get("probe_role")
-        base_q = r.raw.get("probe_question") or r.raw.get("probe_base_question_id") or r.question_id
-        if role in ("noul", "twin", "inverse"):
-            by_q_item[(str(base_q), r.model_served)][r.item][role] = r.raw
+        _check_probe_answer(line, role, r.primitive, r.classes)
+        key = (base_q, r.model_served, r.item, role)
+        if key in first_line:
+            raise ProbeInputError(f"line {line}: a second '{role}' probe for the same item and model as line {first_line[key]}")
+        first_line[key] = line
+        by_q_item[(base_q, r.model_served)][r.item][role] = r.raw
 
     reports: list[dict] = []
     for (base_q, model_served), items in sorted(by_q_item.items()):
@@ -137,7 +174,7 @@ def audit_probe_records(path: str | Path) -> list[dict]:
         inv_errors: list[float] = []
         inv_flips = 0
         points: list[dict] = []
-        for (dataset, item_id), roles in sorted(items.items()):
+        for (dataset, item_id), roles in sorted(items.items(), key=lambda kv: (kv[0][0] is not None, kv[0][0] or "", kv[0][1])):
             if "noul" not in roles:
                 continue
             p_noul = float(roles["noul"]["p"])

@@ -40,8 +40,8 @@ from s1ops.improve.policy import (
     sweep,
     threshold_curve,
 )
-from s1ops.improve.slices import mine_error_slices, slice_report
-from s1ops.lint.lint import audit_probe_records, lint_path
+from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_report
+from s1ops.lint.lint import ProbeInputError, audit_probe_records, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.runtime.routing import RoutingInputError
@@ -336,7 +336,10 @@ def create_app(
         if probe_file.exists():
             # audit_probe_records only takes a path, so validate the file first and run the audit unwrapped.
             _load_or_400(probe_file, read_records, probe_file)
-            probe_out = audit_probe_records(probe_file)
+            try:
+                probe_out = audit_probe_records(probe_file)
+            except ProbeInputError as e:
+                raise HTTPException(status_code=400, detail=f"{probe_file.name}: {e}") from None
 
         rules_catalog = [
             {
@@ -364,17 +367,7 @@ def create_app(
     ) -> dict[str, Any]:
         records = _get_records(use_calib=True)
         features_rows = _load_or_400(feat_file, _load_json_or_jsonl, feat_file)
-        features_by_item: dict[tuple[str | None, str], dict[str, Any]] = {}
-        slice_by_item: dict[tuple[str | None, str], str] = {}
-        for row in features_rows:
-            key = (row.get("dataset"), str(row.get("item_id", "")))
-            feats = row.get("features", {})
-            if isinstance(feats, dict):
-                features_by_item[key] = feats
-                if "slice" in feats:
-                    slice_by_item[key] = str(feats["slice"])
-            if "slice" in row:
-                slice_by_item[key] = str(row["slice"])
+        features_by_item, slice_by_item = _load_or_400(feat_file, parse_feature_rows, features_rows)
 
         filtered = [
             r

@@ -56,7 +56,7 @@ from s1ops.improve.policy import (
     sweep,
     threshold_curve,
 )
-from s1ops.improve.slices import mine_error_slices, slice_report
+from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_report
 from s1ops.ledger.journal import (
     BudgetExceeded,
     Ledger,
@@ -65,7 +65,7 @@ from s1ops.ledger.journal import (
     read as ledger_read,
     recover as ledger_recover,
 )
-from s1ops.lint.lint import audit_probe_records, format_text, lint_path
+from s1ops.lint.lint import ProbeInputError, audit_probe_records, format_text, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
@@ -247,7 +247,10 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         return 0
 
     if args.lint_cmd == "probe-audit":
-        report = audit_probe_records(args.records)
+        try:
+            report = audit_probe_records(args.records)
+        except ProbeInputError as e:
+            raise CliError(f"{args.records}: {e}") from None
         print(json.dumps(report, indent=2, sort_keys=True))
         return 0
 
@@ -554,18 +557,13 @@ def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned
 
 def _cmd_slice(args: argparse.Namespace) -> int:
     records = read_records(args.records, use_calib=True)
-    features_by_item: dict[tuple[str | None, str], dict[str, Any]] = {}
-    slice_by_item: dict[tuple[str | None, str], str] = {}
+    features_by_item: dict[FeatureKey, dict] = {}
+    slice_by_item: dict[FeatureKey, str] = {}
     if getattr(args, "features", None):
-        for row in _load_jsonl_dicts(Path(args.features)):
-            key = (row.get("dataset"), str(row.get("item_id", "")))
-            feats = row.get("features", {})
-            if isinstance(feats, dict):
-                features_by_item[key] = feats
-                if "slice" in feats:
-                    slice_by_item[key] = str(feats["slice"])
-            if "slice" in row:
-                slice_by_item[key] = str(row["slice"])
+        try:
+            features_by_item, slice_by_item = parse_feature_rows(_load_jsonl_dicts(Path(args.features)))
+        except ValueError as e:
+            raise CliError(f"{args.features}: {e}") from None
 
     filtered = [
         r

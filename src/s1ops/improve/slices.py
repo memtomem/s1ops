@@ -7,6 +7,57 @@ from dataclasses import asdict, dataclass
 from scipy.stats import fisher_exact
 
 
+FeatureKey = tuple[str | None, str]
+"""`(dataset, item_id)` as records key an item: no `dataset` is `None`, `item_id` is a string."""
+
+_FEATURE_VALUE = (str, int, float, bool)
+
+
+def parse_feature_rows(rows: Sequence[object]) -> tuple[dict[FeatureKey, dict], dict[FeatureKey, str]]:
+    """Check `features.jsonl` rows and index them by item: `(features_by_item, slice_by_item)`.
+
+    A row is `{"dataset"?, "item_id", "slice"?, "features"?}`. `item_id` is a non-empty string or
+    an integer (not a boolean); `dataset` is absent, `null` or a non-empty string; `slice` and
+    `features.slice` are strings; `features` is an object of strings, numbers, booleans or nulls
+    (`mine_error_slices` turns each value into a slice name, so a list or object has no stable
+    one); no item appears twice. A row's own `slice` wins over `features.slice`. Errors name the
+    1-based row and the field, never a value.
+    """
+    features_by_item: dict[FeatureKey, dict] = {}
+    slice_by_item: dict[FeatureKey, str] = {}
+    seen: dict[FeatureKey, int] = {}
+    for i, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            raise ValueError(f"row {i} is not an object")
+        if "item_id" not in row:
+            raise ValueError(f"row {i} is missing 'item_id'")
+        item_id = row["item_id"]
+        if isinstance(item_id, bool) or not isinstance(item_id, (str, int)) or item_id == "":
+            raise ValueError(f"row {i}: 'item_id' must be a non-empty string or an integer, got {type(item_id).__name__}")
+        dataset = row.get("dataset")
+        if dataset is not None and (not isinstance(dataset, str) or not dataset):
+            raise ValueError(f"row {i}: 'dataset' must be a non-empty string or null, got {type(dataset).__name__}")
+        key = (dataset, str(item_id))
+        if key in seen:
+            raise ValueError(f"row {i} is the same item as row {seen[key]}")
+        seen[key] = i
+        feats = row.get("features", {})
+        if not isinstance(feats, Mapping):
+            raise ValueError(f"row {i}: 'features' must be an object, got {type(feats).__name__}")
+        for name, value in feats.items():
+            if value is not None and not isinstance(value, _FEATURE_VALUE):
+                raise ValueError(
+                    f"row {i}: each 'features' value must be a string, number, boolean or null, got {type(value).__name__}"
+                )
+        for where, holder in (("features.slice", feats), ("slice", row)):
+            if "slice" in holder:
+                if not isinstance(holder["slice"], str):
+                    raise ValueError(f"row {i}: '{where}' must be a string, got {type(holder['slice']).__name__}")
+                slice_by_item[key] = holder["slice"]
+        features_by_item[key] = dict(feats)
+    return features_by_item, slice_by_item
+
+
 def wilson(successes: int, n: int, z: float = 1.96) -> tuple[float, float]:
     """Wilson score interval for a binomial proportion."""
     if n <= 0 or not 0 <= successes <= n:

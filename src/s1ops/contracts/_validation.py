@@ -1,6 +1,7 @@
 """Shared helpers for turning malformed input into one-line messages that name their file."""
 
 import json
+import re
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -12,6 +13,11 @@ def pydantic_errors(error: ValidationError) -> list[str]:
         loc = ".".join(str(part) for part in e["loc"]) or "(root)"
         out.append(f"{loc}: {e['msg']}")
     return out
+
+
+# Text read with errors="surrogateescape" holds a lone surrogate in this range exactly where the
+# bytes were not UTF-8; valid UTF-8 never decodes to one (a JSON "\udc80" escape is ASCII text).
+UNDECODABLE = re.compile("[\udc80-\udcff]")
 
 
 class _NonFinite(Exception):

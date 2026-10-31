@@ -276,10 +276,12 @@ def audit_drift(
     stored `calib` in both modes, so one the caller parsed without `use_calib` or with a looser
     tolerance can raise `RecordError` here.
     """
+    # Path reads validate a stored `calib` while reading, so its error names the file; the result
+    # is the same, since `_compared` re-parses every answered record from `raw`.
     if isinstance(ref_records, (str, Path)):
-        ref_records = read_records(ref_records, require_answer=True)
+        ref_records = read_records(ref_records, require_answer=True, use_calib=True)
     if isinstance(cur_records, (str, Path)):
-        cur_records = read_records(cur_records, require_answer=True)
+        cur_records = read_records(cur_records, require_answer=True, use_calib=True)
     refs = _compared(list(ref_records), use_calib, "reference")
     curs = _compared(list(cur_records), use_calib, "current")
     if use_calib:

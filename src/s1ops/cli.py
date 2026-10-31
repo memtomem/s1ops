@@ -40,10 +40,10 @@ from s1ops.improve.calibrate import (
 )
 from s1ops.improve.labelaudit import (
     blind_sheet,
+    check_key,
     estimate,
     rank_with_skips,
     score_sheet,
-    temperatures_from_fits,
 )
 from s1ops.improve.policy import (
     Band,
@@ -604,6 +604,10 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
         _require_file(args.key, "secret key", "s1 labelaudit sheet")
         form_text = Path(args.sheet).read_text(encoding="utf-8")
         key_doc = _read_json(Path(args.key))
+        try:
+            check_key(key_doc)
+        except ValueError as e:
+            raise CliError(f"{args.key}: {e}") from None
         scored = score_sheet(form_text, key_doc)
         est = estimate(
             scored["flag"]["reviewer_disagrees_with_label"],
@@ -622,9 +626,8 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
 
     records = read_records(args.records)
     fits = load_fits(args.fit) if getattr(args, "fit", None) else []
-    temps = temperatures_from_fits(fits) if fits else None
     raw_rows = [r.raw for r in records]
-    flags, skipped = rank_with_skips(raw_rows, temperature=temps)
+    flags, skipped = rank_with_skips(raw_rows, temperature=fits or None)
 
     if args.la_cmd == "rank":
         payload = {
@@ -642,11 +645,12 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
         return 0
 
     states_rows = _load_jsonl_dicts(Path(args.states))
-    states_map: dict[tuple[str | None, str], str] = {}
-    for i, row in enumerate(states_rows, start=1):
-        if "item_id" not in row or "state" not in row:
-            raise CliError(f"{args.states}: row {i} is missing 'item_id' or 'state'")
-        states_map[(row.get("dataset"), str(row["item_id"]))] = str(row["state"])
+    try:
+        check_states(states_rows)
+    except ValueError as e:
+        raise CliError(f"{args.states}: {e}") from None
+    # Keyed as `s1 probe` keys the records it writes from these rows: no `dataset` is "default".
+    states_map = {(row.get("dataset", "default"), str(row["item_id"])): row["state"] for row in states_rows}
 
     options = args.options.split(",") if args.options else ["True", "False"]
     sheet = blind_sheet(
@@ -1146,12 +1150,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub_la = p_la.add_subparsers(dest="la_cmd", required=True)
     p_lar = sub_la.add_parser("rank", help="Rank candidate label errors by calibrated disagreement", **_FMT)
     p_lar.add_argument("records", help=_H_RECORDS)
-    p_lar.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; its temperatures rescale the disagreement score")
+    p_lar.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; each record is ranked on its own group's calibrated distribution (temperature, platt or isotonic), and a record whose group has no fit is refused")
     p_lar.add_argument("--top", type=int, default=20, help="candidates to print")
     p_las = sub_la.add_parser("sheet", help="Generate blinded markdown review sheet + secret key", **_FMT)
     p_las.add_argument("records", help=_H_RECORDS)
-    p_las.add_argument("--states", required=True, help="local-only states JSONL (`item_id`, `state`) to show reviewers; never written to records")
-    p_las.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; its temperatures rescale the disagreement score")
+    p_las.add_argument("--states", required=True, help="local-only states JSONL (`dataset`, `item_id`, `state`; no `dataset` means \"default\", as for `s1 probe`) to show reviewers; never written to records")
+    p_las.add_argument("--fit", default=None, help=f"{_H_FIT_IN}; each record is ranked on its own group's calibrated distribution (temperature, platt or isotonic), and a record whose group has no fit is refused")
     p_las.add_argument("-o", "--output", required=True, help="markdown review sheet to write")
     p_las.add_argument("-k", "--key", required=True, help="secret answer key JSON to write; keep it away from reviewers")
     p_las.add_argument("--top", type=int, default=10, help="flagged candidates on the sheet")

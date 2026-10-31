@@ -42,7 +42,7 @@ from s1ops.improve.policy import (
     sweep,
     threshold_curve,
 )
-from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_report
+from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
 from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import DriftInputError, audit_drift
@@ -436,45 +436,21 @@ def create_app(
         features_rows = _load_or_400(feat_file, _load_json_or_jsonl, feat_file)
         features_by_item, slice_by_item = _load_or_400(feat_file, parse_feature_rows, features_rows)
 
-        filtered = [
-            r
-            for r in records
-            if r.model_served is not None
-            and r.label is not None
-            and (question_id is None or r.question_id == question_id)
-            and (model_served is None or r.model_served == model_served)
-        ]
-        if not filtered:
-            return {"answerability": [], "error_slices": []}
-
-        slice_items: list[dict[str, Any]] = []
-        mine_rows: list[dict[str, Any]] = []
-        for r in filtered:
-            pred = r.classes[int(max(range(len(r.probs)), key=lambda i: r.probs[i]))]
-            sl = slice_by_item.get(r.item) or slice_by_item.get((None, r.item_id)) or "default"
-            feats = features_by_item.get(r.item) or features_by_item.get((None, r.item_id)) or {}
-            slice_items.append(
-                {
-                    "slice": sl,
-                    "predicted": pred,
-                    "label": r.label,
-                }
-            )
-            mine_rows.append(
-                {
-                    "error": pred != r.label,
-                    "features": feats,
-                }
-            )
-
-        ans = [s.as_dict() for s in slice_report(slice_items, min_n=10)]
-        err_slices = [
-            e.as_dict()
-            for e in mine_error_slices(mine_rows, min_support=5, fdr_q=fdr_q)
-        ]
+        if not records:
+            return {"groups": []}
+        # Refuses a repeated item or differing classes in any group (400), before the filters.
+        _select(records)
         return {
-            "answerability": ans,
-            "error_slices": err_slices,
+            "groups": [
+                {
+                    **g.header(),
+                    "answerability": [s.as_dict() for s in slice_report(g.items, min_n=10)],
+                    "error_slices": [e.as_dict() for e in mine_error_slices(g.rows, min_support=5, fdr_q=fdr_q)],
+                }
+                for g in slice_inputs_by_group(
+                    records, features_by_item, slice_by_item, question_id=question_id, model_served=model_served
+                )
+            ]
         }
 
     @app.get("/api/labelaudit")

@@ -1,10 +1,13 @@
 """Slice answerability pre-flight (Wilson CI vs null/blind) and BH-FDR confident-error slice mining."""
 
 import math
+from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 
 from scipy.stats import fisher_exact
+
+from s1ops.contracts.records import GroupKey, Record
 
 
 FeatureKey = tuple[str | None, str]
@@ -134,7 +137,13 @@ class ErrorSliceFinding:
     significant: bool
 
     def as_dict(self) -> dict:
-        return asdict(self)
+        """`odds_ratio` is `None` when it is not finite: Fisher's ratio is `inf` when its denominator
+        is zero (e.g. no error outside the feature) and `nan` when both products are (e.g. a group
+        with no errors). Neither is valid JSON."""
+        d = asdict(self)
+        if not math.isfinite(d["odds_ratio"]):
+            d["odds_ratio"] = None
+        return d
 
 
 def benjamini_hochberg(pvalues: Sequence[float]) -> list[float]:
@@ -219,3 +228,50 @@ def mine_error_slices(
     ]
     findings.sort(key=lambda f: (not f.significant, f.q_value, -f.slice_error_rate))
     return findings
+
+
+@dataclass(frozen=True)
+class GroupSliceInputs:
+    """One `(question_id, model_served, primitive)` group's inputs to `slice_report` (`items`) and
+    `mine_error_slices` (`rows`), one entry per record, in input order."""
+
+    key: GroupKey
+    items: list[dict]
+    rows: list[dict]
+
+    def header(self) -> dict:
+        question_id, model_served, primitive = self.key
+        return {"question_id": question_id, "model_served": model_served, "primitive": primitive, "n": len(self.items)}
+
+
+def slice_inputs_by_group(
+    records: Iterable[Record],
+    features_by_item: Mapping[FeatureKey, Mapping],
+    slice_by_item: Mapping[FeatureKey, str],
+    *,
+    question_id: str | None = None,
+    model_served: str | None = None,
+) -> list[GroupSliceInputs]:
+    """Split the labeled, answered records into their groups, in sorted key order, so slice
+    statistics are never pooled across groups. Call `select(records, allow_model_mismatch=True)`
+    first: it refuses a repeated item or differing classes within a group, which this does not.
+
+    Each record keeps its own prediction: the first of its own classes with the top probability
+    (a group may list a choice's keys in different orders). A record's slice is its item's
+    (`(dataset, item_id)`, then `(None, item_id)`), else `"default"`; its features likewise, else none.
+    """
+    by_key: dict[GroupKey, tuple[list[dict], list[dict]]] = defaultdict(lambda: ([], []))
+    for r in records:
+        if r.model_served is None or r.label is None:
+            continue
+        if (question_id is not None and r.question_id != question_id) or (
+            model_served is not None and r.model_served != model_served
+        ):
+            continue
+        predicted = r.classes[max(range(len(r.probs)), key=lambda i: r.probs[i])]
+        items, rows = by_key[r.key]
+        sl = slice_by_item.get(r.item) or slice_by_item.get((None, r.item_id)) or "default"
+        feats = features_by_item.get(r.item) or features_by_item.get((None, r.item_id)) or {}
+        items.append({"slice": sl, "predicted": predicted, "label": r.label})
+        rows.append({"error": predicted != r.label, "features": feats})
+    return [GroupSliceInputs(key, *by_key[key]) for key in sorted(by_key)]

@@ -59,7 +59,7 @@ from s1ops.improve.policy import (
     sweep,
     threshold_curve,
 )
-from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_report
+from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
 from s1ops.ledger.journal import (
     BudgetExceeded,
     Ledger,
@@ -605,35 +605,27 @@ def _cmd_slice(args: argparse.Namespace) -> int:
         except ValueError as e:
             raise CliError(f"{args.features}: {e}") from None
 
-    filtered = [
-        r
-        for r in records
-        if r.model_served is not None
-        and r.label is not None
-        and (args.question is None or r.question_id == args.question)
-        and (args.model is None or r.model_served == args.model)
-    ]
+    # Refuses a repeated item or differing classes in any group, before the filters, as `s1 audit`.
+    sel = select(records, allow_model_mismatch=True)
+    groups = slice_inputs_by_group(
+        records, features_by_item, slice_by_item, question_id=args.question, model_served=args.model
+    )
+    if not groups:
+        raise _no_groups(args, sel, args.records)
 
     if args.slice_cmd == "answerable":
-        items = []
-        for r in filtered:
-            pred = r.classes[int(max(range(len(r.probs)), key=lambda i: r.probs[i]))]
-            sl = slice_by_item.get(r.item) or slice_by_item.get((None, r.item_id)) or "default"
-            items.append({"slice": sl, "predicted": pred, "label": r.label})
-        rep = [s.as_dict() for s in slice_report(items, min_n=args.min_n)]
-        print(json.dumps({"slices": rep}, indent=2, sort_keys=True))
-        return 0
-
-    rows = []
-    for r in filtered:
-        pred = r.classes[int(max(range(len(r.probs)), key=lambda i: r.probs[i]))]
-        feats = features_by_item.get(r.item) or features_by_item.get((None, r.item_id)) or {}
-        rows.append({"error": pred != r.label, "features": feats})
-    mined = [
-        e.as_dict()
-        for e in mine_error_slices(rows, min_support=args.min_support, fdr_q=args.fdr_q)
-    ]
-    print(json.dumps({"error_slices": mined}, indent=2, sort_keys=True))
+        out = [{**g.header(), "slices": [s.as_dict() for s in slice_report(g.items, min_n=args.min_n)]} for g in groups]
+    else:
+        out = [
+            {
+                **g.header(),
+                "error_slices": [
+                    e.as_dict() for e in mine_error_slices(g.rows, min_support=args.min_support, fdr_q=args.fdr_q)
+                ],
+            }
+            for g in groups
+        ]
+    print(json.dumps({"groups": out}, indent=2, sort_keys=True))
     return 0
 
 
@@ -1169,13 +1161,13 @@ def build_parser() -> argparse.ArgumentParser:
     # slice
     p_sl = sub.add_parser("slice", help="Answerability decomposition & BH-FDR error slice mining", **_FMT)
     sub_sl = p_sl.add_subparsers(dest="slice_cmd", required=True)
-    p_sa = sub_sl.add_parser("answerable", help="Slice metrics vs majority & blind null", **_FMT)
+    p_sa = sub_sl.add_parser("answerable", help="Slice metrics vs majority & blind null, per (question, model, primitive) group", **_FMT)
     p_sa.add_argument("records", help=_H_RECORDS)
     p_sa.add_argument("--features", default=None, help="features JSONL tagging each item with a `slice`; untagged items fall in `default`")
     p_sa.add_argument("--question", default=None, help=_H_QUESTION)
     p_sa.add_argument("--model", default=None, help=_H_MODEL)
     p_sa.add_argument("--min-n", type=int, default=10, help="slices with fewer items are reported but never marked answerable")
-    p_sm = sub_sl.add_parser("mine", help="Mine high-error feature slices with BH-FDR control", **_FMT)
+    p_sm = sub_sl.add_parser("mine", help="Mine high-error feature slices with BH-FDR control, per (question, model, primitive) group", **_FMT)
     p_sm.add_argument("records", help=_H_RECORDS)
     p_sm.add_argument("--features", required=True, help="features JSONL with pre-declared per-item feature tags")
     p_sm.add_argument("--question", default=None, help=_H_QUESTION)

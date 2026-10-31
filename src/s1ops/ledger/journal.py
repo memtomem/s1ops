@@ -55,6 +55,10 @@ def _amount(value, name: str) -> None:
 
 
 def _metadata(meta: dict) -> dict:
+    # A str subclass can compare equal to "state" while hashing apart from it, so membership alone
+    # would let it through and json.dumps would write it as "state"; keys must be plain strings.
+    if any(type(key) is not str for key in meta):
+        raise ValueError("metadata keys must be plain strings")
     if "state" in meta:
         raise ValueError(STATE_REFUSAL)
     clash = ACCOUNTING_KEYS.intersection(meta)

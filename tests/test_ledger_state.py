@@ -94,3 +94,25 @@ def test_a_journal_written_with_state_before_the_refusal_still_opens(tmp_path: P
     path.write_text(json.dumps(_event("reserve", state="SECRET")) + "\n")
     with Ledger(path, cap_usd=1.0) as ledger:
         assert ledger.outstanding == {"r1": 0.01}
+
+
+class _OddHash(str):
+    """Equal to the plain string it wraps but hashed apart from it, so dict membership misses it."""
+
+    def __hash__(self) -> int:
+        return super().__hash__() ^ 1
+
+
+@pytest.mark.parametrize("key", [_OddHash("state"), _OddHash("v"), _OddHash("item_id")])
+def test_metadata_keys_must_be_plain_strings(tmp_path: Path, key: str) -> None:
+    path = tmp_path / "journal.jsonl"
+    with Ledger(path, cap_usd=1.0) as ledger:
+        with pytest.raises(ValueError) as e:
+            ledger.reserve(0.01, **{key: "SECRET"})
+        assert str(e.value) == "metadata keys must be plain strings"
+        reservation = ledger.reserve(0.01)
+        before = path.read_bytes()
+        with pytest.raises(ValueError):
+            ledger.settle(reservation, 0.0, outcome="measured", **{key: "SECRET"})
+        assert path.read_bytes() == before
+    assert b"SECRET" not in path.read_bytes()

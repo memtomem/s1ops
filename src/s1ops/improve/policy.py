@@ -11,12 +11,10 @@ Supports two complementary policy modes:
    label-false items reach `p >= cutoff`, written as a band with `lo == hi`.
 """
 
-import json
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from enum import Enum
-from pathlib import Path
 
 import numpy as np
 from scipy.stats import beta as sp_beta
@@ -292,47 +290,6 @@ class DevRecord:
             value = getattr(self, name)
             if value is not None and not (math.isfinite(value) and value >= 0.0):
                 raise ValueError(f"{self.id}: {name} must be a finite non-negative number, got {value!r}")
-
-    @classmethod
-    def from_json(cls, row: dict) -> "DevRecord":
-        if "p_jev" in row:
-            p_val = float(row["p_jev"])
-            item_id = str(row["id"])
-            llm_ans = None if row.get("llm") is None else _as_bool(row["llm"], "llm")
-            llm_unres = _as_bool(row.get("llm_unresolved", False), "llm_unresolved")
-            jev_c = None if row.get("jev_cost_usd") is None else float(row["jev_cost_usd"])
-            llm_c = None if row.get("llm_cost_usd") is None else float(row["llm_cost_usd"])
-        else:
-            calib = row.get("calib") if isinstance(row.get("calib"), dict) else None
-            p_val = float(calib["p"] if calib and "p" in calib else row["p"])
-            item_id = str(row["item_id"])
-            esc = row.get("escalate") if isinstance(row.get("escalate"), dict) else {}
-            llm_ans = esc.get("llm_answer") if "llm_answer" in esc else row.get("llm")
-            if llm_ans is not None:
-                llm_ans = _as_bool(llm_ans, "llm")
-            llm_unres = _as_bool(esc.get("unresolved", False), "unresolved")
-            jev_c = None if row.get("cost_usd") is None else float(row["cost_usd"])
-            llm_c = None if esc.get("llm_cost_usd") is None else float(esc["llm_cost_usd"])
-        return cls(
-            id=item_id,
-            p_jev=p_val,
-            label=_as_bool(row["label"], "label"),
-            llm=llm_ans,
-            llm_unresolved=llm_unres,
-            jev_cost_usd=jev_c,
-            llm_cost_usd=llm_c,
-        )
-
-
-def _as_bool(value: object, field: str) -> bool:
-    if not isinstance(value, bool):
-        raise ValueError(f"{field} must be a JSON boolean, got {value!r}")
-    return value
-
-
-def load_dev(path: str | Path) -> list[DevRecord]:
-    with open(path, encoding="utf-8") as f:
-        return [DevRecord.from_json(json.loads(line)) for line in f if line.strip()]
 
 
 @dataclass(frozen=True)

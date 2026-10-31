@@ -68,12 +68,12 @@ def _predict_info(
 
     # choice or score
     probs_raw: dict[str, float] = dict(raw_row["probabilities"])
-    probs_cal: dict[str, float] | None = (
-        dict(calib["probabilities"]) if calib and "probabilities" in calib else None
-    )
-    if probs_cal is not None:
-        # The parser checks the calibrated keys against the raw ones, as drift sees them.
+    has_cal = bool(calib) and "probabilities" in calib
+    if has_cal:
+        # Before dict(): the parser refuses a calib.probabilities that is not a distribution, or
+        # whose keys differ from the raw ones, naming the file, as drift does.
         reparse(record, use_calib=True)
+    probs_cal: dict[str, float] | None = dict(calib["probabilities"]) if has_cal else None
     if policy is None:
         probs_eff = probs_cal if probs_cal is not None else probs_raw
         predicted = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]

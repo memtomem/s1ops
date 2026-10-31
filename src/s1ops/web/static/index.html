@@ -230,11 +230,11 @@
           <label>Group (question_id · model_served · primitive)</label>
           <select id="inp-group"><option value="">First noul group</option></select>
         </div>
-        <div class="control-group">
+        <div class="control-group band-control">
           <label>band_lo (Auto-FALSE below): <span id="lbl-tau-low">0.25</span></label>
           <input type="range" id="inp-tau-low" min="0.05" max="0.90" step="0.05" value="0.25" />
         </div>
-        <div class="control-group">
+        <div class="control-group band-control">
           <label>band_hi (Auto-TRUE at/above): <span id="lbl-tau-high">0.75</span></label>
           <input type="range" id="inp-tau-high" min="0.10" max="0.95" step="0.05" value="0.75" />
         </div>
@@ -469,6 +469,8 @@
               </span>
             </div>`;
       const b = d.band_supported ? d.active_band : null;
+      // The band sliders only mean something for a noul group.
+      document.querySelectorAll(".band-control").forEach(el => { el.style.display = d.band_supported ? "" : "none"; });
       if (!b) {
         // Choice and score policies are error_budget only: show the threshold and its operating curve.
         document.getElementById("policy-container").innerHTML = `

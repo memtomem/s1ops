@@ -71,7 +71,7 @@ s1 demo s1-demo
 - `records_canary.jsonl`: 120 production canary records simulating distribution drift (`PSI > 0.25`) + silent backend upgrade on a third of traffic (`jev-1.13.0` → `jev-1.14.0-rc1`). The `jev-1.13.0` records carry `calib` from `fits.json`, as `s1 apply` writes it; the upgraded ones have no fit.
 - `probe_records.jsonl`: Noul vs Yes/No Choice twin & inverse polarity probes.
 - `features.jsonl`: Pre-declared slice tags (`answerable`, `unanswerable`, `adversarial_trap`, `lang`, `has_code`).
-- `states_local.jsonl`: Synthetic item states for the blind review sheet and the probe runner.
+- `states_local.jsonl`: Synthetic item states for the blind review sheet and the probe runner. One row per item, `{"dataset", "item_id", "state"}`; both commands check rows the same way and read a row without `dataset` as `dataset: "default"`, the value `s1 probe` writes into its records. To match records that carry no `dataset`, write `"dataset": null`.
 - `judge_grades.jsonl`: 90 paired rubric judge vs human grades across 3 criteria (`faithfulness`, `policy_compliance`, `tone`).
 - `fits.json` + `policy.json`: A compiled calibration fit and routing policy.
 - `records_categorical_train.jsonl` / `records_categorical.jsonl`: 150 + 150 choice (`support_intent`) and score (`urgency`) records per fold (`jev-1.13.0`, overconfident on purpose), the held-out fold with calibrated probabilities from `fits_categorical.json`.

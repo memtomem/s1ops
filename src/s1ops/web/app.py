@@ -27,7 +27,7 @@ from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
 from s1ops.eval.metrics import top_label
 from s1ops.improve.calibrate import Fit, fit_for, load_fits, transform
-from s1ops.improve.labelaudit import rank_with_skips, temperatures_from_fits
+from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
 from s1ops.improve.policy import (
     Band,
     DevRecord,
@@ -424,10 +424,13 @@ def create_app(
         records = _get_records(use_calib=False)
         if not records:
             return {"top_flags": [], "skipped": {}}
-        fits = _get_fits()
-        temps = temperatures_from_fits(fits) if fits else None
+        # A fits.json that exists means calibrate, even with no fits in it; only a missing one ranks raw.
+        fits = _get_fits() if fit_file.exists() else None
         raw_rows = [r.raw for r in records]
-        flags, skipped = rank_with_skips(raw_rows, temperature=temps)
+        try:
+            flags, skipped = rank_with_skips(raw_rows, temperature=fits)
+        except LabelAuditInputError as e:
+            raise HTTPException(status_code=400, detail=f"{rec_file.name} vs {fit_file.name}: {e}") from None
         return {
             "n_total_candidates": len(flags),
             "skipped": {"no_response": skipped.no_response, "unlabeled": skipped.unlabeled},

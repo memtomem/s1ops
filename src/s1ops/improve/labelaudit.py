@@ -5,9 +5,14 @@ import random
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass
+from typing import Literal
 
-from s1ops.contracts.records import Record, parse_record
-from s1ops.improve.calibrate import Fit
+import numpy as np
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from s1ops.contracts._validation import pydantic_errors
+from s1ops.contracts.records import Record, parse_record, probability_total
+from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
 
 EPS = 1e-6
@@ -15,6 +20,14 @@ ANSWER_RE = re.compile(r"^## (\d+)[ \t]*\n(.*?)(?=^## \d+[ \t]*$|\Z)", re.M | re
 
 FitKey = tuple[str, str | None]
 Identity = tuple[str | None, str]
+Calibration = float | Mapping[FitKey, float] | Sequence[Fit] | None
+
+
+class LabelAuditInputError(ValueError):
+    """A record the ranking cannot calibrate: no fit for its group, or a fit for other classes.
+
+    Detectable only while ranking, so the web catches it explicitly rather than at a file read.
+    """
 
 
 @dataclass(frozen=True)
@@ -51,7 +64,7 @@ def calibrate(probs: Mapping, temperature: float | None) -> dict:
     logits = {k: math.log(max(v, EPS)) / temperature for k, v in probs.items()}
     top = max(logits.values())
     weights = {k: math.exp(v - top) for k, v in logits.items()}
-    total = sum(weights.values())
+    total = probability_total(weights.values())
     return {k: v / total for k, v in weights.items()}
 
 
@@ -64,18 +77,36 @@ def temperatures_from_fits(fits: Iterable[Fit]) -> dict[FitKey, float]:
     return out
 
 
-def _temperature(fit: float | Mapping[FitKey, float] | Sequence[Fit] | None, record: Record) -> float | None:
+def _calibrated(fit: Calibration, record: Record) -> dict:
+    """`record`'s distribution `{class: p}` under `fit`.
+
+    A float is one temperature for every record; a mapping is `(question_id, model_served) -> T`;
+    a `Fit` sequence is looked up by the full group key, so a fit for another model or primitive
+    is never used. A temperature keeps `calibrate`'s arithmetic; platt and isotonic go through
+    `calibrate.transform`, as `s1 apply` does.
+    """
+    probs = dict(zip(record.classes, record.probs))
     if fit is None:
-        return None
+        return probs
     if isinstance(fit, (int, float)) and not isinstance(fit, bool):
-        return float(fit)
+        return calibrate(probs, float(fit))
+    where = f"item {record.item} of group {record.key}"
     if isinstance(fit, Sequence) and not isinstance(fit, (str, bytes)):
-        fit = temperatures_from_fits(fit)
+        fits = list(fit)
+        found = fit_for(fits, record.key)
+        problem = refusal(fits, record.key, record.classes)
+        if found is None or problem:
+            raise LabelAuditInputError(f"{where}: {problem}; refusing to rank on another group's calibration")
+        if found.method == "temperature":
+            return calibrate(probs, float(found.params["temperature"]))
+        index = {c: i for i, c in enumerate(found.classes)}
+        Q = transform(found.method, found.primitive, found.params, np.array([[probs[c] for c in found.classes]]))[0]
+        return {c: float(Q[index[c]]) for c in record.classes}
     if isinstance(fit, Mapping):
         key = (record.question_id, record.model_served)
         if key not in fit:
-            raise KeyError(f"no temperature fitted for {key}; refusing to rank on another model's calibration")
-        return fit[key]
+            raise LabelAuditInputError(f"{where}: no temperature fitted for {key}; refusing to rank on another model's calibration")
+        return calibrate(probs, fit[key])
     raise TypeError(f"unsupported temperature specification {type(fit).__name__}")
 
 
@@ -90,13 +121,13 @@ def _answer(record: Record):
 
 def disagreement(
     row: Mapping,
-    temperature: float | Mapping[FitKey, float] | Sequence[Fit] | None = None,
+    temperature: Calibration = None,
     line: int = 0,
 ) -> Flag | None:
     record = parse_record(row, line)
     if record.model_served is None or record.label is None:
         return None
-    probs = calibrate(dict(zip(record.classes, record.probs)), _temperature(temperature, record))
+    probs = _calibrated(temperature, record)
     answer = _answer(record)
     score = 0.0 if answer == record.label else max(0.0, probs[answer] - probs[record.label])
     return Flag(record.dataset, record.item_id, record.question_id, str(record.label), str(answer), score)
@@ -104,7 +135,7 @@ def disagreement(
 
 def rank_with_skips(
     records: Iterable[Mapping],
-    temperature: float | Mapping[FitKey, float] | Sequence[Fit] | None = None,
+    temperature: Calibration = None,
     balance: bool = True,
 ) -> tuple[list[Flag], Skipped]:
     flags: list[Flag] = []
@@ -136,7 +167,7 @@ def rank_with_skips(
 
 def rank(
     records: Iterable[Mapping],
-    temperature: float | Mapping[FitKey, float] | Sequence[Fit] | None = None,
+    temperature: Calibration = None,
     balance: bool = True,
 ) -> list[Flag]:
     return rank_with_skips(records, temperature, balance)[0]
@@ -175,6 +206,12 @@ def blind_sheet(
     flags = [(f, "flag") for f in unique[:k]]
     controls = [(f, "control") for f in rng.sample(unique[k:], control_k)]
     items = flags + controls
+    missing = [(f.dataset, f.item_id) for f, _ in items if (f.dataset, f.item_id) not in text_of]
+    if missing:
+        raise ValueError(
+            f"no state for {len(missing)} of the {len(items)} items under review, first {missing[0]!r}; "
+            "the states file must hold every flagged and control item"
+        )
     rng.shuffle(items)
     lines = [
         f"# {title}",
@@ -216,7 +253,55 @@ def parse_answers(form: str, options: Sequence[str]) -> dict[str, str]:
     return out
 
 
+class _KeyItem(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    n: int = Field(ge=1)
+    arm: Literal["flag", "control"]
+    label: str
+    predicted: str
+
+
+class _Key(BaseModel):
+    """The parts of `blind_sheet`'s secret key that `score_sheet` reads."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    options: list[str] = Field(min_length=1)
+    items: list[_KeyItem]
+
+
+def _key_errors(error: ValidationError) -> list[str]:
+    # pydantic names the model class for a non-object item ("instance of _KeyItem"); say "object".
+    out = []
+    for e, text in zip(error.errors(include_url=False), pydantic_errors(error)):
+        if e["type"] in ("model_type", "dict_type"):
+            text = f"{'.'.join(str(part) for part in e['loc']) or '(root)'}: must be an object"
+        out.append(text)
+    return out
+
+
+def check_key(key: object) -> None:
+    """Refuse a secret key `score_sheet` cannot score: a wrong shape, a repeated item number
+    (one answer would count twice), or an arm with no items (its rate would divide by zero)."""
+    if not isinstance(key, Mapping):
+        raise ValueError(f"the key must be a JSON object, got {type(key).__name__}")
+    try:
+        doc = _Key.model_validate(key)
+    except ValidationError as e:
+        raise ValueError("; ".join(_key_errors(e))) from None
+    seen: set[int] = set()
+    for i, item in enumerate(doc.items):
+        if item.n in seen:
+            raise ValueError(f"items.{i}.n: item {item.n} appears more than once")
+        seen.add(item.n)
+    for arm in ("flag", "control"):
+        if not any(item.arm == arm for item in doc.items):
+            raise ValueError(f"items: no {arm} item; a key from `s1 labelaudit sheet` has both arms")
+
+
 def score_sheet(form: str, key: Mapping) -> dict:
+    check_key(key)
     answers = parse_answers(form, key["options"])
     out = {
         arm: {"n": 0, "reviewer_disagrees_with_label": 0, "reviewer_agrees_with_model": 0}

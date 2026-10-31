@@ -81,6 +81,7 @@ def test_the_noul_simulation_is_unchanged(ws) -> None:
 def test_index_html_wires_the_picker_and_drift_escalation() -> None:
     html = (STATIC_DIR / "index.html").read_text()
     assert 'id="inp-group"' in html
+    assert 'fetchJson("/api/groups").then(d => fillGroupPicker(d.groups))' in html
     for param in ("question_id", "model_served", "primitive"):
         assert f'params.set("{param}", picked.{param})' in html
     assert "fmtRate(q.escalation_rate_ref)" in html and "fmtRate(q.escalation_rate_cur)" in html
@@ -100,12 +101,23 @@ def test_index_html_script_parses() -> None:
     assert r.returncode == 0, r.stderr
 
 
-def test_overview_lists_every_group_for_the_picker(ws) -> None:
+def test_groups_lists_every_labeled_group_for_the_picker(ws) -> None:
     workspace = _mixed_workspace(ws)
-    groups = TestClient(create_app(workspace_dir=workspace)).get("/api/overview").json()["groups"]
-    assert sorted(g["primitive"] for g in groups) == ["choice", "noul", "score"]
-    assert all({"question_id", "model_served", "primitive"} <= set(g) for g in groups)
+    groups = TestClient(create_app(workspace_dir=workspace)).get("/api/groups").json()["groups"]
+    expected = _groups(ws["records"])
+    assert {g["primitive"]: (g["question_id"], g["model_served"], g["n"]) for g in groups} == {
+        p: (g.question_id, g.model_served, g.n) for p, g in expected.items()
+    }
     json.dumps(groups)
+
+
+def test_a_bad_fits_file_does_not_empty_the_picker(ws) -> None:
+    workspace = _mixed_workspace(ws)
+    Path(ws["fits"]).write_text("{}")
+    client = TestClient(create_app(workspace_dir=workspace))
+    r = client.get("/api/overview")
+    assert r.status_code == 400 and "fits.json" in r.json()["detail"]
+    assert len(client.get("/api/groups").json()["groups"]) == 3
 
 
 def test_noul_band_metrics_match_the_policy_library(ws) -> None:

@@ -156,6 +156,20 @@ def create_app(
         html_path = STATIC_DIR / "index.html"
         return HTMLResponse(html_path.read_text(encoding="utf-8"))
 
+    @app.get("/api/groups")
+    def api_groups() -> dict[str, Any]:
+        """The labeled groups the policy simulator can run on, from records.jsonl alone, so a bad
+        fits.json (which /api/overview reports) does not empty the simulator's group picker."""
+        records = _get_records()
+        if not records:
+            return {"groups": []}
+        return {
+            "groups": [
+                {"question_id": g.question_id, "model_served": g.model_served, "primitive": g.primitive, "n": g.n}
+                for g in _select(records).groups
+            ]
+        }
+
     @app.get("/api/overview")
     def api_overview() -> dict[str, Any]:
         records = _get_records()

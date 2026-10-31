@@ -353,7 +353,7 @@
       `;
     }
 
-    // Groups from /api/overview, indexed by the picker's option values.
+    // Groups from /api/groups, indexed by the picker's option values.
     let GROUPS = [];
 
     function fillGroupPicker(groups) {
@@ -370,7 +370,6 @@
 
     async function loadOverview() {
       const data = await fetchJson("/api/overview");
-      fillGroupPicker(data.groups);
       const missing = (data.missing_files || []).map(f => `${f} (tab ${FILE_TABS[f] || "?"})`);
       document.getElementById("overview-meta").textContent =
         `Records: ${data.n_records} | Groups: ${data.n_groups} | Safe-v1 Redaction Active` +
@@ -790,6 +789,8 @@
     });
     run(loadAudit, "calib-container");
     run(loadPolicy, "policy-container");
+    // The picker reads records.jsonl only, so a fits.json error in the overview leaves it usable.
+    fetchJson("/api/groups").then(d => fillGroupPicker(d.groups)).catch(err => showError("policy-container", err));
     run(loadLint, "lint-container");
     run(loadSlicesAndLabels, "slices-container");
     run(loadCompare, "compare-container");

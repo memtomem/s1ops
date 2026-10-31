@@ -18,6 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
+from s1ops.contracts._validation import UNDECODABLE
+
 SCHEMAS = ("jev-record/1", "s1-record/1")
 DEFAULT_SCHEMA = "jev-record/1"
 PRIMITIVES = ("noul", "choice", "score")
@@ -35,11 +37,15 @@ _MAX_LEVEL_DIGITS = 20
 
 
 class RecordError(ValueError):
-    """An input line is not a valid decision record. Carries the 1-based line number."""
+    """An input line is not a valid decision record. Carries the 1-based line number and, when
+    `read_records` raised it, the file's path, which then starts the message."""
 
-    def __init__(self, line: int, message: str) -> None:
-        super().__init__(f"line {line}: {message}")
+    def __init__(self, line: int, message: str, path: str | Path | None = None) -> None:
+        where = f"line {line}" if path is None else f"{path}: line {line}"
+        super().__init__(f"{where}: {message}")
         self.line = line
+        self.reason = message
+        self.path = path
 
 
 GroupKey = tuple[str, str, str]
@@ -292,18 +298,29 @@ def read_records(
     use_calib: bool = False,
 ) -> list[Record]:
     records = []
-    with open(path, encoding="utf-8") as f:
+    # Text mode keeps universal newlines; surrogateescape lets a line that is not UTF-8 be refused
+    # with its own number instead of failing a read-ahead block with a byte offset.
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
         for n, text in enumerate(f, start=1):
             if not text.strip():
                 continue
             try:
-                row = json.loads(text, parse_constant=_reject_constant)
-            except ValueError as e:
-                raise RecordError(n, f"not valid JSON: {e}") from None
-            records.append(
-                parse_record(row, n, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib)
-            )
+                records.append(_read_line(text, n, sum_tol, require_answer, use_calib))
+            except RecordError as e:
+                raise RecordError(e.line, e.reason, path) from None
     return records
+
+
+def _read_line(text: str, n: int, sum_tol: float, require_answer: bool, use_calib: bool) -> Record:
+    if UNDECODABLE.search(text):
+        raise RecordError(n, "not valid UTF-8")
+    try:
+        row = json.loads(text, parse_constant=_reject_constant)
+    except ValueError as e:
+        raise RecordError(n, f"not valid JSON: {e}") from None
+    except RecursionError:
+        raise RecordError(n, "not valid JSON: nested too deeply") from None
+    return parse_record(row, n, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib)
 
 
 @dataclass(frozen=True)

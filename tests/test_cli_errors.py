@@ -318,7 +318,7 @@ def test_integer_beyond_float_range_is_a_record_error(tmp_path: Path, capsys) ->
     path.write_text(row + "\n", encoding="utf-8")
     assert cli_main(["audit", str(path)]) == 1
     err = capsys.readouterr().err.strip().splitlines()
-    assert len(err) == 1 and err[0].startswith("s1: line 1: p must be finite")
+    assert len(err) == 1 and err[0].startswith(f"s1: {path}: line 1: p must be finite")
 
 
 @pytest.mark.parametrize(

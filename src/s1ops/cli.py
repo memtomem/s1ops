@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -20,6 +21,7 @@ from typing import Any
 from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
+from s1ops.contracts._validation import UNDECODABLE
 from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr, without_state
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
@@ -129,12 +131,22 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
 
 
 def _require_file(value: str, what: str, producer: str | None) -> None:
+    """Refuse a missing input, a directory, or one that cannot be inspected, naming why. Other
+    non-regular files (a FIFO from `<(...)` process substitution) are accepted."""
     p = Path(value)
-    if p.is_dir():
+    try:
+        st = os.stat(p)
+    except (FileNotFoundError, NotADirectoryError):
+        try:
+            os.lstat(p)
+        except OSError:
+            hint = f" (run `{producer}` first)" if producer else ""
+            raise CliError(f"{what} not found: {p}{hint}") from None
+        raise CliError(f"{what} is a dangling symbolic link: {p}") from None
+    except OSError as e:  # a symlink loop, no search permission on a parent
+        raise CliError(f"{what} cannot be read: {p}: {e.strerror or e}") from None
+    if stat.S_ISDIR(st.st_mode):
         raise CliError(f"{what} is a directory: {p}")
-    if not p.exists():
-        hint = f" (run `{producer}` first)" if producer else ""
-        raise CliError(f"{what} not found: {p}{hint}")
 
 
 def _check_inputs(args: argparse.Namespace) -> None:
@@ -197,16 +209,23 @@ def _no_groups(args: argparse.Namespace, sel: Selection, records_path: str) -> C
     return CliError(f"no labeled groups{where} in {records_path} ({skipped})")
 
 
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise CliError(f"{path}: not valid UTF-8: {e}") from None
+
+
 def _read_json(path: Path) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(_read_text(path))
     except json.JSONDecodeError as e:
         raise CliError(f"{path}: not valid JSON: {e}") from None
 
 
 def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
     """Read a JSONL file, or a JSON array of objects; every row must be an object."""
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8", errors="surrogateescape")
     if not text.strip():
         return []
     if text.lstrip().startswith("["):
@@ -218,9 +237,13 @@ def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
                 raise CliError(f"{path}: element {i}: expected a JSON object")
         return rows
     out: list[dict[str, Any]] = []
-    for n, line in enumerate(text.splitlines(), start=1):
+    # read_text already turned \r\n and \r into \n; str.splitlines would also split on \x0b, \x1c
+    # or U+2028, which a JSON string may hold raw, and count lines the file does not have.
+    for n, line in enumerate(text.split("\n"), start=1):
         if not line.strip():
             continue
+        if UNDECODABLE.search(line):
+            raise CliError(f"{path}: line {n}: not valid UTF-8")
         try:
             row = json.loads(line)
         except json.JSONDecodeError as e:
@@ -617,7 +640,7 @@ def _cmd_slice(args: argparse.Namespace) -> int:
 def _cmd_labelaudit(args: argparse.Namespace) -> int:
     if args.la_cmd == "estimate":
         _require_file(args.key, "secret key", "s1 labelaudit sheet")
-        form_text = Path(args.sheet).read_text(encoding="utf-8")
+        form_text = _read_text(Path(args.sheet))
         key_doc = _read_json(Path(args.key))
         try:
             check_key(key_doc)

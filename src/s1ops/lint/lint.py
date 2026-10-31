@@ -135,9 +135,9 @@ def _probe_base(line: int, raw: dict, question_id: str) -> str:
 
 def _check_probe_answer(line: int, role: str, primitive: str, classes: tuple) -> None:
     if role in ("noul", "inverse") and primitive != "noul":
-        raise ProbeInputError(f"line {line}: a '{role}' probe must be a noul answer, got {primitive}")
+        raise ProbeInputError(f"line {line}: probe_role '{role}' needs a noul answer, got {primitive}")
     if role == "twin" and (primitive != "choice" or "yes" not in classes):
-        raise ProbeInputError(f"line {line}: a 'twin' probe must be a choice answer with a 'yes' option, got {primitive}")
+        raise ProbeInputError(f"line {line}: probe_role 'twin' needs a choice answer with a 'yes' option, got {primitive}")
 
 
 def audit_probe_records(path: str | Path) -> list[dict]:
@@ -148,11 +148,10 @@ def audit_probe_records(path: str | Path) -> list[dict]:
     raises `ProbeInputError` before anything is computed.
     """
     records = read_records(path)
-    with open(path, encoding="utf-8") as f:
-        lines = [n for n, text in enumerate(f, start=1) if text.strip()]
     by_q_item: dict[tuple[str, str], dict[tuple[str | None, str], dict[str, dict]]] = defaultdict(lambda: defaultdict(dict))
     first_line: dict[tuple[str, str, tuple[str | None, str], str], int] = {}
-    for line, r in zip(lines, records, strict=True):
+    for r in records:
+        line = r.line
         if "probe_role" not in r.raw:
             continue
         role = r.raw["probe_role"]

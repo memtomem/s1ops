@@ -124,7 +124,7 @@ def test_probe_role_answered_with_another_primitive(ws, tmp_path: Path) -> None:
     rows = _probe_rows(ws)
     noul, twin = _first(rows, "noul"), _first(rows, "twin")
     rows[noul] = {**rows[twin], "probe_role": "noul", "item_id": rows[noul]["item_id"]}
-    assert _probe_error(ws, tmp_path, rows) == f"line {noul + 1}: a 'noul' probe must be a noul answer, got choice"
+    assert _probe_error(ws, tmp_path, rows) == f"line {noul + 1}: probe_role 'noul' needs a noul answer, got choice"
 
 
 def test_twin_probe_without_a_yes_option(ws, tmp_path: Path) -> None:
@@ -136,7 +136,7 @@ def test_twin_probe_without_a_yes_option(ws, tmp_path: Path) -> None:
     if rows[twin].get("label") == "yes":
         rows[twin]["label"] = "si"
     assert _probe_error(ws, tmp_path, rows) == (
-        f"line {twin + 1}: a 'twin' probe must be a choice answer with a 'yes' option, got choice"
+        f"line {twin + 1}: probe_role 'twin' needs a choice answer with a 'yes' option, got choice"
     )
 
 
@@ -197,3 +197,97 @@ def test_cli_and_web_report_a_malformed_probe_row(ws, capsys) -> None:
     r = _client(ws).get("/api/lint")
     assert r.status_code == 400
     assert r.json()["detail"] == "probe_records.jsonl: line 5: 'probe_role' must be one of noul, twin, inverse"
+
+
+def test_inverse_probe_answered_with_another_primitive(ws, tmp_path: Path) -> None:
+    rows = _probe_rows(ws)
+    inverse, twin = _first(rows, "inverse"), _first(rows, "twin")
+    rows[inverse] = {**rows[twin], "probe_role": "inverse", "item_id": rows[inverse]["item_id"]}
+    assert _probe_error(ws, tmp_path, rows) == f"line {inverse + 1}: probe_role 'inverse' needs a noul answer, got choice"
+
+
+def test_line_numbers_count_blank_lines(ws, tmp_path: Path) -> None:
+    rows = _probe_rows(ws)
+    rows[0]["probe_role"] = "sibling"
+    path = tmp_path / "probe.jsonl"
+    path.write_text("\n  \n" + "".join(json.dumps(r) + "\n" for r in rows))
+    with pytest.raises(ProbeInputError) as e:
+        audit_probe_records(path)
+    assert str(e.value).startswith("line 3: ")
+
+
+def test_cli_and_web_skip_failed_probes(ws, capsys) -> None:
+    rows = _probe_rows(ws)
+    assert cli_main(["lint", "probe-audit", ws["probe_records"]]) == 0
+    before = json.loads(capsys.readouterr().out)
+    for role in ("noul", "twin", "inverse"):
+        failed = {k: v for k, v in rows[_first(rows, role)].items() if k not in ("p", "probabilities", "choice", "confidence")}
+        rows.append({**failed, "model_served": None, "error_code": "timeout"})
+    _write(ws["probe_records"], rows)
+    assert cli_main(["lint", "probe-audit", ws["probe_records"]]) == 0
+    assert json.loads(capsys.readouterr().out) == before
+    r = _client(ws).get("/api/lint")
+    assert r.status_code == 200
+    assert r.json()["probe_audit"] == before
+
+
+@pytest.mark.parametrize(
+    ("role", "change", "message"),
+    [
+        ("noul", {"probe_question": 1}, "'probe_question' must be a non-empty string, got int"),
+        ("twin", {"probe_role": "sibling"}, "'probe_role' must be one of noul, twin, inverse"),
+    ],
+)
+def test_cli_and_web_report_each_probe_error(ws, capsys, role: str, change: dict, message: str) -> None:
+    rows = _probe_rows(ws)
+    i = _first(rows, role)
+    rows[i].update(change)
+    _write(ws["probe_records"], rows)
+    assert cli_main(["lint", "probe-audit", ws["probe_records"]]) == 1
+    assert _error_line(capsys).rstrip("\n").endswith(f"probe_records.jsonl: line {i + 1}: {message}")
+    r = _client(ws).get("/api/lint")
+    assert r.status_code == 400
+    assert r.json()["detail"] == f"probe_records.jsonl: line {i + 1}: {message}"
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"item_id": True}, "row 3: 'item_id' must be a non-empty string or an integer, got bool"),
+        ({"features": {"tags": ["a"]}}, "row 3: each 'features' value must be a string, number, boolean or null, got list"),
+        ({"slice": 3}, "row 3: 'slice' must be a string, got int"),
+    ],
+)
+def test_cli_and_web_report_each_feature_error(ws, capsys, change: dict, message: str) -> None:
+    rows = _rows(ws["features"])
+    rows[2].update(change)
+    _write(ws["features"], rows)
+    for sub in ("answerable", "mine"):
+        assert cli_main(["slice", sub, ws["records"], "--features", ws["features"]]) == 1
+        assert _error_line(capsys).rstrip("\n").endswith(f"features.jsonl: {message}")
+    r = _client(ws).get("/api/slices")
+    assert r.status_code == 400
+    assert r.json()["detail"].endswith(f"features.jsonl: {message}")
+
+
+def _old_feature_index(rows: list[dict]) -> tuple[dict, dict]:
+    # The loop `s1 slice` and /api/slices ran before parse_feature_rows, kept as the baseline.
+    features_by_item: dict = {}
+    slice_by_item: dict = {}
+    for row in rows:
+        key = (row.get("dataset"), str(row.get("item_id", "")))
+        feats = row.get("features", {})
+        if isinstance(feats, dict):
+            features_by_item[key] = feats
+            if "slice" in feats:
+                slice_by_item[key] = str(feats["slice"])
+        if "slice" in row:
+            slice_by_item[key] = str(row["slice"])
+    return features_by_item, slice_by_item
+
+
+def test_valid_feature_rows_index_as_before(ws) -> None:
+    rows = _rows(ws["features"])
+    rows.append({"item_id": 9001, "features": {"slice": "f", "n": 2.5, "flag": False, "x": None}})
+    rows.append({"dataset": "other", "item_id": "z", "slice": "row-wins", "features": {"slice": "feat"}})
+    assert parse_feature_rows(rows) == _old_feature_index(rows)

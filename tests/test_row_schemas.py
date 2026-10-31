@@ -291,3 +291,58 @@ def test_valid_feature_rows_index_as_before(ws) -> None:
     rows.append({"item_id": 9001, "features": {"slice": "f", "n": 2.5, "flag": False, "x": None}})
     rows.append({"dataset": "other", "item_id": "z", "slice": "row-wins", "features": {"slice": "feat"}})
     assert parse_feature_rows(rows) == _old_feature_index(rows)
+
+
+def _role_answered_as_choice(rows: list[dict], role: str) -> tuple[int, str]:
+    i, twin = _first(rows, role), _first(rows, "twin")
+    rows[i] = {**rows[twin], "probe_role": role, "item_id": rows[i]["item_id"]}
+    return i, f"probe_role '{role}' needs a noul answer, got choice"
+
+
+def _twin_without_yes(rows: list[dict]) -> tuple[int, str]:
+    i = _first(rows, "twin")
+    probs = rows[i]["probabilities"]
+    rows[i] = {**rows[i], "probabilities": {"si": probs["yes"], "no": probs["no"]}, "choice": "no", "label": "no"}
+    return i, "probe_role 'twin' needs a choice answer with a 'yes' option, got choice"
+
+
+def _repeated_role(rows: list[dict]) -> tuple[int, str]:
+    first = _first(rows, "inverse")
+    rows.append(dict(rows[first]))
+    return len(rows) - 1, f"a second 'inverse' probe for the same item and model as line {first + 1}"
+
+
+def _bad_base_question(rows: list[dict]) -> tuple[int, str]:
+    rows[0]["probe_base_question_id"] = ["q"]
+    return 0, "'probe_base_question_id' must be a non-empty string, got list"
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        lambda rows: _role_answered_as_choice(rows, "noul"),
+        lambda rows: _role_answered_as_choice(rows, "inverse"),
+        _twin_without_yes,
+        _repeated_role,
+        _bad_base_question,
+    ],
+    ids=["noul-as-choice", "inverse-as-choice", "twin-without-yes", "repeated-role", "base-question-type"],
+)
+def test_cli_and_web_report_each_probe_schema_error(ws, capsys, corrupt) -> None:
+    rows = _probe_rows(ws)
+    i, message = corrupt(rows)
+    _write(ws["probe_records"], rows)
+    expected = f"probe_records.jsonl: line {i + 1}: {message}"
+    assert cli_main(["lint", "probe-audit", ws["probe_records"]]) == 1
+    assert _error_line(capsys).rstrip("\n").endswith(expected)
+    r = _client(ws).get("/api/lint")
+    assert r.status_code == 400
+    assert r.json()["detail"] == expected
+
+
+def test_web_refuses_a_duplicated_feature_row(ws) -> None:
+    rows = _rows(ws["features"])
+    _write(ws["features"], [rows[0], *rows])
+    r = _client(ws).get("/api/slices")
+    assert r.status_code == 400
+    assert r.json()["detail"].endswith("features.jsonl: row 2 is the same item as row 1")

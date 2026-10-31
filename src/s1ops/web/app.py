@@ -168,11 +168,8 @@ def create_app(
         if _occupied(candidate):
             return candidate
         alt = base / "examples" / "data" / default_rel
-        try:
-            os.lstat(alt)
-        except OSError:
-            return candidate
-        return alt
+        # A fallback that cannot be inspected is kept too, so `_present` names it per request.
+        return alt if _occupied(alt) else candidate
 
     rec_file = _resolve(records_path, "records.jsonl")
     cmp_file = _resolve(compare_records_path, "records_kev.jsonl")

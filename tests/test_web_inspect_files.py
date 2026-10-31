@@ -202,3 +202,32 @@ def test_a_raw_line_separator_inside_a_judge_comment_is_one_row(ws) -> None:
     path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
     assert "\u2028" in path.read_text(encoding="utf-8")
     assert _client(ws).get("/api/compare").status_code == 200
+
+
+@pytest.mark.parametrize("call", ["lstat", "stat"])
+def test_an_uninspectable_example_copy_is_400_not_missing(ws, monkeypatch, call: str) -> None:
+    # No records.jsonl in the workspace, and the examples/data copy cannot be inspected.
+    base = Path(ws["records"]).parent
+    (base / "examples" / "data").mkdir(parents=True)
+    alt = base / "examples" / "data" / "records.jsonl"
+    shutil.move(ws["records"], alt)
+    _deny(monkeypatch, alt, call)
+    r = TestClient(create_app(workspace_dir=base), raise_server_exceptions=False).get("/api/overview")
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == f"{alt}: cannot read: {os.strerror(errno.EACCES)}"
+
+
+@NOT_ROOT
+def test_an_example_copy_under_a_non_searchable_directory_is_400(ws) -> None:
+    base = Path(ws["records"]).parent
+    examples = base / "examples" / "data"
+    examples.mkdir(parents=True)
+    alt = examples / "records.jsonl"
+    shutil.move(ws["records"], alt)
+    os.chmod(examples, 0o600)
+    try:
+        r = TestClient(create_app(workspace_dir=base), raise_server_exceptions=False).get("/api/overview")
+    finally:
+        os.chmod(examples, 0o700)
+    assert r.status_code == 400, r.text
+    assert r.json()["detail"] == f"{alt}: cannot read: {os.strerror(errno.EACCES)}"

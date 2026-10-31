@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,28 @@ def _error_text(fn, *args) -> str:
     raise AssertionError("expected a ValueError")
 
 
+# Python's default `int()` digit limit, which the "digits" case is past; the module pins it, so an
+# interpreter run with the limit raised or disabled (PYTHONINTMAXSTRDIGITS) still sees the case.
+DIGIT_LIMIT = 4300
+
+
+def _digit_limit_error() -> str:
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(DIGIT_LIMIT)
+    try:
+        return _error_text(json.loads, "1" * 5000)
+    finally:
+        sys.set_int_max_str_digits(old)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_digit_limit():
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(DIGIT_LIMIT)
+    yield
+    sys.set_int_max_str_digits(old)
+
+
 # The exact texts Python gives for these inputs, so expected lines stay exact on every version.
 JSON_ERROR = _error_text(json.loads, "{")
 UTF8_ERROR = _error_text(b"\xff{".decode, "utf-8")
@@ -36,7 +59,7 @@ NOT_JSON = {
     "syntax": (b"{", f"not valid JSON: {JSON_ERROR}"),
     "utf8": (b"\xff{", f"not valid UTF-8: {UTF8_ERROR}"),
     "nan": (b'{"schema": NaN}', "non-finite number NaN is not valid JSON"),
-    "digits": (b"1" * 5000, f"not valid JSON: {_error_text(json.loads, '1' * 5000)}"),
+    "digits": (b"1" * 5000, f"not valid JSON: {_digit_limit_error()}"),
     "deep": (b"[" * 200_000 + b"0" + b"]" * 200_000, "not valid JSON: nested too deeply"),
 }
 

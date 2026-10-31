@@ -11,7 +11,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from s1ops.contracts._validation import pydantic_errors
-from s1ops.contracts.records import Record, parse_record
+from s1ops.contracts.records import Record, parse_record, probability_total
 from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
 
@@ -64,7 +64,7 @@ def calibrate(probs: Mapping, temperature: float | None) -> dict:
     logits = {k: math.log(max(v, EPS)) / temperature for k, v in probs.items()}
     top = max(logits.values())
     weights = {k: math.exp(v - top) for k, v in logits.items()}
-    total = sum(weights.values())
+    total = probability_total(weights.values())
     return {k: v / total for k, v in weights.items()}
 
 

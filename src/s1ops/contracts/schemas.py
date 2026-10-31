@@ -77,12 +77,12 @@ class _PolicyRow(BaseModel):
 
     question_id: str
     model_served: str
-    primitive: str
+    primitive: Literal["noul", "choice", "score"]
     mode: Literal["error_budget", "escalation_band"]
     split: str
-    n: int
+    n: int = Field(ge=1)
     threshold: float | None = Field(default=None, ge=0.0, le=1.0)
-    error_budget: float | None = None
+    error_budget: float | None = Field(default=None, ge=0.0, le=1.0)
     band_lo: float | None = None
     band_hi: float | None = None
     calibrated: bool = False
@@ -91,13 +91,20 @@ class _PolicyRow(BaseModel):
     created_at: str | None = None
     metrics_on_split: dict = Field(default_factory=dict)
     policy_sha256: str | None = None
-    """Written by `save_policies`; recomputed from the fields, not compared."""
+    """Written by `save_policies`. When present, `load_policies` recomputes it from the routing
+    fields and refuses a mismatch; absent or `null`, it is only recomputed."""
 
 
 class _PolicyDocument(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
     policies: list[_PolicyRow] = Field(default_factory=list)
+
+
+class PolicyFingerprintError(ValueError):
+    """A `policy.json` row whose stored `policy_sha256` disagrees with its routing fields: the file
+    was edited after `s1 policy tune` wrote it. A `ValueError`, so the CLI and the web report it
+    like any malformed policy file."""
 
 
 def load_policies(path: str | Path) -> list[PolicyEntry]:
@@ -119,14 +126,27 @@ def load_policies(path: str | Path) -> list[PolicyEntry]:
     if repeated:
         raise ValueError(f"{path}: more than one policy for {repeated}")
     # Build from the file's own values: the validated model turns 1 into 1.0, which changes policy_sha256.
-    return [PolicyEntry(**{k: v for k, v in row.items() if k != "policy_sha256"}) for row in rows]
+    entries = [PolicyEntry(**{k: v for k, v in row.items() if k != "policy_sha256"}) for row in rows]
+    for i, (row, entry) in enumerate(zip(rows, entries)):
+        stored = row.get("policy_sha256")
+        if stored is not None and stored != entry.policy_sha256:
+            raise PolicyFingerprintError(
+                f"{path}: policies.{i}: policy_sha256 {stored} does not match its routing fields "
+                f"({entry.policy_sha256}); the policy was edited after `s1 policy tune` wrote it. "
+                "Re-run `s1 policy tune`, or remove policy_sha256 to accept the edit"
+            )
+    return entries
 
 
 def _band_problem(row: dict) -> str | None:
     """Routing reads the band only when both bounds are set (`routing._route_noul`), so a band
     missing a bound would silently route by threshold; one outside [0, 1] or reversed routes
     probabilities in ways no tuned band produces (`[2, 3)` blocks `p = 1`)."""
+    if not row.get("calibrated", False) and row.get("fit_sha256") is not None:
+        return "an uncalibrated policy has no fit; fit_sha256 must be null when calibrated is false"
     lo, hi = row.get("band_lo"), row.get("band_hi")
+    if row["mode"] == "escalation_band" and row["primitive"] != "noul":
+        return f"an escalation_band policy is noul-only; {row['primitive']} policies use error_budget"
     if row["mode"] == "error_budget":
         if lo is not None or hi is not None:
             return "an error_budget policy has no band; band_lo and band_hi must be null"

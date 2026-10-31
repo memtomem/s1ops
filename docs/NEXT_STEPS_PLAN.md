@@ -160,7 +160,7 @@
 ### 후보: 로드 시 `policy_sha256` 대조
 
 - 현재 `load_policies`는 `policy.json`에 저장된 `policy_sha256`을 버리고 재계산하므로, 파일 내 필드 변조는 호출자가 `expected_policy_sha256`을 따로 넘기지 않는 한 감지되지 않습니다.
-- [ ] 저장된 지문과 재계산 지문을 로드 시 비교하고 불일치 시 `PolicyIntegrityError` (기존 파일 호환성: 지문 없는 행 처리 방침 결정 필요)
+- [x] 저장된 지문과 재계산 지문을 로드 시 비교하고 불일치 시 거부 (2026-10-31): `PolicyIntegrityError`는 `runtime/gate.py`의 `RuntimeError`라 contracts 계층에서 쓰지 않고 `contracts/schemas.py`의 `PolicyFingerprintError(ValueError)`로 거부(CLI exit 1, 웹 400). 지문이 없거나 `null`인 행은 재계산만 하므로, 손으로 고친 정책은 `policy_sha256`을 지우면 받아들여짐.
 
 ---
 

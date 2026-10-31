@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     )
     from s1ops.contracts.schemas import (
         PolicyEntry,
+        PolicyFingerprintError,
         load_policies,
         save_policies,
     )
@@ -84,6 +85,7 @@ _LAZY = {
     "read_records": "s1ops.contracts.records",
     "select": "s1ops.contracts.records",
     "PolicyEntry": "s1ops.contracts.schemas",
+    "PolicyFingerprintError": "s1ops.contracts.schemas",
     "load_policies": "s1ops.contracts.schemas",
     "save_policies": "s1ops.contracts.schemas",
     "audit_group": "s1ops.eval.audit",
@@ -132,6 +134,7 @@ __all__ = [
     "read_records",
     "select",
     "PolicyEntry",
+    "PolicyFingerprintError",
     "save_policies",
     "load_policies",
     "Fit",

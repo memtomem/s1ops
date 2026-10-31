@@ -22,6 +22,16 @@ import numpy as np
 from scipy.stats import beta as sp_beta
 
 
+def _check_cost(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (math.isfinite(value) and value >= 0.0):
+        raise ValueError(f"{name} must be a finite non-negative number, got {value!r}")
+
+
+def _check_rate(name: str, value: float) -> None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not (math.isfinite(value) and 0.0 <= value <= 1.0):
+        raise ValueError(f"{name} must be a finite number in [0, 1], got {value!r}")
+
+
 def clopper_pearson_upper(errors: int, n: int, alpha: float = 0.05) -> float:
     """One-sided (1 - alpha) Clopper-Pearson exact upper confidence bound on binomial error rate."""
     if n <= 0 or not (0 <= errors <= n):
@@ -49,6 +59,8 @@ def select_threshold(
     """
     if not math.isfinite(budget) or not 0 <= budget <= 1 or min_accepted < 1:
         raise ValueError("invalid error budget or minimum accepted count")
+    if use_cp_upper and not (math.isfinite(alpha) and 0 < alpha < 1):
+        raise ValueError(f"alpha must be in (0, 1), got {alpha!r}")
     confidence, correct = np.asarray(confidence, dtype=float), np.asarray(correct)
     if confidence.ndim != 1 or correct.shape != confidence.shape:
         raise ValueError("confidence and correctness must be equal-length 1-D vectors")
@@ -192,6 +204,9 @@ def threshold_curve(
     delegate_accuracy: float = 0.98,
 ) -> list[dict]:
     """Compute coverage, empirical error rate, Clopper-Pearson upper bound, and $/1k cost across tie groups."""
+    for name, value in (("c_s1", c_s1), ("c_delegate", c_delegate), ("c_error", c_error)):
+        _check_cost(name, value)
+    _check_rate("delegate_accuracy", delegate_accuracy)
     confidence = np.asarray(confidence, dtype=float)
     correct = np.asarray(correct, dtype=bool)
     n = len(confidence)
@@ -325,6 +340,10 @@ class Prices:
     jev_usd: float = 0.00004
     llm_usd: float = 0.004
 
+    def __post_init__(self) -> None:
+        _check_cost("jev_usd", self.jev_usd)
+        _check_cost("llm_usd", self.llm_usd)
+
 
 @dataclass(frozen=True)
 class BandResult:
@@ -441,6 +460,8 @@ def choose(
     max_escalation_rate: float | None = None,
     min_metric: float | None = None,
 ) -> BandResult | None:
+    if max_escalation_rate is not None:
+        _check_rate("max_escalation_rate", max_escalation_rate)
     feasible = [
         r
         for r in results

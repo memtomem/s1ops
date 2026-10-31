@@ -250,8 +250,8 @@ def create_app(
         model_served: str | None = Query(default=None),
         tau_low: float = Query(default=0.25, ge=0.0, le=1.0),
         tau_high: float = Query(default=0.75, ge=0.0, le=1.0),
-        cost_s1: float = Query(default=0.00004, ge=0.0),
-        cost_sys2: float = Query(default=0.004, ge=0.0),
+        cost_s1: float = Query(default=0.00004, ge=0.0, allow_inf_nan=False),
+        cost_sys2: float = Query(default=0.004, ge=0.0, allow_inf_nan=False),
         error_budget: float = Query(default=0.10, ge=0.0, le=1.0),
         use_calib: bool = Query(default=True),
     ) -> dict[str, Any]:

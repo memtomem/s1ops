@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import sys
 from collections import defaultdict
@@ -396,7 +397,21 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_policy_args(args: argparse.Namespace) -> None:
+    """Refuse an out-of-range number before any group is read, whichever primitive the groups turn out to be."""
+    for flag, value in (("--cost-s1", args.cost_s1), ("--cost-sys2", args.cost_sys2)):
+        if not (math.isfinite(value) and value >= 0.0):
+            raise CliError(f"{flag} must be a finite non-negative number, got {value!r}")
+    if args.policy_cmd != "tune":
+        return
+    if args.max_escalation is not None and not (math.isfinite(args.max_escalation) and 0.0 <= args.max_escalation <= 1.0):
+        raise CliError(f"--max-escalation must be a number in [0, 1], got {args.max_escalation!r}")
+    if args.use_cp_upper and not (math.isfinite(args.cp_alpha) and 0.0 < args.cp_alpha < 1.0):
+        raise CliError(f"--cp-alpha must be in (0, 1), got {args.cp_alpha!r}")
+
+
 def _cmd_policy(args: argparse.Namespace) -> int:
+    _check_policy_args(args)
     records = read_records(args.records, use_calib=args.use_calib)
     sel = select(records, allow_model_mismatch=True)
     if args.policy_cmd == "curve":
@@ -420,6 +435,8 @@ def _cmd_policy(args: argparse.Namespace) -> int:
                     ),
                 }
             )
+        if not curves:
+            raise _no_groups(args, sel, args.records)
         print(json.dumps({"groups": curves}, indent=2, sort_keys=True))
         return 0
 

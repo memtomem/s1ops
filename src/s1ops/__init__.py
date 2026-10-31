@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 from typing import TYPE_CHECKING
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 if TYPE_CHECKING:
     from s1ops.contracts.questions import (

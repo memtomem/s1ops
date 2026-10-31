@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from s1ops.contracts.records import Record, has_calib, reparse, short_repr
 from s1ops.contracts.schemas import PolicyEntry
@@ -31,15 +32,20 @@ apart: their `policy_sha256` is the same, but `policy_action` and `predicted` ca
 
 
 class RoutingInputError(ValueError):
-    """A record cannot be routed the way its policy was tuned. Carries the 1-based line and, from
-    `s1 drift`, the side (`"reference"` or `"current"`) the record came from."""
+    """A record cannot be routed the way its policy was tuned. Carries the 1-based line, the file
+    the record was read from (`Record.path`, `None` for a record built by `parse_record`) and, from
+    `s1 drift`, the side (`"reference"` or `"current"`) the record came from.
 
-    def __init__(self, line: int, message: str, side: str | None = None) -> None:
-        self.line, self.message, self.side = line, message, side
-        super().__init__(f"{side + ' records: ' if side else ''}line {line}: {message}")
+    The message starts with the side when there is one, as drift names both of its files that way,
+    otherwise with the path, as `RecordError` does; never with both."""
+
+    def __init__(self, line: int, message: str, side: str | None = None, path: str | Path | None = None) -> None:
+        self.line, self.message, self.side, self.path = line, message, side, path
+        where = f"{side} records: " if side else f"{path}: " if path is not None else ""
+        super().__init__(f"{where}line {line}: {message}")
 
     def with_side(self, side: str) -> RoutingInputError:
-        return RoutingInputError(self.line, self.message, side)
+        return RoutingInputError(self.line, self.message, side, self.path)
 
 
 @dataclass(frozen=True)
@@ -85,6 +91,7 @@ def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tup
             f"policy for {policy.question_id} ({policy.model_served}) was tuned on calibrated "
             "probabilities and this record has none; run `s1 apply` first "
             "(`--pass-through-unfitted` keeps records of models it has no fit for)",
+            path=record.path,
         )
     if policy.calibrated and policy.fit_sha256 is not None:
         _check_fit(policy, record)
@@ -99,18 +106,20 @@ def _check_fit(policy: PolicyEntry, record: Record) -> None:
     name = f"policy for {policy.question_id} ({policy.model_served})"
     h = record.raw["calib"].get("fit_sha256")
     if h is not None and not isinstance(h, str):
-        raise RoutingInputError(record.line, f"calib.fit_sha256 must be a string, got {short_repr(h)}")
+        raise RoutingInputError(record.line, f"calib.fit_sha256 must be a string, got {short_repr(h)}", path=record.path)
     if h is None:
         raise RoutingInputError(
             record.line,
             f"{name} was tuned through fit {policy.fit_sha256!r}, and this record's calib names no fit; "
             "re-run `s1 apply` with the fits.json the policy was tuned through",
+            path=record.path,
         )
     if h != policy.fit_sha256:
         raise RoutingInputError(
             record.line,
             f"{name} was tuned through fit {policy.fit_sha256!r}, but this record was calibrated "
             f"through {h!r}; re-run `s1 apply` with the fits.json the policy was tuned through",
+            path=record.path,
         )
 
 

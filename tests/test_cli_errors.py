@@ -498,12 +498,12 @@ def test_the_issue_paths_print_one_line(tmp_path: Path, capsys, path: str) -> No
     if path == "missing-calib":
         args = ["export", "phoenix", _write_rows(tmp_path / "r.jsonl", [_record(1)]), "-o", out,
                 "--policy", _policy_file(tmp_path / "p.json")]
-        expected = ("s1: line 1: policy for q\\nextra (m) was tuned on calibrated probabilities and this record has "
+        expected = (f"s1: {tmp_path / 'r.jsonl'}: line 1: policy for q\\nextra (m) was tuned on calibrated probabilities and this record has "
                     "none; run `s1 apply` first (`--pass-through-unfitted` keeps records of models it has no fit for)\n")
     elif path == "other-fit":
         args = ["export", "phoenix", _write_rows(tmp_path / "r.jsonl", [_record(1, calib={"p": 0.6, "fit_sha256": FIT_B})]),
                 "-o", out, "--policy", _policy_file(tmp_path / "p.json", fit_sha256=FIT_A)]
-        expected = (f"s1: line 1: policy for q\\nextra (m) was tuned through fit '{FIT_A}', but this record was calibrated "
+        expected = (f"s1: {tmp_path / 'r.jsonl'}: line 1: policy for q\\nextra (m) was tuned through fit '{FIT_A}', but this record was calibrated "
                     f"through '{FIT_B}'; re-run `s1 apply` with the fits.json the policy was tuned through\n")
     else:
         rows = [_record(i, label=i % 2 == 0, split="eval", calib={"p": 0.6, "fit_sha256": FIT_A if i < 5 else FIT_B}) for i in range(10)]

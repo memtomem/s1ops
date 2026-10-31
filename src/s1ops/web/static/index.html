@@ -609,10 +609,18 @@
 
     async function loadSlicesAndLabels() {
       const [sData, lData] = await Promise.all([fetchJson("/api/slices"), fetchJson("/api/labelaudit")]);
-      const slices = sData.answerability || [];
-      const errSlices = sData.error_slices || [];
+      const groups = sData.groups || [];
 
       document.getElementById("slices-container").innerHTML = `
+        ${groups.length ? '' : '<div class="card">No labeled groups found in workspace.</div>'}
+        ${groups.map(g => {
+          const slices = g.answerability || [];
+          const errSlices = g.error_slices || [];
+          return `
+        <h3>Group: <span class="badge badge-info">${esc(g.question_id)}</span> ·
+          <span class="badge badge-info">${esc(g.model_served)}</span> ·
+          <span class="badge badge-ok">${esc(g.primitive)}</span> (n=${g.n})
+        </h3>
         <div class="grid-2">
           <div class="card">
             <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
@@ -646,7 +654,7 @@
                     <td class="mono">${e.slice_n}</td>
                     <td class="mono">${(e.slice_error_rate * 100).toFixed(1)}%</td>
                     <td class="mono">${(e.rest_error_rate * 100).toFixed(1)}%</td>
-                    <td class="mono">${e.odds_ratio.toFixed(2)}</td>
+                    <td class="mono">${e.odds_ratio !== null ? e.odds_ratio.toFixed(2) : 'N/A'}</td>
                     <td class="mono">${e.q_value.toFixed(4)}</td>
                     <td><span class="badge ${e.significant ? 'badge-err' : 'badge-ok'}">${e.significant ? 'SIGNIFICANT' : 'ns'}</span></td>
                   </tr>
@@ -654,7 +662,8 @@
               </tbody>
             </table>
           </div>
-        </div>
+        </div>`;
+        }).join('')}
         <div class="card">
           <h3>Blind Label Audit: Top Calibrated Disagreement Candidates (Safe-v1 Body-Free)</h3>
           <table>

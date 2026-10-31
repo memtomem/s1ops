@@ -120,7 +120,8 @@ def test_web_workbench_endpoints(tmp_path: Path) -> None:
 
     r_sl = client.get("/api/slices")
     assert r_sl.status_code == 200
-    assert len(r_sl.json()["error_slices"]) >= 1
+    (group,) = r_sl.json()["groups"]
+    assert len(group["error_slices"]) >= 1
 
     r_la = client.get("/api/labelaudit")
     assert r_la.status_code == 200

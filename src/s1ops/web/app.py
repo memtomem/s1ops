@@ -12,6 +12,8 @@ Serves a 6-tab interactive System 1 LLMOps console on `127.0.0.1`:
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +70,44 @@ def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
     raise HTTPException(status_code=400, detail=message if message.startswith(prefix) else prefix + message) from None
 
 
+def _present(path: Path) -> bool:
+    """Whether a workspace file is there to read: `False` only when nothing is at `path`.
+
+    A path that cannot be inspected (no search permission on a parent, a symlink loop), a dangling
+    symbolic link, or something other than a regular file or a directory (a FIFO would block the
+    request, and can be read once) is HTTP 400 naming it. `Path.exists()` is not used: it is
+    `False` for a loop or a dangling link, and a permission error makes it raise on Python 3.11-3.13
+    (a 500) and return `False` on 3.14. A directory counts as present: its read is the 400.
+    """
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"{path}: cannot read: {e.strerror or e}") from None
+    try:
+        st = os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        raise HTTPException(status_code=400, detail=f"{path}: cannot read: dangling symbolic link") from None
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"{path}: cannot read: {e.strerror or e}") from None
+    if not (stat.S_ISREG(st.st_mode) or stat.S_ISDIR(st.st_mode)):
+        raise HTTPException(status_code=400, detail=f"{path}: not a regular file")
+    return True
+
+
+def _occupied(path: Path) -> bool:
+    """Whether anything is at `path`, or it cannot be told (`_resolve` keeps such a path, so `_present`
+    reports it per request instead of a fallback file being read in its place)."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
+
+
 _ONE_LEVEL = "every grade is 0; agreement needs grades on at least two levels"
 
 
@@ -77,7 +117,7 @@ def _is_grade(value: object) -> bool:
 
 def _load_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
     """Rows of a JSONL file or JSON array; a missing or empty file is no rows, a non-object row is an error."""
-    if not path.exists():
+    if not _present(path):
         return []
     text = path.read_text(encoding="utf-8")
     if not text.strip():
@@ -90,7 +130,9 @@ def _load_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
                 raise ValueError(f"element {i}: expected a JSON object")
         return rows
     out: list[dict[str, Any]] = []
-    for n, line in enumerate(text.splitlines(), start=1):
+    # read_text already turned \r\n and \r into \n; str.splitlines would also split on \x0b, \x1c
+    # or U+2028, which a JSON string may hold raw, and count lines the file does not have.
+    for n, line in enumerate(text.split("\n"), start=1):
         if not line.strip():
             continue
         try:
@@ -123,12 +165,11 @@ def create_app(
         if explicit is not None:
             return Path(explicit)
         candidate = base / default_rel
-        if candidate.exists():
+        if _occupied(candidate):
             return candidate
         alt = base / "examples" / "data" / default_rel
-        if alt.exists():
-            return alt
-        return candidate
+        # A fallback that cannot be inspected is kept too, so `_present` names it per request.
+        return alt if _occupied(alt) else candidate
 
     rec_file = _resolve(records_path, "records.jsonl")
     cmp_file = _resolve(compare_records_path, "records_kev.jsonl")
@@ -145,12 +186,12 @@ def create_app(
     )
 
     def _get_records(use_calib: bool = False) -> list[Record]:
-        if not rec_file.exists():
+        if not _present(rec_file):
             return []
         return _load_or_400(rec_file, read_records, rec_file, use_calib=use_calib)
 
     def _get_fits() -> list[Fit]:
-        if not fit_file.exists():
+        if not _present(fit_file):
             return []
         return _load_or_400(fit_file, load_fits, fit_file)
 
@@ -212,13 +253,11 @@ def create_app(
             }
             for (qid, model, prim), count in sorted(groups_map.items())
         ]
+        present = {name: _present(path) for name, path in optional_files.items()}
         return {
             "workspace": str(base),
-            "files": {
-                name: str(path) if path.exists() else None
-                for name, path in optional_files.items()
-            },
-            "missing_files": [path.name for path in optional_files.values() if not path.exists()],
+            "files": {name: str(path) if present[name] else None for name, path in optional_files.items()},
+            "missing_files": [path.name for name, path in optional_files.items() if not present[name]],
             "n_records": len(records),
             "n_calibrated_records": calibrated_count,
             "n_groups": len(groups),
@@ -354,13 +393,14 @@ def create_app(
     @app.get("/api/lint")
     def api_lint() -> dict[str, Any]:
         lint_dict: dict[str, Any] = {"findings": [], "counts": {}}
-        if q_file.exists():
+        has_questions = _present(q_file)
+        if has_questions:
             # lint_path reports an unreadable or malformed questions file as findings, not exceptions.
             res = lint_path(q_file)
             lint_dict = res.as_dict()
 
         probe_out: list[dict[str, Any]] = []
-        if probe_file.exists():
+        if _present(probe_file):
             # Read once inside _load_or_400, then run the audit on those records unwrapped.
             probe_records = _load_or_400(probe_file, read_records, probe_file)
             try:
@@ -378,7 +418,7 @@ def create_app(
             for r in RULES.values()
         ]
         return {
-            "questions_file": str(q_file) if q_file.exists() else None,
+            "questions_file": str(q_file) if has_questions else None,
             "n_findings": len(lint_dict.get("findings", [])),
             "counts": lint_dict.get("counts", {}),
             "findings": lint_dict.get("findings", []),
@@ -445,7 +485,7 @@ def create_app(
         if not records:
             return {"top_flags": [], "skipped": {}}
         # A fits.json that exists means calibrate, even with no fits in it; only a missing one ranks raw.
-        fits = _get_fits() if fit_file.exists() else None
+        fits = _get_fits() if _present(fit_file) else None
         raw_rows = [r.raw for r in records]
         try:
             flags, skipped = rank_with_skips(raw_rows, temperature=fits)
@@ -466,7 +506,7 @@ def create_app(
     @app.get("/api/compare")
     def api_compare() -> dict[str, Any]:
         shadow_out: dict[str, Any] = {"questions": []}
-        if rec_file.exists() and cmp_file.exists():
+        if _present(rec_file) and _present(cmp_file):
             primary = [r.raw for r in _get_records()]
             shadow = [r.raw for r in _load_or_400(cmp_file, read_records, cmp_file)]
             try:
@@ -509,9 +549,9 @@ def create_app(
     def api_drift() -> dict[str, Any]:
         canary_file = _resolve(None, "records_canary.jsonl")
         pol_file = _resolve(None, "policy.json")
-        if not rec_file.exists() or not canary_file.exists():
+        if not _present(rec_file) or not _present(canary_file):
             return {"schema": "s1-drift-report/1", "distribution": "raw", "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0}, "questions": []}
-        policies = _load_or_400(pol_file, load_policies, pol_file) if pol_file.exists() else None
+        policies = _load_or_400(pol_file, load_policies, pol_file) if _present(pol_file) else None
         # Read with use_calib so a malformed stored calib is a 400 naming its file; the report
         # still compares raw probabilities, re-parsed by audit_drift.
         refs = _load_or_400(rec_file, read_records, rec_file, require_answer=True, use_calib=True)

@@ -168,7 +168,7 @@ def test_cli_refuses_a_calibrated_policy_without_calib_in_one_line(tmp_path: Pat
     assert cli_main(args) == 1
     err = capsys.readouterr().err
     assert err.count("\n") == 1 and "Traceback" not in err and "`s1 apply`" in err
-    prefix = "s1: reference records: line 1: " if command == "drift" else "s1: line 1: "
+    prefix = "s1: reference records: line 1: " if command == "drift" else f"s1: {r}: line 1: "
     assert err.startswith(prefix)
 
 
@@ -349,7 +349,7 @@ def test_cli_refuses_a_later_record_from_another_fit_in_one_line(tmp_path: Path,
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err.count("\n") == 1 and "Traceback" not in captured.err
-    prefix = "s1: reference records: line 2: " if command == "drift" else "s1: line 2: "
+    prefix = "s1: reference records: line 2: " if command == "drift" else f"s1: {r}: line 2: "
     assert captured.err.startswith(prefix + f"policy for q (m) was tuned through fit '{FIT_A}', but this record was calibrated through '{FIT_B}'")
     assert out.read_bytes() == b"sentinel\n"
 

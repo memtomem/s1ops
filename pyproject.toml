@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "s1ops"
-version = "0.3.0"
+version = "0.4.0"
 description = "The System 1 LLMOps platform — calibration, threshold compilation, blind label audit, and shadow drift for reflexive decision models."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -114,3 +114,15 @@ def test_curve_with_no_matching_group_exits_1_like_tune(ws, tmp_path: Path, caps
     assert cli_main(["policy", "tune", ws["records"], "-o", str(tmp_path / "p.json"), "--use-calib", "--question", "q-nope"]) == 1
     assert _error(capsys) == curve_err
     assert curve_err.startswith("s1: no labeled groups matching --question q-nope in ")
+
+
+@pytest.mark.parametrize("param", ["cost_s1", "cost_sys2"])
+@pytest.mark.parametrize("value", ["inf", "-inf", "nan", "-1"])
+def test_web_simulator_refuses_a_non_finite_or_negative_cost(ws, param: str, value: str) -> None:
+    from fastapi.testclient import TestClient
+
+    from s1ops.web.app import create_app
+
+    client = TestClient(create_app(workspace_dir=Path(ws["records"]).parent))
+    assert client.get(f"/api/simulate-policy?{param}={value}").status_code == 422
+    assert client.get(f"/api/simulate-policy?{param}=0").status_code == 200

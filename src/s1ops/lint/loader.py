@@ -116,6 +116,8 @@ def load_questions(path: str | Path, known_rules: frozenset[str], data: bytes | 
         text = Path(path).read_text(encoding="utf-8") if data is None else data.decode("utf-8")
     except OSError as error:
         return QuestionsFile([], [f"cannot read {path}: {error.strerror}"])
+    except UnicodeDecodeError as error:
+        return QuestionsFile([], [f"not valid UTF-8: {error}"])
     try:
         parsed = json.loads(text, object_pairs_hook=_pairs)
     except json.JSONDecodeError as error:

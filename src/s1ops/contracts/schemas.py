@@ -10,14 +10,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from s1ops.contracts._validation import pydantic_errors
+from s1ops.contracts._validation import pydantic_errors, read_json_file
 
 POLICY_SCHEMA = "s1-policy/1"
 RECEIPT_SCHEMA = "s1-receipt/1"
-
-
-def _reject_constant(name: str) -> float:
-    raise ValueError(f"non-finite number {name} is not valid JSON")
 
 
 @dataclass(frozen=True)
@@ -108,8 +104,7 @@ class PolicyFingerprintError(ValueError):
 
 
 def load_policies(path: str | Path) -> list[PolicyEntry]:
-    with open(path, encoding="utf-8") as f:
-        doc = json.load(f, parse_constant=_reject_constant)
+    doc = read_json_file(path)
     if not isinstance(doc, dict) or doc.get("schema") != POLICY_SCHEMA:
         raise ValueError(f"{path}: not a {POLICY_SCHEMA} file")
     try:

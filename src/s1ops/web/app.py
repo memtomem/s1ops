@@ -41,7 +41,7 @@ from s1ops.improve.policy import (
     threshold_curve,
 )
 from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_report
-from s1ops.lint.lint import ProbeInputError, audit_probe_records, lint_path
+from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import DriftInputError, audit_drift
 from s1ops.runtime.routing import RoutingInputError
@@ -50,15 +50,22 @@ from s1ops.runtime.routing import RoutingInputError
 STATIC_DIR = Path(__file__).parent / "static"
 
 def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """Run one input-reading or input-validation call; its `ValueError` becomes HTTP 400 naming `what`.
+    """Run one input-reading or input-validation call; a malformed or unreadable input becomes
+    HTTP 400 naming `what`.
 
-    Every input error in s1ops is a ValueError (RecordError, FitError, JSONDecodeError, load_policies).
-    Wrap only the read of one file, never a computation, so a server bug stays a 500.
+    Malformed content is a ValueError (RecordError, FitError, JSONDecodeError, load_policies), and
+    a file that exists but cannot be read (a directory, no read permission) is an OSError. A message
+    that already starts with `what` (the policy and fit loaders name their file) is not prefixed
+    again. Wrap only the read of one file, never a computation, so a server bug stays a 500.
     """
     try:
         return fn(*args, **kwargs)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"{what}: {e}") from None
+        message = str(e)
+    except OSError as e:
+        message = f"cannot read: {e.strerror or e}"
+    prefix = f"{what}: "
+    raise HTTPException(status_code=400, detail=message if message.startswith(prefix) else prefix + message) from None
 
 
 _ONE_LEVEL = "every grade is 0; agreement needs grades on at least two levels"
@@ -354,10 +361,10 @@ def create_app(
 
         probe_out: list[dict[str, Any]] = []
         if probe_file.exists():
-            # audit_probe_records only takes a path, so validate the file first and run the audit unwrapped.
-            _load_or_400(probe_file, read_records, probe_file)
+            # Read once inside _load_or_400, then run the audit on those records unwrapped.
+            probe_records = _load_or_400(probe_file, read_records, probe_file)
             try:
-                probe_out = audit_probe_records(probe_file)
+                probe_out = audit_probe(probe_records)
             except ProbeInputError as e:
                 raise HTTPException(status_code=400, detail=f"{probe_file.name}: {e}") from None
 

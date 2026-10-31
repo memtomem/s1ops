@@ -21,7 +21,7 @@ from typing import Any
 
 import numpy as np
 
-from s1ops.contracts.records import GroupKey, Record, has_calib, parse_record, read_records, short_repr
+from s1ops.contracts.records import GroupKey, Record, has_calib, read_records, reparse, short_repr
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.runtime.routing import RoutingInputError, route_record
 
@@ -72,9 +72,9 @@ def _compared(records: Sequence[Record], use_calib: bool, side: str) -> list[Rec
         if not _answered(r):
             out.append(r)
             continue
-        checked = parse_record(r.raw, r.line, use_calib=True)
+        checked = reparse(r, use_calib=True)
         if not use_calib:
-            out.append(parse_record(r.raw, r.line))
+            out.append(reparse(r))
         elif has_calib(r.raw, r.primitive):
             out.append(checked)
         else:

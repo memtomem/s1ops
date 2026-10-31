@@ -225,9 +225,11 @@ def test_a_malformed_stored_calib_is_refused_in_raw_mode_from_records_too(tmp_pa
     path = _write(tmp_path / "r.jsonl", rows)
     good = _write(tmp_path / "good.jsonl", _rows("noul", 1, 0.0, n=3))
     records = read_records(path)  # use_calib=False does not read calib
-    with pytest.raises(RecordError, match=r"^line 2: calib\.p") as exc:
+    with pytest.raises(RecordError) as exc:
         audit_drift(read_records(good), records)
-    assert exc.value.line == 2
+    # The re-parse names the file the record was read from (#61).
+    assert str(exc.value) == f"{path}: line 2: calib.p must be a number, got 'nan'"
+    assert (exc.value.line, exc.value.path) == (2, path)
 
 
 def test_calibrated_and_raw_only_cannot_be_combined(ws, capsys) -> None:

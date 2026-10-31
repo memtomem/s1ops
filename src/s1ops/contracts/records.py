@@ -11,6 +11,7 @@ distribution.
 
 import json
 import math
+import os
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -37,8 +38,9 @@ _MAX_LEVEL_DIGITS = 20
 
 
 class RecordError(ValueError):
-    """An input line is not a valid decision record. Carries the 1-based line number and, when
-    `read_records` raised it, the file's path, which then starts the message."""
+    """An input line is not a valid decision record. Carries the 1-based line number and, when the
+    record was read from a file (`read_records`, or `Record.path` after reading), the file's path,
+    which then starts the message."""
 
     def __init__(self, line: int, message: str, path: str | Path | None = None) -> None:
         where = f"line {line}" if path is None else f"{path}: line {line}"
@@ -72,6 +74,9 @@ class Record:
     probs: tuple[float, ...]
     """Probabilities aligned with `classes`, renormalized to sum to 1."""
     raw: dict = field(repr=False, compare=False)
+    path: str | Path | None = field(default=None, kw_only=True, repr=False, compare=False)
+    """The file `read_records` read this record from, as it was passed; `None` from `parse_record`.
+    Errors found after reading (`select`, a re-parse) name it."""
 
     @property
     def key(self) -> GroupKey:
@@ -206,6 +211,24 @@ def parse_record(
     When `use_calib=True` and the record carries a `calib` object from `s1 apply`, the calibrated
     probabilities (`calib.p` or `calib.probabilities`) are used as `probs`.
     """
+    return _parse_record(row, line, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib, path=None)
+
+
+def reparse(record: Record, *, use_calib: bool = False) -> Record:
+    """Parse `record.raw` again, as `parse_record(record.raw, record.line, use_calib=...)` does, keeping
+    `record.path` on the result and in any `RecordError`, so an error found after reading still
+    names the file. Drift, routing and the exporters call it to read the distribution they need."""
+    try:
+        return _parse_record(
+            record.raw, record.line, sum_tol=DEFAULT_SUM_TOL, require_answer=True, use_calib=use_calib, path=record.path
+        )
+    except RecordError as e:
+        raise RecordError(e.line, e.reason, record.path) from None
+
+
+def _parse_record(
+    row: object, line: int, *, sum_tol: float, require_answer: bool, use_calib: bool, path: str | Path | None
+) -> Record:
     if not isinstance(row, dict):
         raise RecordError(line, f"expected a JSON object, got {type(row).__name__}")
     missing = [k for k in REQUIRED if k not in row]
@@ -239,6 +262,7 @@ def parse_record(
         "split": split,
         "dataset": dataset,
         "raw": row,
+        "path": path,
     }
     if served is None or not require_answer:
         return Record(label=None, classes=(), probs=(), **common)
@@ -305,13 +329,15 @@ def read_records(
             if not text.strip():
                 continue
             try:
-                records.append(_read_line(text, n, sum_tol, require_answer, use_calib))
+                records.append(_read_line(text, n, sum_tol, require_answer, use_calib, path))
             except RecordError as e:
                 raise RecordError(e.line, e.reason, path) from None
     return records
 
 
-def _read_line(text: str, n: int, sum_tol: float, require_answer: bool, use_calib: bool) -> Record:
+def _read_line(
+    text: str, n: int, sum_tol: float, require_answer: bool, use_calib: bool, path: str | Path
+) -> Record:
     if UNDECODABLE.search(text):
         raise RecordError(n, "not valid UTF-8")
     try:
@@ -320,7 +346,7 @@ def _read_line(text: str, n: int, sum_tol: float, require_answer: bool, use_cali
         raise RecordError(n, f"not valid JSON: {e}") from None
     except RecursionError:
         raise RecordError(n, "not valid JSON: nested too deeply") from None
-    return parse_record(row, n, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib)
+    return _parse_record(row, n, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib, path=path)
 
 
 @dataclass(frozen=True)
@@ -378,11 +404,30 @@ class Selection:
 
 def check_classes(key: GroupKey, expected: Sequence, record: Record) -> None:
     if set(record.classes) != set(expected):
-        raise RecordError(
-            record.line,
-            f"{key[0]} ({key[1]}): answer classes {sorted(map(str, record.classes))} differ from "
-            f"{sorted(map(str, expected))} seen earlier for the same question; the question_id cannot be trusted",
-        )
+        _classes_differ(key, expected, record, "seen earlier")
+
+
+def _classes_differ(key: GroupKey, expected: Sequence, record: Record, where: str) -> None:
+    raise RecordError(
+        record.line,
+        f"{key[0]} ({key[1]}): answer classes {sorted(map(str, record.classes))} differ from "
+        f"{sorted(map(str, expected))} {where} for the same question; the question_id cannot be trusted",
+        record.path,
+    )
+
+
+def _first_on(first: Record, record: Record) -> str:
+    """Where `first` is, said from `record`'s error, whose message starts with `record.path`. Paths
+    are compared as passed, not resolved: one relative spelling read from two working directories
+    counts as one file."""
+    same = first.path is None if record.path is None else (
+        first.path is not None and os.fspath(first.path) == os.fspath(record.path)
+    )
+    if same:
+        return f"first on line {first.line}"
+    if first.path is None:
+        return f"first on line {first.line} of a record with no path"
+    return f"first on line {first.line} of {first.path}"
 
 
 def select(
@@ -407,15 +452,17 @@ def select(
     for key in sorted(buckets):
         rows = buckets[key]
         classes = rows[0].classes
-        seen: dict[ItemKey, int] = {}
+        seen: dict[ItemKey, Record] = {}
         for r in rows:
-            check_classes(key, classes, r)
+            if set(r.classes) != set(classes):
+                _classes_differ(key, classes, r, f"({_first_on(rows[0], r)})")
             if r.item in seen:
                 raise RecordError(
                     r.line,
-                    f"item {r.item} (dataset, item_id) appears twice in group {key} (first on line {seen[r.item]})",
+                    f"item {r.item} (dataset, item_id) appears twice in group {key} ({_first_on(seen[r.item], r)})",
+                    r.path,
                 )
-            seen[r.item] = r.line
+            seen[r.item] = r
         index = {c: i for i, c in enumerate(classes)}
         P = np.array([[dict(zip(r.classes, r.probs))[c] for c in classes] for r in rows], dtype=float)
         y = np.array([index[r.label] for r in rows], dtype=int)

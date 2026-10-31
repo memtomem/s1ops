@@ -24,6 +24,7 @@ from pathlib import Path
 VERSION = 1
 OUTCOMES = ("measured", "unknown", "unsent")
 ACCOUNTING_KEYS = frozenset({"v", "event", "id", "ts", "outcome", "usd", "worst_usd"})
+STATE_REFUSAL = "metadata cannot carry state: safe-v1 never writes item text to a ledger (pass state_sha256 instead)"
 
 
 def token_bound(text: str) -> float:
@@ -54,6 +55,12 @@ def _amount(value, name: str) -> None:
 
 
 def _metadata(meta: dict) -> dict:
+    # A str subclass can compare equal to "state" while hashing apart from it, so membership alone
+    # would let it through and json.dumps would write it as "state"; keys must be plain strings.
+    if any(type(key) is not str for key in meta):
+        raise ValueError("metadata keys must be plain strings")
+    if "state" in meta:
+        raise ValueError(STATE_REFUSAL)
     clash = ACCOUNTING_KEYS.intersection(meta)
     if clash:
         raise ValueError(f"metadata cannot set accounting fields {sorted(clash)}")
@@ -313,7 +320,22 @@ def migrate(legacy, journal, *, acknowledge_lost_reservations: bool = False) -> 
     return read(journal)
 
 
+def _state_line(data: bytes) -> int | None:
+    """The 1-based line of the first event in a parsed journal that carries a top-level `state`."""
+    for line_number, line in enumerate(data.split(b"\n")[:-1], 1):
+        event = json.loads(line) if line.strip() else None
+        if isinstance(event, dict) and "state" in event:
+            return line_number
+    return None
+
+
 def recover(journal, out) -> Path:
+    """Copy a journal's complete lines into `out`, dropping a trailing partial write, and record
+    provenance in `<out>.recovery.json` (the dropped bytes are kept there as `dropped_hex`, verbatim).
+
+    Refuses a journal whose complete events carry a top-level `state` (written through `Ledger`
+    metadata before it refused one): `out` is a byte copy, so it would publish item text again.
+    """
     journal, out = Path(journal), Path(out)
     sidecar = out.with_name(out.name + ".recovery.json")
     _data_paths(journal, out, sidecar)
@@ -330,6 +352,12 @@ def recover(journal, out) -> Path:
         state = _parse(journal, prefix)
         if state.format != "journal":
             raise ValueError(f"{journal} is a legacy ledger; recover only handles journals")
+        carrying = _state_line(prefix)
+        if carrying is not None:
+            raise ValueError(
+                f"{journal} line {carrying}: an event carries item state text; recover will not copy it "
+                "into a new file (remove the top-level state from those events first)"
+            )
         provenance = {
             "source": str(journal),
             "source_sha256": _sha256(data),

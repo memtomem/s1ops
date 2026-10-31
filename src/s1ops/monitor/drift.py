@@ -40,6 +40,22 @@ class DriftInputError(ValueError):
         super().__init__(f"{side} records: line {line}: {message}")
 
 
+def _one_primitive_per_question(refs: list[Record], curs: list[Record]) -> None:
+    """Drift pools a question's models on purpose, so a model change shows, but never its
+    primitives: a `question_id` names one wire question, and its metrics read one kind of answer."""
+    first: dict[str, Record] = {}
+    for side, records in (("reference", refs), ("current", curs)):
+        for r in records:
+            seen = first.setdefault(r.question_id, r)
+            if r.primitive != seen.primitive:
+                raise DriftInputError(
+                    r.line,
+                    f"question {r.question_id} is answered as {r.primitive} here and as {seen.primitive} elsewhere; "
+                    "a question_id names one wire question, so one primitive: the file is hand-edited or mislabeled",
+                    side,
+                )
+
+
 def _answered(rec: Record) -> bool:
     return rec.model_served is not None and bool(rec.probs)
 
@@ -269,6 +285,7 @@ def audit_drift(
     if use_calib:
         _one_fit(refs, curs)
 
+    _one_primitive_per_question(refs, curs)
     pol_by_key: dict[GroupKey, PolicyEntry] = {(p.question_id, p.model_served, p.primitive): p for p in policies or ()}
 
     ref_by_q: dict[str, list[Record]] = defaultdict(list)

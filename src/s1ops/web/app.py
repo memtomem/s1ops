@@ -43,7 +43,7 @@ from s1ops.improve.policy import (
 from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_report
 from s1ops.lint.lint import ProbeInputError, audit_probe_records, lint_path
 from s1ops.lint.rules import RULES
-from s1ops.monitor.drift import audit_drift
+from s1ops.monitor.drift import DriftInputError, audit_drift
 from s1ops.runtime.routing import RoutingInputError
 
 
@@ -491,7 +491,7 @@ def create_app(
         curs = _load_or_400(canary_file, read_records, canary_file, require_answer=True, use_calib=True)
         try:
             return audit_drift(refs, curs, policies=policies)
-        except RoutingInputError as e:
+        except (RoutingInputError, DriftInputError) as e:
             path = rec_file if e.side == "reference" else canary_file
             raise HTTPException(status_code=400, detail=f"{path.name}: line {e.line}: {e.message}") from None
 

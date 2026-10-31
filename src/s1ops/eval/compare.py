@@ -134,6 +134,28 @@ def holm(pvalues: dict[str, float]) -> dict[str, float]:
     return out
 
 
+def _one_group_per_question(pairs: list[tuple[dict, dict]]) -> None:
+    """A question's report pools its paired rows, so on each side they must be one group: one
+    `model_served` and one `primitive`. Pooling two models would report one model's name over both."""
+    seen: dict[tuple[str, str], dict[str, set]] = defaultdict(lambda: defaultdict(set))
+    for a, b in pairs:
+        for side, row in (("primary", a), ("shadow", b)):
+            values = seen[(side, row["question_id"])]
+            values["primitive"].add(str(row.get("primitive")))
+            values["model_served"].add(str(row.get("model_served")))
+    for (side, qid), values in sorted(seen.items()):
+        if len(values["primitive"]) > 1:
+            raise CompareInputError(
+                f"{side} records answer question {qid} as more than one primitive {sorted(values['primitive'])}; "
+                "a question_id names one wire question, so one primitive: the file is hand-edited or mislabeled"
+            )
+        if len(values["model_served"]) > 1:
+            raise CompareInputError(
+                f"{side} records hold more than one model_served for question {qid}: {sorted(values['model_served'])}; "
+                "compare one model per file (split it by model_served)"
+            )
+
+
 def compare_records(
     primary_records: str | Path | Iterable[dict],
     shadow_records: str | Path | Iterable[dict],
@@ -162,6 +184,7 @@ def compare_records(
 
     idx_a, idx_b = index(prim_rows), index(shad_rows)
     shared = sorted(idx_a.keys() & idx_b.keys(), key=lambda x: (x[0] or "", x[1], x[2]))
+    _one_group_per_question([(idx_a[k], idx_b[k]) for k in shared])
     by_q: dict[str, list[Disagreement]] = defaultdict(list)
     models_a: dict[str, str] = {}
     models_b: dict[str, str] = {}

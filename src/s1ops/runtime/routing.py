@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from s1ops.contracts.records import Record, has_calib, parse_record, short_repr
+from s1ops.contracts.records import Record, has_calib, reparse, short_repr
 from s1ops.contracts.schemas import PolicyEntry
 
 ROUTING_RULE = "3"
@@ -88,7 +88,7 @@ def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tup
         )
     if policy.calibrated and policy.fit_sha256 is not None:
         _check_fit(policy, record)
-    parsed = parse_record(record.raw, record.line, use_calib=policy.calibrated)
+    parsed = reparse(record, use_calib=policy.calibrated)
     return parsed.classes, parsed.probs
 
 

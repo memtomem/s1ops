@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from s1ops.contracts.records import Record, parse_record, score_level
+from s1ops.contracts.records import Record, reparse, score_level
 from s1ops.contracts.schemas import PolicyEntry
 from s1ops.runtime.routing import ROUTING_RULE, policy_distribution, route
 
@@ -40,7 +40,7 @@ def _predict_info(
     if record.primitive == "noul":
         p_raw = float(raw_row["p"])
         # The parser checks calib.p, as drift sees it.
-        p_cal = parse_record(raw_row, record.line, use_calib=True).probs[1] if calib and "p" in calib else None
+        p_cal = reparse(record, use_calib=True).probs[1] if calib and "p" in calib else None
         if policy is not None:
             # The distribution the policy was tuned on, whatever the record carries.
             classes, probs = policy_distribution(policy, record)
@@ -73,7 +73,7 @@ def _predict_info(
     )
     if probs_cal is not None:
         # The parser checks the calibrated keys against the raw ones, as drift sees them.
-        parse_record(raw_row, record.line, use_calib=True)
+        reparse(record, use_calib=True)
     if policy is None:
         probs_eff = probs_cal if probs_cal is not None else probs_raw
         predicted = max(probs_eff.items(), key=lambda kv: (kv[1], kv[0]))[0]

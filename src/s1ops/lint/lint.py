@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from s1ops.contracts.records import read_records
+from s1ops.contracts.records import Record, read_records
 from s1ops.lint.loader import QuestionsFile, load_questions
 from s1ops.lint.rules import RULES, UNSUPPRESSIBLE, LintConfig, Severity, check_pairs, check_question
 
@@ -141,13 +141,17 @@ def _check_probe_answer(line: int, role: str, primitive: str, classes: tuple) ->
 
 
 def audit_probe_records(path: str | Path) -> list[dict]:
+    """`audit_probe` over the records read from `path`."""
+    return audit_probe(read_records(path))
+
+
+def audit_probe(records: list[Record]) -> list[dict]:
     """Offline coherence analysis of probe records (`probe_role`: `noul`, `twin`, `inverse`).
 
     Records without `probe_role` are not probes and are skipped, as are failed probes
     (`model_served: null`) once their tags check out. A tagged record that cannot be paired
     raises `ProbeInputError` before anything is computed.
     """
-    records = read_records(path)
     by_q_item: dict[tuple[str, str], dict[tuple[str | None, str], dict[str, dict]]] = defaultdict(lambda: defaultdict(dict))
     first_line: dict[tuple[str, str, tuple[str | None, str], str], int] = {}
     for r in records:

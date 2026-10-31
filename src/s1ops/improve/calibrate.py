@@ -11,7 +11,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from scipy.special import expit, log_expit, log_softmax, logit, softmax
 
-from s1ops.contracts._validation import pydantic_errors
+from s1ops.contracts._validation import pydantic_errors, read_json_file
 from s1ops.contracts.records import Group, GroupKey, ItemKey, Record, without_state
 from s1ops.eval.metrics import EPS, log_loss
 
@@ -185,10 +185,6 @@ def save_fits(fits: list[Fit], path: str | Path) -> None:
         f.write("\n")
 
 
-def _reject_constant(name: str) -> float:
-    raise FitError(f"non-finite number {name} is not valid JSON")
-
-
 class _FitRow(BaseModel):
     """On-disk shape of one `Fit`; method/primitive/items consistency is checked after parsing."""
 
@@ -217,11 +213,7 @@ class _FitDocument(BaseModel):
 
 
 def load_fits(path: str | Path) -> list[Fit]:
-    with open(path, encoding="utf-8") as f:
-        try:
-            doc = json.load(f, parse_constant=_reject_constant)
-        except FitError as e:
-            raise FitError(f"{path}: {e}") from None
+    doc = read_json_file(path, FitError)
     if isinstance(doc, dict) and doc.get("schema") == "jev-calib-fit/1":
         raise FitError(f"{path}: jev-calib-fit/1 stores item ids without their dataset; refit to get {DEFAULT_FIT_SCHEMA}")
     if not isinstance(doc, dict) or doc.get("schema") not in FIT_SCHEMAS:

@@ -443,7 +443,12 @@
       }).join("");
     }
 
+    // Each simulator request takes a number; a response (or error) for an older request is
+    // dropped, so a slow answer for the previous group never overwrites the current one.
+    let policySeq = 0;
+
     async function loadPolicy() {
+      const seq = ++policySeq;
       const low = parseFloat(document.getElementById("inp-tau-low").value);
       const high = parseFloat(document.getElementById("inp-tau-high").value);
       const costS2 = parseFloat(document.getElementById("inp-cost-s2").value);
@@ -458,7 +463,14 @@
         params.set("model_served", picked.model_served);
         params.set("primitive", picked.primitive);
       }
-      const d = await fetchJson(`/api/simulate-policy?${params}`);
+      let d;
+      try {
+        d = await fetchJson(`/api/simulate-policy?${params}`);
+      } catch (err) {
+        if (seq !== policySeq) return;
+        throw err;
+      }
+      if (seq !== policySeq) return;
       const t = d.tuned_threshold;
       const thresholdHtml = `
             <div>

@@ -106,3 +106,34 @@ def test_overview_lists_every_group_for_the_picker(ws) -> None:
     assert sorted(g["primitive"] for g in groups) == ["choice", "noul", "score"]
     assert all({"question_id", "model_served", "primitive"} <= set(g) for g in groups)
     json.dumps(groups)
+
+
+def test_noul_band_metrics_match_the_policy_library(ws) -> None:
+    from s1ops.improve.policy import Band, DevRecord, Prices, choose, pareto, sweep
+    from s1ops.improve.policy import grid as band_grid
+    from s1ops.improve.policy import evaluate as evaluate_band
+
+    grp = _groups(ws["records"])["noul"]
+    prices = Prices(jev_usd=0.00004, llm_usd=0.01)
+    recs = [
+        DevRecord(id=item_id, p_jev=float(grp.P[i, 1]), label=bool(grp.y[i] == 1), llm=bool(grp.y[i] == 1),
+                  jev_cost_usd=0.00004, llm_cost_usd=0.01)
+        for i, (_, item_id) in enumerate(grp.items)
+    ]
+    swept = sweep(recs, band_grid(0.10), prices)
+    d = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get(
+        "/api/simulate-policy?tau_low=0.1&tau_high=0.9&cost_sys2=0.01"
+    ).json()
+    assert d["active_band"] == evaluate_band(recs, Band(0.1, 0.9), prices).as_row()
+    assert d["pareto_frontier"] == [r.as_row() for r in pareto(swept, metric="f1")]
+    assert d["recommended_band_under_35pct_esc"] == choose(swept, metric="f1", max_escalation_rate=0.35).as_row()
+
+
+def test_index_html_drops_stale_simulator_responses() -> None:
+    # A response for an earlier pick must not overwrite the current one, success or error
+    # (checked in headless Chrome by delaying one group's responses; here the guard's wiring).
+    html = (STATIC_DIR / "index.html").read_text()
+    body = html[html.index("async function loadPolicy()"):html.index("document.getElementById(\"inp-group\").addEventListener")]
+    assert "const seq = ++policySeq;" in body
+    assert body.count("if (seq !== policySeq) return;") == 2
+    assert body.index("if (seq !== policySeq) return;") < body.index("const b = d.band_supported")

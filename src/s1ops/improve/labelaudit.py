@@ -271,6 +271,16 @@ class _Key(BaseModel):
     items: list[_KeyItem]
 
 
+def _key_errors(error: ValidationError) -> list[str]:
+    # pydantic names the model class for a non-object item ("instance of _KeyItem"); say "object".
+    out = []
+    for e, text in zip(error.errors(include_url=False), pydantic_errors(error)):
+        if e["type"] in ("model_type", "dict_type"):
+            text = f"{'.'.join(str(part) for part in e['loc']) or '(root)'}: must be an object"
+        out.append(text)
+    return out
+
+
 def check_key(key: object) -> None:
     """Refuse a secret key `score_sheet` cannot score: a wrong shape, a repeated item number
     (one answer would count twice), or an arm with no items (its rate would divide by zero)."""
@@ -279,7 +289,7 @@ def check_key(key: object) -> None:
     try:
         doc = _Key.model_validate(key)
     except ValidationError as e:
-        raise ValueError("; ".join(pydantic_errors(e))) from None
+        raise ValueError("; ".join(_key_errors(e))) from None
     seen: set[int] = set()
     for i, item in enumerate(doc.items):
         if item.n in seen:

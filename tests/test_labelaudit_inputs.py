@@ -207,3 +207,54 @@ def test_temperature_fit_keeps_labelaudit_arithmetic(ws) -> None:
     unit = [replace(fit, params={"temperature": 1.0})]
     row = {**_rows(ws["records"])[0], "p": 1.0, "label": False}
     assert disagreement(row, unit).score == disagreement(row, None).score == 1.0
+
+
+def _empty_fits(ws: dict[str, str]) -> None:
+    doc = json.loads(Path(ws["fits"]).read_text())
+    Path(ws["fits"]).write_text(json.dumps({**doc, "fits": []}))
+
+
+def test_an_empty_fits_file_refuses_rather_than_ranking_raw(ws, capsys) -> None:
+    _empty_fits(ws)
+    assert load_fits(ws["fits"]) == []
+    assert cli_main(["labelaudit", "rank", ws["records"], "--fit", ws["fits"]]) == 1
+    assert "no fit for question_id" in _error_line(capsys)
+    r = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get("/api/labelaudit")
+    assert r.status_code == 400
+    assert "no fit for question_id" in r.json()["detail"]
+
+
+def test_without_a_fits_file_the_web_ranks_raw(ws) -> None:
+    Path(ws["fits"]).unlink()
+    r = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get("/api/labelaudit")
+    assert r.status_code == 200
+    assert r.json()["top_flags"]
+
+
+def test_same_question_and_model_but_another_primitive_is_refused(ws) -> None:
+    (fit,) = load_fits(ws["fits"])
+    other = [replace(fit, primitive="choice")]
+    with pytest.raises(LabelAuditInputError) as e:
+        rank_with_skips(_rows(ws["records"]), other)
+    assert f"fit for {fit.question_id} is for primitive choice, not noul" in str(e.value)
+
+
+def test_same_group_with_other_classes_is_refused(ws) -> None:
+    (fit,) = load_fits(ws["fits_categorical"])[:1]
+    other = [replace(fit, classes=[*fit.classes[:-1], "zzz"])]
+    rows = [r for r in _rows(ws["records_categorical"]) if r["question_id"] == fit.question_id]
+    with pytest.raises(LabelAuditInputError, match="answer classes .* differ from the fit's"):
+        rank_with_skips(rows, other)
+
+
+def test_choice_scores_do_not_depend_on_option_order(ws) -> None:
+    fits = load_fits(ws["fits_categorical"])
+    rows = [r for r in _rows(ws["records_categorical"]) if r["primitive"] == "choice" and r.get("label") is not None]
+    reordered = [{**r, "probabilities": dict(reversed(list(r["probabilities"].items())))} for r in rows]
+    assert [disagreement(r, fits).score for r in rows] == [disagreement(r, fits).score for r in reordered]
+
+
+def test_a_non_object_key_item_names_the_field_not_a_class() -> None:
+    with pytest.raises(ValueError) as e:
+        check_key({"options": ["True"], "items": [1]})
+    assert str(e.value) == "items.0: must be an object"

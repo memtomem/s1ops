@@ -424,10 +424,11 @@ def create_app(
         records = _get_records(use_calib=False)
         if not records:
             return {"top_flags": [], "skipped": {}}
-        fits = _get_fits()
+        # A fits.json that exists means calibrate, even with no fits in it; only a missing one ranks raw.
+        fits = _get_fits() if fit_file.exists() else None
         raw_rows = [r.raw for r in records]
         try:
-            flags, skipped = rank_with_skips(raw_rows, temperature=fits or None)
+            flags, skipped = rank_with_skips(raw_rows, temperature=fits)
         except LabelAuditInputError as e:
             raise HTTPException(status_code=400, detail=f"{rec_file.name} vs {fit_file.name}: {e}") from None
         return {

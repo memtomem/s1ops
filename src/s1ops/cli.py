@@ -625,9 +625,10 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
         return 0
 
     records = read_records(args.records)
-    fits = load_fits(args.fit) if getattr(args, "fit", None) else []
+    # `--fit` given means calibrate, even when the file holds no fits: every record is then refused.
+    fits = load_fits(args.fit) if getattr(args, "fit", None) else None
     raw_rows = [r.raw for r in records]
-    flags, skipped = rank_with_skips(raw_rows, temperature=fits or None)
+    flags, skipped = rank_with_skips(raw_rows, temperature=fits)
 
     if args.la_cmd == "rank":
         payload = {

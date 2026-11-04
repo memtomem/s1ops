@@ -755,7 +755,9 @@
       }
       document.getElementById("drift-container").innerHTML = qs.map(q => {
         const badgeCls = q.status === 'CRITICAL' ? 'badge-err' : (q.status === 'WARN' ? 'badge-warn' : 'badge-ok');
-        const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${esc(q.status)}</span> ${esc(a)}</div>`).join('');
+        const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${esc(q.status)}</span> ${esc(a)}</div>`).join('')
+          + (q.notes || []).map(n => `<div class="sub" style="margin:4px 0;">${esc(n)}</div>`).join('');
+        const psiP = (q.psi_p_value === null || q.psi_p_value === undefined) ? 'N/A' : q.psi_p_value.toFixed(3);
         return `
           <div class="card">
             <h3>Drift Monitor: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, ref n=${q.n_ref} vs cur n=${q.n_cur})
@@ -766,7 +768,7 @@
               <div>
                 <div class="sub">Population Stability Index (PSI) &amp; JSD on ${esc(d.distribution || 'unknown')} probabilities</div>
                 <div class="kpi">PSI = ${q.psi.toFixed(4)}</div>
-                <span class="sub">JS Divergence: ${q.js_divergence.toFixed(4)}</span>
+                <span class="sub">permutation p = ${psiP} (answered n=${q.n_ref_answered} vs ${q.n_cur_answered}) · JS Divergence: ${q.js_divergence.toFixed(4)}</span>
               </div>
               <div>
                 <div class="sub">Served Model Lineage (Ref → Cur)</div>

@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+import hashlib
 import math
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,14 @@ from s1ops.runtime.routing import RoutingInputError, route_record
 PSI_EPS = 1e-4
 PSI_WARN = 0.10
 PSI_CRITICAL = 0.25
+# A PSI over a threshold raises the status only when a permutation test of PSI puts it outside
+# sampling noise: PSI of two samples from one distribution grows like (bins - 1)(1/n_ref + 1/n_cur),
+# about 0.33 at 54 records per side.
+PSI_ALPHA_WARN = 0.05
+PSI_ALPHA_CRITICAL = 0.01
+PSI_RESAMPLES = 1000
+PSI_MIN_RESAMPLES = 1000
+PSI_SEED = 0
 
 
 class DriftInputError(ValueError):
@@ -125,6 +134,20 @@ def _shannon_entropy(probs: Sequence[float]) -> float:
     return h
 
 
+def _bin_counts(scores: Sequence[float], bins: int) -> np.ndarray:
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    counts, _ = np.histogram(np.asarray(scores, dtype=float), bins=edges)
+    return counts
+
+
+def _psi_from_counts(r_counts: np.ndarray, n_ref: int, c_counts: np.ndarray, n_cur: int) -> np.ndarray:
+    """PSI of bin counts; rows of a 2-D array are separate samples. The one formula `psi` and the
+    permutation test share, so the observed value and every resample are computed alike."""
+    r_prop = np.clip(r_counts / n_ref, PSI_EPS, 1.0)
+    c_prop = np.clip(c_counts / n_cur, PSI_EPS, 1.0)
+    return np.sum((c_prop - r_prop) * np.log(c_prop / r_prop), axis=-1)
+
+
 def psi(
     ref_scores: Sequence[float],
     cur_scores: Sequence[float],
@@ -132,16 +155,58 @@ def psi(
     bins: int = 10,
 ) -> float:
     """Compute Population Stability Index (PSI) between reference and current score distributions."""
-    r = np.asarray(ref_scores, dtype=float)
-    c = np.asarray(cur_scores, dtype=float)
-    if len(r) == 0 or len(c) == 0:
+    if len(ref_scores) == 0 or len(cur_scores) == 0:
         return 0.0
-    edges = np.linspace(0.0, 1.0, bins + 1)
-    r_counts, _ = np.histogram(r, bins=edges)
-    c_counts, _ = np.histogram(c, bins=edges)
-    r_prop = np.clip(r_counts / len(r), PSI_EPS, 1.0)
-    c_prop = np.clip(c_counts / len(c), PSI_EPS, 1.0)
-    return float(np.sum((c_prop - r_prop) * np.log(c_prop / r_prop)))
+    return float(
+        _psi_from_counts(_bin_counts(ref_scores, bins), len(ref_scores), _bin_counts(cur_scores, bins), len(cur_scores))
+    )
+
+
+def _psi_seed(question_id: str) -> list[int]:
+    """One generator per question, so adding or removing a question never changes another's p.
+    `surrogatepass`: the record parser accepts a JSON-escaped lone surrogate in an id."""
+    return [PSI_SEED, int(hashlib.sha256(question_id.encode("utf-8", "surrogatepass")).hexdigest()[:16], 16)]
+
+
+def psi_test(
+    ref_scores: Sequence[float],
+    cur_scores: Sequence[float],
+    *,
+    bins: int = 10,
+    resamples: int = PSI_RESAMPLES,
+    seed: Sequence[int] | int = PSI_SEED,
+) -> tuple[float, float | None]:
+    """`(psi, p)`: PSI at full precision, and the permutation p-value of a PSI this large or larger
+    when both samples come from one distribution (`None` when a side is empty or `resamples` is 0).
+
+    A uniform random split of the pooled scores into the two sample sizes depends on the scores only
+    through their bins, so the reference side's bin counts are multivariate hypergeometric over the
+    pooled counts: each resample draws those counts directly, in O(bins). The p-value is a Monte
+    Carlo estimate, `(1 + exceedances) / (resamples + 1)`, a resample counting as reaching the
+    observed PSI within a relative tolerance of 1e-12."""
+    n_ref, n_cur = len(ref_scores), len(cur_scores)
+    if n_ref == 0 or n_cur == 0:
+        return 0.0, None
+    r_counts, c_counts = _bin_counts(ref_scores, bins), _bin_counts(cur_scores, bins)
+    observed = float(_psi_from_counts(r_counts, n_ref, c_counts, n_cur))
+    if resamples == 0:
+        return observed, None
+    pooled = r_counts + c_counts
+    draws = np.random.default_rng(seed).multivariate_hypergeometric(pooled, n_ref, size=resamples)
+    resampled = _psi_from_counts(draws, n_ref, pooled - draws, n_cur)
+    exceed = int(np.count_nonzero(resampled >= observed - 1e-12 * max(1.0, observed)))
+    return observed, (1 + exceed) / (resamples + 1)
+
+
+def _check_resamples(resamples: object) -> int:
+    if isinstance(resamples, bool) or not isinstance(resamples, int):
+        raise ValueError(f"psi_resamples must be an integer, got {short_repr(resamples)}")
+    if resamples != 0 and resamples < PSI_MIN_RESAMPLES:
+        raise ValueError(
+            f"psi_resamples must be 0 (no test) or at least {PSI_MIN_RESAMPLES}, got {resamples}: "
+            "fewer resamples make the p-value too coarse for its alpha"
+        )
+    return resamples
 
 
 def jensen_shannon(
@@ -236,9 +301,12 @@ class DriftReport:
     model_mismatch_count_cur: int
     n_ref: int
     n_cur: int
+    n_ref_answered: int
+    n_cur_answered: int
     failure_rate_ref: float
     failure_rate_cur: float
     psi: float
+    psi_p_value: float | None
     js_divergence: float
     quantiles_ref: dict[str, float]
     quantiles_cur: dict[str, float]
@@ -251,9 +319,23 @@ class DriftReport:
     latency_cur: dict[str, float | None]
     status: str
     alerts: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def psi_test_info(resamples: int = PSI_RESAMPLES) -> dict[str, Any]:
+    """The report's `psi_test` block: how a PSI over a threshold is tested before it alerts."""
+    if resamples == 0:
+        return {"method": "none", "resamples": 0}
+    return {
+        "method": "permutation-by-bin-counts",
+        "resamples": resamples,
+        "seed": PSI_SEED,
+        "alpha_warn": PSI_ALPHA_WARN,
+        "alpha_critical": PSI_ALPHA_CRITICAL,
+    }
 
 
 def audit_drift(
@@ -263,6 +345,7 @@ def audit_drift(
     policies: Sequence[PolicyEntry] | None = None,
     bins: int = 10,
     use_calib: bool = False,
+    psi_resamples: int = PSI_RESAMPLES,
 ) -> dict[str, Any]:
     """Compare reference records against current records per `question_id`.
 
@@ -272,10 +355,16 @@ def audit_drift(
     otherwise). The escalation rate routes what each policy was tuned on either
     way.
 
+    PSI over `PSI_WARN` / `PSI_CRITICAL` raises the status only when its permutation p-value
+    (`psi_test`, `psi_resamples` draws) is under `PSI_ALPHA_WARN` / `PSI_ALPHA_CRITICAL`; a PSI over
+    a threshold that reaches neither is reported in `notes`. `psi_resamples=0` turns the test off
+    (PSI thresholds alone); otherwise it must be at least `PSI_MIN_RESAMPLES`.
+
     Records passed in are re-parsed from their `raw` with the default `sum_tol`, validating any
     stored `calib` in both modes, so one the caller parsed without `use_calib` or with a looser
     tolerance can raise `RecordError` here.
     """
+    psi_resamples = _check_resamples(psi_resamples)
     # Path reads validate a stored `calib` while reading, so its error names the file; the result
     # is the same, since `_compared` re-parses every answered record from `raw`.
     if isinstance(ref_records, (str, Path)):
@@ -319,7 +408,8 @@ def audit_drift(
         r_scores = [_primary_score(r) for r in r_ok]
         c_scores = [_primary_score(r) for r in c_ok]
 
-        psi_val = round(psi(r_scores, c_scores, bins=bins), 6)
+        psi_full, psi_p = psi_test(r_scores, c_scores, bins=bins, resamples=psi_resamples, seed=_psi_seed(qid))
+        psi_val = round(psi_full, 6)
         jsd_val = round(jensen_shannon(r_scores, c_scores, bins=bins), 6)
 
         ent_ref = (
@@ -337,6 +427,7 @@ def audit_drift(
         esc_cur = _escalation_rate(c_ok, pol_by_key, "current")
 
         alerts: list[str] = []
+        notes: list[str] = []
         status = "OK"
 
         if model_drift:
@@ -351,13 +442,28 @@ def audit_drift(
             )
             if status == "OK":
                 status = "WARN"
-        if psi_val >= PSI_CRITICAL:
-            alerts.append(f"severe probability distribution shift: PSI={psi_val:.3f} >= {PSI_CRITICAL}")
+        tested = "" if psi_p is None else f" (p={psi_p:.3f}, n_ref={len(r_ok)}, n_cur={len(c_ok)})"
+        critical_ok = psi_p is None or psi_p < PSI_ALPHA_CRITICAL
+        warn_ok = psi_p is None or psi_p < PSI_ALPHA_WARN
+        if psi_val >= PSI_CRITICAL and critical_ok:
+            alerts.append(f"severe probability distribution shift: PSI={psi_val:.3f} >= {PSI_CRITICAL}{tested}")
             status = "CRITICAL"
-        elif psi_val >= PSI_WARN:
-            alerts.append(f"moderate probability distribution shift: PSI={psi_val:.3f} >= {PSI_WARN}")
+        elif psi_val >= PSI_WARN and warn_ok:
+            if psi_val >= PSI_CRITICAL:
+                alerts.append(
+                    f"moderate probability distribution shift: PSI={psi_val:.3f} >= {PSI_CRITICAL}, "
+                    f"significant at {PSI_ALPHA_WARN} but not at {PSI_ALPHA_CRITICAL}{tested}"
+                )
+            else:
+                alerts.append(f"moderate probability distribution shift: PSI={psi_val:.3f} >= {PSI_WARN}{tested}")
             if status == "OK":
                 status = "WARN"
+        elif psi_val >= PSI_WARN:
+            reached = PSI_CRITICAL if psi_val >= PSI_CRITICAL else PSI_WARN
+            notes.append(
+                f"PSI={psi_val:.3f} >= {reached}, but the PSI test did not reach significance at "
+                f"n_ref={len(r_ok)}, n_cur={len(c_ok)} (p={psi_p:.3f}); not alerted"
+            )
         if fail_cur - fail_ref >= 0.05:
             alerts.append(
                 f"failure/abstain rate jumped from {fail_ref:.1%} to {fail_cur:.1%}"
@@ -374,9 +480,12 @@ def audit_drift(
                 model_mismatch_count_cur=mismatch_cur,
                 n_ref=len(r_all),
                 n_cur=len(c_all),
+                n_ref_answered=len(r_ok),
+                n_cur_answered=len(c_ok),
                 failure_rate_ref=round(fail_ref, 6),
                 failure_rate_cur=round(fail_cur, 6),
                 psi=psi_val,
+                psi_p_value=None if psi_p is None else round(psi_p, 6),
                 js_divergence=jsd_val,
                 quantiles_ref=_quantiles(r_scores),
                 quantiles_cur=_quantiles(c_scores),
@@ -389,6 +498,7 @@ def audit_drift(
                 latency_cur=_latency_summary(c_ok),
                 status=status,
                 alerts=alerts,
+                notes=notes,
             )
         )
 
@@ -396,6 +506,7 @@ def audit_drift(
     return {
         "schema": "s1-drift-report/1",
         "distribution": "calibrated" if use_calib else "raw",
+        "psi_test": psi_test_info(psi_resamples),
         "summary": {
             "n_questions": len(reports),
             "ok": counts["OK"],

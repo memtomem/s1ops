@@ -45,7 +45,7 @@ from s1ops.improve.policy import (
 from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
 from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
 from s1ops.lint.rules import RULES
-from s1ops.monitor.drift import DriftInputError, audit_drift
+from s1ops.monitor.drift import DriftInputError, audit_drift, psi_test_info
 from s1ops.runtime.routing import RoutingInputError
 
 
@@ -526,7 +526,13 @@ def create_app(
         canary_file = _resolve(None, "records_canary.jsonl")
         pol_file = _resolve(None, "policy.json")
         if not _present(rec_file) or not _present(canary_file):
-            return {"schema": "s1-drift-report/1", "distribution": "raw", "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0}, "questions": []}
+            return {
+                "schema": "s1-drift-report/1",
+                "distribution": "raw",
+                "psi_test": psi_test_info(),
+                "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0},
+                "questions": [],
+            }
         policies = _load_or_400(pol_file, load_policies, pol_file) if _present(pol_file) else None
         # Read with use_calib so a malformed stored calib is a 400 naming its file; the report
         # still compares raw probabilities, re-parsed by audit_drift.

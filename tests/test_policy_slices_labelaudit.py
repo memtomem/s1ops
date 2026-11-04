@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import re
 
+from s1ops.contracts.records import parse_record
 from s1ops.improve.labelaudit import (
-    blind_sheet,
+    build_sheet,
     estimate,
     rank,
     score_sheet,
@@ -108,14 +109,8 @@ def test_labelaudit_ranking_and_blind_sheet_estimation() -> None:
     flags = rank(rows, balance=False)
     assert {f.item_id for f in flags[:6]} == flipped_ids
 
-    sheet = blind_sheet(
-        flags,
-        text_of=states,
-        k=6,
-        control_k=12,
-        options=["True", "False"],
-        seed=0,
-    )
+    records = [parse_record(row, n) for n, row in enumerate(rows, 1)]
+    sheet = build_sheet(records, states, 6, 12, options=["True", "False"], seed=0, balance=False)
     completed_form = re.sub(r"^답: $", "답: True", sheet.form, flags=re.M)
     scored = score_sheet(completed_form, sheet.key)
     est = estimate(

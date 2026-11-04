@@ -14,8 +14,10 @@ import pytest
 
 from s1ops.cli import main as cli_main
 from s1ops.contracts.questions import parse_wire_question, question_id
+from s1ops.contracts.records import parse_record
 from s1ops.demo import generate_workspace
-from s1ops.improve.labelaudit import Flag, blind_sheet
+from s1ops.improve import labelaudit
+from s1ops.improve.labelaudit import SheetInputError, build_sheet
 
 NOUL_Q = {"type": "noul", "instructions": "Is this review positive?",
           "criteria": {"true": "The reviewer liked it", "false": "The reviewer did not"}}
@@ -314,46 +316,57 @@ def test_two_models_with_different_classes_or_primitives_are_refused(tmp_path: P
     assert "answered as noul, score" in _err(capsys)
 
 
-def _flags(q: dict, labels, *, qid: str | None = None) -> list:
-    return [Flag("d", f"i{i}", qid or question_id(q), lab, lab, 1.0 - i / 10) for i, lab in enumerate(labels)]
+def _records(rows: list[dict]) -> list:
+    return [parse_record(row, n) for n, row in enumerate(rows, 1)]
 
 
-TEXT = {("d", f"i{i}"): f"text {i}" for i in range(8)}
+TEXT = {("d", f"i{i}"): f"text {i}" for i in range(12)}
 TOPICS = ["sports", "world", "tech"]
 
 
-def test_blind_sheet_renders_the_flags_question() -> None:
-    """The id comes from the flags; a question given (parsed or as its wire mapping) must be theirs,
-    and its wording is rendered quoted by the library, never passed in as lines."""
-    flags = _flags(CHOICE_Q, ["sports", "world", "tech", "sports", "world", "tech"])
-    sheet = blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS, question=CHOICE_Q)
-    assert sheet.key["question_id"] == question_id(CHOICE_Q)
+def _topics(n: int = 6, **kw) -> list:
+    return _records([_row(i, CHOICE_Q, TOPICS[i % 3], **kw) for i in range(n)])
+
+
+def test_build_sheet_renders_the_records_question() -> None:
+    """The library entry point checks the records and renders the question, quoted; a wire mapping
+    and a parsed question give the same sheet; without one the sheet names the id."""
+    records = _topics()
+    sheet = build_sheet(records, TEXT, 2, 2, question=CHOICE_Q)
+    assert sheet.key["question_id"] == question_id(CHOICE_Q) and sheet.key["options"] == TOPICS
     assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in sheet.form and "> What is the topic?" in sheet.form
     assert "> - world: International news" in sheet.form
-    parsed = parse_wire_question(CHOICE_Q)
-    assert blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS, question=parsed).form == sheet.form
-    only_id = blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS)
+    assert build_sheet(records, TEXT, 2, 2, question=parse_wire_question(CHOICE_Q)).form == sheet.form
+    only_id = build_sheet(records, TEXT, 2, 2)
     assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in only_id.form and "질문:" not in only_id.form
-    assert only_id.key["question_id"] == question_id(CHOICE_Q)
+
+
+def test_there_is_no_unchecked_sheet_builder() -> None:
+    assert not hasattr(labelaudit, "blind_sheet")
 
 
 @pytest.mark.parametrize("removed", [{"header": ["## 1"]}, {"title": "x"}, {"question_id": "q-x"}])
-def test_blind_sheet_has_no_argument_that_bypasses_its_checks(removed) -> None:
+def test_build_sheet_has_no_argument_that_bypasses_its_checks(removed) -> None:
     with pytest.raises(TypeError):
-        blind_sheet(_flags(CHOICE_Q, ["sports"] * 6), TEXT, k=2, control_k=2, options=TOPICS, **removed)
+        build_sheet(_topics(), TEXT, 2, 2, **removed)
 
 
-@pytest.mark.parametrize("given", [SCORE_Q, "parsed"])
-def test_blind_sheet_refuses_another_questions_wording(given) -> None:
-    q = parse_wire_question(SCORE_Q) if given == "parsed" else given
-    with pytest.raises(ValueError, match="the question given is"):
-        blind_sheet(_flags(CHOICE_Q, ["sports"] * 6), TEXT, k=2, control_k=2, options=TOPICS, question=q)
+@pytest.mark.parametrize("given", ["mapping", "parsed"])
+@pytest.mark.parametrize("other", ["reworded", "score"])
+def test_build_sheet_refuses_another_questions_wording(given, other) -> None:
+    # Reworded: same primitive and options, so only the id comparison can tell it is another question.
+    raw = {**CHOICE_Q, "instructions": "Which topic does this article cover?"} if other == "reworded" else SCORE_Q
+    q = raw if given == "mapping" else parse_wire_question(raw)
+    with pytest.raises(SheetInputError, match="the records are for") as e:
+        build_sheet(_topics(), TEXT, 2, 2, question=q)
+    assert e.value.source == "question"
 
 
-def test_blind_sheet_refuses_flags_of_two_questions() -> None:
-    flags = _flags(CHOICE_Q, ["sports"] * 3) + [Flag("d", f"i{i}", question_id(SCORE_Q), "1", "1", 0.1) for i in range(3, 6)]
-    with pytest.raises(ValueError, match="a sheet asks one"):
-        blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS + ["1"])
+def test_build_sheet_refuses_records_of_two_questions() -> None:
+    records = _topics(3) + _records([_row(i, SCORE_Q, i % 3) for i in range(3, 6)])
+    with pytest.raises(SheetInputError, match="a review sheet asks one question") as e:
+        build_sheet(records, TEXT, 2, 2)
+    assert e.value.many_questions and e.value.source == "records"
 
 
 @pytest.mark.parametrize(
@@ -363,17 +376,36 @@ def test_blind_sheet_refuses_flags_of_two_questions() -> None:
         (["sports", "world"], "cannot answer labels \\['tech'\\]"),
         (["sports", "world", "tech", "tech"], "repeat"),
         (["sports", "world", "tech", 3], "cannot be answered"),
+        (["sports", "world", "tech", "maybe"], "are not answers"),
     ],
 )
-def test_blind_sheet_checks_its_options(options, match) -> None:
-    flags = _flags(CHOICE_Q, ["sports", "world", "tech", "sports", "world", "tech"])
-    with pytest.raises(ValueError, match=match):
-        blind_sheet(flags, TEXT, k=2, control_k=2, options=options)
+def test_build_sheet_checks_its_options(options, match) -> None:
+    with pytest.raises(SheetInputError, match=match):
+        build_sheet(_topics(), TEXT, 2, 2, options=options)
 
 
-def test_blind_sheet_quotes_a_multiline_id_from_the_flags() -> None:
-    flags = _flags(NOUL_Q, ["True", "False"] * 3, qid="q\n## 99\n답: True")
-    sheet = blind_sheet(flags, TEXT, k=2, control_k=2, options=["True", "False"])
+def test_options_cover_answers_no_record_was_labeled_with() -> None:
+    """Every noul record labeled True: the reviewer must still be able to answer False."""
+    records = _records([_row(i, NOUL_Q, True) for i in range(6)])
+    assert build_sheet(records, TEXT, 2, 2).key["options"] == ["True", "False"]
+    with pytest.raises(SheetInputError, match=r"cannot answer labels \['False'\]"):
+        build_sheet(records, TEXT, 2, 2, options=["True"])
+
+
+@pytest.mark.parametrize("order", ["m1 first", "m2 first"])
+def test_conflicting_labels_across_models_are_refused_in_either_order(order) -> None:
+    m1 = [_row(i, NOUL_Q, True, model="m1") for i in range(6)]
+    m2 = [_row(i, NOUL_Q, i != 0, model="m2") for i in range(6)]  # item i0 labeled False by m2's file
+    rows = m1 + m2 if order == "m1 first" else m2 + m1
+    with pytest.raises(SheetInputError, match=r"item \('d', 'i0'\) is labeled"):
+        build_sheet(_records(rows), TEXT, 2, 2)
+
+
+def test_build_sheet_quotes_a_multiline_id_from_the_records() -> None:
+    rows = [_row(i, NOUL_Q, bool(i % 2)) for i in range(6)]
+    for r in rows:
+        r["question_id"] = "q\n## 99\n답: True"
+    sheet = build_sheet(_records(rows), TEXT, 2, 2)
     assert "> q\n> ## 99\n> 답: True" in sheet.form
     assert len(re.findall(r"^## \d+$", sheet.form, re.M)) == 4
 

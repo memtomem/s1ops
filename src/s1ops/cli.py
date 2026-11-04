@@ -44,14 +44,12 @@ from s1ops.improve.calibrate import (
     transform,
 )
 from s1ops.improve.labelaudit import (
-    blind_sheet,
+    SheetInputError,
+    build_sheet,
     check_key,
-    check_question,
-    check_sheet_records,
     estimate,
     rank_with_skips,
     score_sheet,
-    sheet_options,
 )
 from s1ops.improve.policy import (
     Band,
@@ -707,24 +705,8 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
     records = _filtered_records(args)
     # `--fit` given means calibrate, even when the file holds no fits: every record is then refused.
     fits = load_fits(args.fit) if getattr(args, "fit", None) else None
-    eligible = [r for r in records if r.model_served is not None and r.label is not None]
-    if args.la_cmd == "sheet":
-        question_ids = sorted({r.question_id for r in eligible})
-        if len(question_ids) > 1:
-            shown = ", ".join(question_ids[:5]) + (", ..." if len(question_ids) > 5 else "")
-            raise CliError(
-                f"{args.records}: records hold {len(question_ids)} questions ({shown}); "
-                "a review sheet asks one question: pass --question"
-            )
-        try:
-            check_sheet_records(eligible)
-            options = sheet_options(eligible, args.options.split(",") if args.options is not None else None) if eligible else []
-        except ValueError as e:
-            raise CliError(f"{args.records}: {e}") from None
-    raw_rows = [r.raw for r in records]
-    flags, skipped = rank_with_skips(raw_rows, temperature=fits)
-
     if args.la_cmd == "rank":
+        flags, skipped = rank_with_skips([r.raw for r in records], temperature=fits)
         payload = {
             "n_candidates": len(flags),
             "skipped": {"no_response": skipped.no_response, "unlabeled": skipped.unlabeled},
@@ -747,23 +729,25 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
     # Keyed as `s1 probe` keys the records it writes from these rows: no `dataset` is "default".
     states_map = {(row.get("dataset", "default"), str(row["item_id"])): row["state"] for row in states_rows}
 
-    question_id = eligible[0].question_id if eligible else None
-    question = None
-    if question_id is not None and args.questions:
-        question = _question_from_file(args.questions, question_id)
-        try:
-            check_question(question, eligible[0].primitive, eligible[0].classes)
-        except ValueError as e:
-            raise CliError(f"{args.questions}: question {question_id}: {e}") from None
-    sheet = blind_sheet(
-        flags,
-        text_of=states_map,
-        k=args.top,
-        control_k=args.controls,
-        options=options,
-        seed=args.seed,
-        question=question,
-    )
+    # The questions file is read only to find the records' one question; build_sheet checks the
+    # rest (one question, options, the question's primitive and classes).
+    question_ids = {r.question_id for r in records if r.model_served is not None and r.label is not None}
+    question = _question_from_file(args.questions, next(iter(question_ids))) if args.questions and len(question_ids) == 1 else None
+    try:
+        sheet = build_sheet(
+            records,
+            states_map,
+            args.top,
+            args.controls,
+            options=args.options.split(",") if args.options is not None else None,
+            question=question,
+            fit=fits,
+            seed=args.seed,
+        )
+    except SheetInputError as e:
+        where = args.questions if e.source == "question" else args.records
+        raise CliError(f"{where}: {e}" + (": pass --question" if e.many_questions else "")) from None
+    question_id, options = sheet.key["question_id"], sheet.key["options"]
     Path(args.output).write_text(sheet.form, encoding="utf-8")
     Path(args.key).write_text(json.dumps(sheet.key, indent=2) + "\n", encoding="utf-8")
     print(
@@ -1270,7 +1254,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_las.add_argument("-k", "--key", required=True, help="secret answer key JSON to write; keep it away from reviewers")
     p_las.add_argument("--top", type=int, default=10, help="flagged candidates on the sheet")
     p_las.add_argument("--controls", type=int, default=5, help="random control items mixed in to measure baseline disagreement")
-    p_las.add_argument("--options", default=None, help="comma-separated answer options shown to reviewers (default: the question's classes, `True,False` for noul); they must cover every class")
+    p_las.add_argument("--options", default=None, help="comma-separated answer options shown to reviewers, in this order (default: the question's classes, `True,False` for noul); they must be exactly those classes")
     p_las.add_argument("--question", default=None, help=f"{_H_QUESTION}; required when the records hold more than one question, since a sheet asks one")
     p_las.add_argument("--model", default=None, help=_H_MODEL)
     p_las.add_argument("--questions", default=None, help="questions JSON file, as `s1 probe` reads it, to print the question's wording and option criteria on the sheet")

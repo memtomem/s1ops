@@ -108,8 +108,11 @@ s1 slice mine s1-demo/records.jsonl --features s1-demo/features.jsonl --fdr-q 0.
 
 # 5) Calibrated Label Disagreement Ranking & Blind Review Sheet
 s1 labelaudit rank s1-demo/records.jsonl --fit s1-demo/fits.json --top 10
+#    (a sheet asks one question: pass --question when the records hold several; its options are the
+#    question's classes, and --options may only reorder them; --questions prints the wording)
 s1 labelaudit sheet s1-demo/records.jsonl \
   --states s1-demo/states_local.jsonl \
+  --questions s1-demo/questions.json \
   --fit s1-demo/fits.json \
   -o s1-demo/blind_sheet.md \
   -k s1-demo/blind_key.json \

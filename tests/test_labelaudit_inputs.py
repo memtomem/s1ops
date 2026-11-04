@@ -16,7 +16,7 @@ from s1ops.demo import generate_workspace
 from s1ops.improve.calibrate import load_fits, transform
 from s1ops.improve.labelaudit import (
     LabelAuditInputError,
-    blind_sheet,
+    build_sheet,
     check_key,
     disagreement,
     rank_with_skips,
@@ -129,11 +129,11 @@ def test_sheet_with_a_missing_state_is_one_line(ws, tmp_path: Path, capsys) -> N
     assert "no state for" in err and "states file" in err
 
 
-def test_blind_sheet_names_the_missing_item_never_a_state(ws) -> None:
+def test_build_sheet_names_the_missing_item_never_a_state(ws) -> None:
     flags, _ = rank_with_skips(_rows(ws["records"]), load_fits(ws["fits"]))
     text_of = {(f.dataset, f.item_id): "SECRET STATE" for f in flags[1:]}
     with pytest.raises(ValueError, match="no state for") as e:
-        blind_sheet(flags, text_of, k=3, control_k=3, options=["True", "False"])
+        build_sheet(read_records(ws["records"]), text_of, 3, 3, fit=load_fits(ws["fits"]))
     assert "SECRET" not in str(e.value)
 
 

@@ -401,6 +401,29 @@ def test_conflicting_labels_across_models_are_refused_in_either_order(order) -> 
         build_sheet(_records(rows), TEXT, 2, 2)
 
 
+def test_a_record_left_out_of_the_checks_is_not_ranked() -> None:
+    """A labeled score record parsed with require_answer=False has no label as parsed, so it is
+    not checked; ranking must not bring it back by re-parsing its raw row."""
+    noul = _records([_row(i, NOUL_Q, bool(i % 2)) for i in range(4)])
+    score = parse_record(_row(9, SCORE_Q, 1), 9, require_answer=False)
+    assert score.label is None and score.raw["label"] == 1
+    sheet = build_sheet([*noul, score], TEXT, 1, 2)
+    assert {it["question_id"] for it in sheet.key["items"]} == {question_id(NOUL_Q)}
+    assert {it["label"] for it in sheet.key["items"]} <= {"True", "False"}
+
+
+def test_records_whose_raw_rows_say_otherwise_are_refused() -> None:
+    """build_sheet checks parsed fields and ranks raw rows; a record edited after parsing, whose raw
+    row no longer agrees, is refused rather than ranked as something else."""
+    import dataclasses
+
+    records = _records([_row(i, NOUL_Q, bool(i % 2)) for i in range(4)])
+    unlabeled_raw = parse_record(_row(5, NOUL_Q, None), 5)
+    edited = dataclasses.replace(unlabeled_raw, label=True)
+    with pytest.raises(SheetInputError, match="do not parse to the records checked"):
+        build_sheet([*records, edited], TEXT, 1, 2)
+
+
 def test_build_sheet_quotes_a_multiline_id_from_the_records() -> None:
     rows = [_row(i, NOUL_Q, bool(i % 2)) for i in range(6)]
     for r in rows:

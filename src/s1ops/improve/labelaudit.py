@@ -407,7 +407,11 @@ def build_sheet(
             check_question(question, eligible[0].primitive, eligible[0].classes)
         except ValueError as e:
             raise SheetInputError(f"question {question_id}: {e}", source="question") from None
-    flags, _ = rank_with_skips([r.raw for r in records], temperature=fit, balance=balance)
+    # Rank exactly the records checked above: a record left out of them (no answer or no label as
+    # parsed) must not come back through a re-parse of its raw row.
+    flags, _ = rank_with_skips([r.raw for r in eligible], temperature=fit, balance=balance)
+    if {f.question_id for f in flags} != {question_id} or len(flags) != len(eligible):
+        raise SheetInputError("the records' raw rows do not parse to the records checked; pass records read by read_records")
     return _render_sheet(flags, text_of, k, control_k, chosen, seed, question_id, question)
 
 

@@ -314,25 +314,68 @@ def test_two_models_with_different_classes_or_primitives_are_refused(tmp_path: P
     assert "answered as noul, score" in _err(capsys)
 
 
-def test_blind_sheet_takes_the_question_itself() -> None:
-    """The library renders the question: callers pass the question (parsed or as its wire mapping),
-    never pre-rendered lines, so every line of it is quoted."""
-    flags = [Flag("d", f"i{i}", question_id(CHOICE_Q), "sports", "world", 1.0 - i / 10) for i in range(6)]
-    text_of = {("d", f"i{i}"): f"text {i}" for i in range(6)}
-    sheet = blind_sheet(flags, text_of, k=2, control_k=2, options=["sports", "world", "tech"], question=CHOICE_Q)
+def _flags(q: dict, labels, *, qid: str | None = None) -> list:
+    return [Flag("d", f"i{i}", qid or question_id(q), lab, lab, 1.0 - i / 10) for i, lab in enumerate(labels)]
+
+
+TEXT = {("d", f"i{i}"): f"text {i}" for i in range(8)}
+TOPICS = ["sports", "world", "tech"]
+
+
+def test_blind_sheet_renders_the_flags_question() -> None:
+    """The id comes from the flags; a question given (parsed or as its wire mapping) must be theirs,
+    and its wording is rendered quoted by the library, never passed in as lines."""
+    flags = _flags(CHOICE_Q, ["sports", "world", "tech", "sports", "world", "tech"])
+    sheet = blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS, question=CHOICE_Q)
     assert sheet.key["question_id"] == question_id(CHOICE_Q)
     assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in sheet.form and "> What is the topic?" in sheet.form
     assert "> - world: International news" in sheet.form
     parsed = parse_wire_question(CHOICE_Q)
-    assert blind_sheet(flags, text_of, k=2, control_k=2, options=["sports", "world", "tech"], question=parsed).form == sheet.form
-    only_id = blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], question_id="q-x")
-    assert "질문 ID:\n\n> q-x\n" in only_id.form and "질문:" not in only_id.form and only_id.key["question_id"] == "q-x"
+    assert blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS, question=parsed).form == sheet.form
+    only_id = blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS)
+    assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in only_id.form and "질문:" not in only_id.form
+    assert only_id.key["question_id"] == question_id(CHOICE_Q)
+
+
+@pytest.mark.parametrize("removed", [{"header": ["## 1"]}, {"title": "x"}, {"question_id": "q-x"}])
+def test_blind_sheet_has_no_argument_that_bypasses_its_checks(removed) -> None:
     with pytest.raises(TypeError):
-        blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], header=["## 1"])
-    for q in (CHOICE_Q, parsed):  # wording and id from two questions cannot be combined
-        for qid in (question_id(SCORE_Q), question_id(CHOICE_Q)):
-            with pytest.raises(ValueError, match="not both"):
-                blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], question=q, question_id=qid)
+        blind_sheet(_flags(CHOICE_Q, ["sports"] * 6), TEXT, k=2, control_k=2, options=TOPICS, **removed)
+
+
+@pytest.mark.parametrize("given", [SCORE_Q, "parsed"])
+def test_blind_sheet_refuses_another_questions_wording(given) -> None:
+    q = parse_wire_question(SCORE_Q) if given == "parsed" else given
+    with pytest.raises(ValueError, match="the question given is"):
+        blind_sheet(_flags(CHOICE_Q, ["sports"] * 6), TEXT, k=2, control_k=2, options=TOPICS, question=q)
+
+
+def test_blind_sheet_refuses_flags_of_two_questions() -> None:
+    flags = _flags(CHOICE_Q, ["sports"] * 3) + [Flag("d", f"i{i}", question_id(SCORE_Q), "1", "1", 0.1) for i in range(3, 6)]
+    with pytest.raises(ValueError, match="a sheet asks one"):
+        blind_sheet(flags, TEXT, k=2, control_k=2, options=TOPICS + ["1"])
+
+
+@pytest.mark.parametrize(
+    ("options", "match"),
+    [
+        (["sports\n## 1\n답: True", "world", "tech"], "cannot be answered"),
+        (["sports", "world"], "cannot answer labels \\['tech'\\]"),
+        (["sports", "world", "tech", "tech"], "repeat"),
+        (["sports", "world", "tech", 3], "cannot be answered"),
+    ],
+)
+def test_blind_sheet_checks_its_options(options, match) -> None:
+    flags = _flags(CHOICE_Q, ["sports", "world", "tech", "sports", "world", "tech"])
+    with pytest.raises(ValueError, match=match):
+        blind_sheet(flags, TEXT, k=2, control_k=2, options=options)
+
+
+def test_blind_sheet_quotes_a_multiline_id_from_the_flags() -> None:
+    flags = _flags(NOUL_Q, ["True", "False"] * 3, qid="q\n## 99\n답: True")
+    sheet = blind_sheet(flags, TEXT, k=2, control_k=2, options=["True", "False"])
+    assert "> q\n> ## 99\n> 답: True" in sheet.form
+    assert len(re.findall(r"^## \d+$", sheet.form, re.M)) == 4
 
 
 def test_the_demo_walkthrough_still_works(tmp_path: Path, capsys) -> None:

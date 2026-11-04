@@ -19,6 +19,7 @@ from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
 
 EPS = 1e-6
+SHEET_TITLE = "라벨 블라인드 재검수"
 ANSWER_RE = re.compile(r"^## (\d+)[ \t]*\n(.*?)(?=^## \d+[ \t]*$|\Z)", re.M | re.S)
 
 FitKey = tuple[str, str | None]
@@ -225,18 +226,25 @@ def sheet_options(records: Sequence[Record], given: Sequence[str] | None = None)
     classes = [str(c) for c in first.classes]
     derived = ["True", "False"] if first.primitive == "noul" else classes
     options = list(given) if given is not None else derived
+    check_options(options, classes, first.question_id)
+    return options
+
+
+def check_options(options: Sequence[str], labels: Iterable[str], question_id: str) -> None:
+    """Refuse answers a reviewer could not give back as written: a non-string or empty option, one
+    that `parse_answers`' whitespace normalization changes (which also refuses a newline, so an
+    option cannot open an answer section), a repeat, or options that miss a label."""
     for o in options:
-        if not o or _normalized(o) != o:
+        if not isinstance(o, str) or not o or _normalized(o) != o:
             raise ValueError(
                 f"option {o!r} cannot be answered: a reviewer's answer is read with its spaces collapsed and trimmed"
             )
-    dup = sorted({o for o in options if options.count(o) > 1})
+    dup = sorted({o for o in options if list(options).count(o) > 1})
     if dup:
         raise ValueError(f"options repeat {dup}")
-    missing = [c for c in classes if c not in options]
+    missing = sorted({lab for lab in labels if lab not in options})
     if missing:
-        raise ValueError(f"options {options} cannot answer labels {missing} of question {first.question_id}")
-    return options
+        raise ValueError(f"options {list(options)} cannot answer labels {missing} of question {question_id}")
 
 
 def _shown(value: object) -> str:
@@ -281,22 +289,26 @@ def blind_sheet(
     control_k: int,
     options: Sequence[str],
     seed: int = 0,
-    title: str = "라벨 블라인드 재검수",
     question: QuestionModel | Mapping | None = None,
-    question_id: str | None = None,
 ) -> Sheet:
-    """A blind review sheet and its secret key for `ranked` (one question's flags).
+    """A blind review sheet and its secret key for `ranked`, the flags of one question.
 
-    Pass one of `question` or `question_id`. `question` (a parsed question or its wire mapping)
-    prints its wording and option criteria under the title, every line quoted, and its id is
-    computed from it, so wording and id cannot disagree. `question_id` alone names the id only.
-    Either way the key records the id."""
-    if question is not None and question_id is not None:
-        raise ValueError("pass question or question_id, not both: a question's id is computed from its wording")
+    The question id comes from the flags, which must all name one question. `question` (a parsed
+    question or its wire mapping), when given, must be that question (its id is computed from its
+    wording); its wording and option criteria are printed under the title, every line quoted.
+    `options` must answer every flag's label (`check_options`). Nothing a caller passes reaches the
+    form unquoted except the options, which that check keeps to single, normalized lines."""
+    question_ids = sorted({f.question_id for f in ranked})
+    if len(question_ids) > 1:
+        raise ValueError(f"the flags name {len(question_ids)} questions ({', '.join(question_ids[:5])}); a sheet asks one")
+    question_id = question_ids[0] if question_ids else None
     if question is not None:
         if not isinstance(question, (NoulQuestion, ChoiceQuestion, ScoreQuestion)):
             question = parse_wire_question(dict(question))
-        question_id = question_id_of(question)
+        if question_id_of(question) != question_id:
+            raise ValueError(f"the question given is {question_id_of(question)}, the flags are for {question_id}")
+    if question_id is not None:
+        check_options(options, (f.label for f in ranked), question_id)
     header = question_lines(question_id, question) if question_id is not None else []
     if k <= 0 or control_k <= 0:
         raise ValueError("k and control_k must be positive")
@@ -320,15 +332,13 @@ def blind_sheet(
         )
     rng.shuffle(items)
     lines = [
-        f"# {title}",
+        f"# {SHEET_TITLE}",
         "",
         f"각 항목의 올바른 답을 하나 고르세요: {', '.join(options)}. `답:` 뒤에 적어 주세요.",
         "",
         *header,
     ]
-    key = {"seed": seed, "k": k, "control_k": control_k, "options": list(options), "items": []}
-    if question_id is not None:
-        key["question_id"] = question_id
+    key = {"seed": seed, "k": k, "control_k": control_k, "options": list(options), "question_id": question_id, "items": []}
     for n, (f, arm) in enumerate(items, 1):
         key["items"].append(
             {

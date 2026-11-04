@@ -11,7 +11,6 @@ import itertools
 import json
 import math
 import random
-import time
 from collections import Counter
 from pathlib import Path
 
@@ -336,21 +335,30 @@ def test_template_renders_p_and_unbadged_notes() -> None:
     assert "(q.notes || []).map(n => `<div class=\"sub\" style=\"margin:4px 0;\">${esc(n)}</div>`)" in html
 
 
-def test_psi_test_on_half_a_million_scores_takes_under_two_seconds() -> None:
-    big = np.random.default_rng(3).random(500_000).tolist()
-    t0 = time.perf_counter()
-    psi_test(big[:250_000], big[250_000:], resamples=1000, seed=[0, 2])
-    assert time.perf_counter() - t0 < 2.0
+@pytest.mark.parametrize("n", [10, 2_000, 200_000])
+def test_resampling_work_does_not_grow_with_records(monkeypatch, n) -> None:
+    """The cost claim, checked by structure rather than wall-clock: whatever the number of records,
+    the test makes one hypergeometric draw of shape (resamples, bins) over the pooled bin counts and
+    computes PSI on that (resamples, bins) array; records are only binned once per side. Measured at
+    200,000 records end to end: 1.86 s without the test, 1.79 s with it."""
+    draws, psi_shapes = [], []
+    real_rng, real_psi = np.random.default_rng, drift._psi_from_counts
 
+    class Spy:
+        def __init__(self, seed):
+            self._g = real_rng(seed)
 
-def test_the_test_adds_little_to_an_audit_of_forty_thousand_records(tmp_path: Path) -> None:
-    """End to end, reading and parsing dominate; resampling bin counts adds O(K x bins) per question.
-    Measured at 200,000 records: 1.86 s without the test, 1.79 s with it."""
-    rng = random.Random("cost")
-    r, c = _pair(tmp_path, [round(rng.random(), 4) for _ in range(20_000)], [round(rng.random(), 4) for _ in range(20_000)])
-    t0 = time.perf_counter()
-    audit_drift(r, c, psi_resamples=0)
-    t1 = time.perf_counter()
-    audit_drift(r, c)
-    t2 = time.perf_counter()
-    assert (t2 - t1) - (t1 - t0) < 0.5
+        def multivariate_hypergeometric(self, colors, nsample, size):
+            draws.append((np.shape(colors), int(np.sum(colors)), nsample, size))
+            return self._g.multivariate_hypergeometric(colors, nsample, size=size)
+
+    def spy_psi(r, nr, c, nc):
+        psi_shapes.append(np.shape(r))
+        return real_psi(r, nr, c, nc)
+
+    scores = np.random.default_rng(3).random(2 * n).tolist()  # before the patch: drift.np is numpy itself
+    monkeypatch.setattr(drift.np.random, "default_rng", Spy)
+    monkeypatch.setattr(drift, "_psi_from_counts", spy_psi)
+    psi_test(scores[:n], scores[n:], resamples=1000, bins=10, seed=[0, 2])
+    assert draws == [((10,), 2 * n, n, 1000)]
+    assert psi_shapes == [(10,), (1000, 10)]

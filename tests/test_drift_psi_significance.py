@@ -341,8 +341,8 @@ def test_resampling_work_does_not_grow_with_records(monkeypatch, n) -> None:
     the test makes one hypergeometric draw of shape (resamples, bins) over the pooled bin counts and
     computes PSI on that (resamples, bins) array; records are only binned once per side. Measured at
     200,000 records end to end: 1.86 s without the test, 1.79 s with it."""
-    draws, psi_shapes = [], []
-    real_rng, real_psi = np.random.default_rng, drift._psi_from_counts
+    draws, psi_shapes, binned = [], [], []
+    real_rng, real_psi, real_bins = np.random.default_rng, drift._psi_from_counts, drift._bin_counts
 
     class Spy:
         def __init__(self, seed):
@@ -356,9 +356,15 @@ def test_resampling_work_does_not_grow_with_records(monkeypatch, n) -> None:
         psi_shapes.append(np.shape(r))
         return real_psi(r, nr, c, nc)
 
+    def spy_bins(scores, bins):
+        binned.append(len(scores))
+        return real_bins(scores, bins)
+
     scores = np.random.default_rng(3).random(2 * n).tolist()  # before the patch: drift.np is numpy itself
     monkeypatch.setattr(drift.np.random, "default_rng", Spy)
     monkeypatch.setattr(drift, "_psi_from_counts", spy_psi)
+    monkeypatch.setattr(drift, "_bin_counts", spy_bins)
     psi_test(scores[:n], scores[n:], resamples=1000, bins=10, seed=[0, 2])
     assert draws == [((10,), 2 * n, n, 1000)]
     assert psi_shapes == [(10,), (1000, 10)]
+    assert binned == [n, n]

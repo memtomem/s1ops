@@ -13,8 +13,9 @@ from pathlib import Path
 import pytest
 
 from s1ops.cli import main as cli_main
-from s1ops.contracts.questions import question_id
+from s1ops.contracts.questions import parse_wire_question, question_id
 from s1ops.demo import generate_workspace
+from s1ops.improve.labelaudit import Flag, blind_sheet
 
 NOUL_Q = {"type": "noul", "instructions": "Is this review positive?",
           "criteria": {"true": "The reviewer liked it", "false": "The reviewer did not"}}
@@ -311,6 +312,23 @@ def test_two_models_with_different_classes_or_primitives_are_refused(tmp_path: P
     rec, states = _files(tmp_path, n + s)
     assert cli_main(_sheet(tmp_path, rec, states)) == 1
     assert "answered as noul, score" in _err(capsys)
+
+
+def test_blind_sheet_takes_the_question_itself() -> None:
+    """The library renders the question: callers pass the question (parsed or as its wire mapping),
+    never pre-rendered lines, so every line of it is quoted."""
+    flags = [Flag("d", f"i{i}", question_id(CHOICE_Q), "sports", "world", 1.0 - i / 10) for i in range(6)]
+    text_of = {("d", f"i{i}"): f"text {i}" for i in range(6)}
+    sheet = blind_sheet(flags, text_of, k=2, control_k=2, options=["sports", "world", "tech"], question=CHOICE_Q)
+    assert sheet.key["question_id"] == question_id(CHOICE_Q)
+    assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in sheet.form and "> What is the topic?" in sheet.form
+    assert "> - world: International news" in sheet.form
+    parsed = parse_wire_question(CHOICE_Q)
+    assert blind_sheet(flags, text_of, k=2, control_k=2, options=["sports", "world", "tech"], question=parsed).form == sheet.form
+    only_id = blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], question_id="q-x")
+    assert "질문 ID:\n\n> q-x\n" in only_id.form and "질문:" not in only_id.form and only_id.key["question_id"] == "q-x"
+    with pytest.raises(TypeError):
+        blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], header=["## 1"])
 
 
 def test_the_demo_walkthrough_still_works(tmp_path: Path, capsys) -> None:

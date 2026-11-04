@@ -12,7 +12,8 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from s1ops.contracts._validation import pydantic_errors
-from s1ops.contracts.questions import QuestionModel
+from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, QuestionModel, ScoreQuestion, parse_wire_question
+from s1ops.contracts.questions import question_id as question_id_of
 from s1ops.contracts.records import Record, parse_record, probability_total
 from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
@@ -281,9 +282,19 @@ def blind_sheet(
     options: Sequence[str],
     seed: int = 0,
     title: str = "라벨 블라인드 재검수",
-    header: Sequence[str] = (),
+    question: QuestionModel | Mapping | None = None,
     question_id: str | None = None,
 ) -> Sheet:
+    """A blind review sheet and its secret key for `ranked` (one question's flags).
+
+    `question` (a parsed question or its wire mapping) prints its wording and option criteria
+    under the title, every line quoted; `question_id` defaults to its id. With only `question_id`,
+    the sheet names the id. Either way the key records `question_id`."""
+    if question is not None and not isinstance(question, (NoulQuestion, ChoiceQuestion, ScoreQuestion)):
+        question = parse_wire_question(dict(question))
+    if question is not None and question_id is None:
+        question_id = question_id_of(question)
+    header = question_lines(question_id, question) if question_id is not None else []
     if k <= 0 or control_k <= 0:
         raise ValueError("k and control_k must be positive")
     unique: list[Flag] = []

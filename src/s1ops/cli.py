@@ -49,7 +49,6 @@ from s1ops.improve.labelaudit import (
     check_question,
     check_sheet_records,
     estimate,
-    question_lines,
     rank_with_skips,
     score_sheet,
     sheet_options,
@@ -763,7 +762,7 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
         control_k=args.controls,
         options=options,
         seed=args.seed,
-        header=question_lines(question_id, question) if question_id is not None else (),
+        question=question,
         question_id=question_id,
     )
     Path(args.output).write_text(sheet.form, encoding="utf-8")

@@ -401,27 +401,48 @@ def test_conflicting_labels_across_models_are_refused_in_either_order(order) -> 
         build_sheet(_records(rows), TEXT, 2, 2)
 
 
-def test_a_record_left_out_of_the_checks_is_not_ranked() -> None:
-    """A labeled score record parsed with require_answer=False has no label as parsed, so it is
-    not checked; ranking must not bring it back by re-parsing its raw row."""
+def test_a_record_parsed_loosely_is_read_as_its_row_says() -> None:
+    """A labeled score record parsed with require_answer=False has no label as parsed; build_sheet
+    re-parses every row, sees the score question, and refuses the mix instead of ranking it."""
     noul = _records([_row(i, NOUL_Q, bool(i % 2)) for i in range(4)])
     score = parse_record(_row(9, SCORE_Q, 1), 9, require_answer=False)
     assert score.label is None and score.raw["label"] == 1
-    sheet = build_sheet([*noul, score], TEXT, 1, 2)
-    assert {it["question_id"] for it in sheet.key["items"]} == {question_id(NOUL_Q)}
-    assert {it["label"] for it in sheet.key["items"]} <= {"True", "False"}
+    with pytest.raises(SheetInputError, match="records hold 2 questions"):
+        build_sheet([*noul, score], TEXT, 1, 2)
 
 
-def test_records_whose_raw_rows_say_otherwise_are_refused() -> None:
-    """build_sheet checks parsed fields and ranks raw rows; a record edited after parsing, whose raw
-    row no longer agrees, is refused rather than ranked as something else."""
+@pytest.mark.parametrize(
+    "edit",
+    [
+        {"label": True},             # the row has no label
+        {"item_id": "i0"},           # the row is item i5: text_of is looked up by the row
+        {"model_served": "other"},   # the row's model picks the calibration
+        {"classes": (True, False)},  # the row's class order decides the options
+        {"primitive": "score"},      # the row is noul
+    ],
+)
+def test_fields_edited_after_parsing_do_not_count(edit) -> None:
+    """build_sheet reads every record from its raw row, so a Record edited after parsing cannot make
+    what is checked differ from what is ranked and rendered."""
     import dataclasses
 
-    records = _records([_row(i, NOUL_Q, bool(i % 2)) for i in range(4)])
-    unlabeled_raw = parse_record(_row(5, NOUL_Q, None), 5)
-    edited = dataclasses.replace(unlabeled_raw, label=True)
-    with pytest.raises(SheetInputError, match="do not parse to the records checked"):
-        build_sheet([*records, edited], TEXT, 1, 2)
+    rows = [_row(i, NOUL_Q, bool(i % 2)) for i in range(5)] + [_row(5, NOUL_Q, None)]
+    records = _records(rows)
+    edited = [*records[:5], dataclasses.replace(records[5], **edit)]
+    expected = build_sheet(records, TEXT, 1, 2)
+    sheet = build_sheet(edited, TEXT, 1, 2)
+    assert sheet.form == expected.form and sheet.key == expected.key
+    assert sheet.key["options"] == ["True", "False"]
+
+
+def test_a_noul_row_replaced_by_a_score_row_is_refused() -> None:
+    import dataclasses
+
+    records = _records([_row(i, NOUL_Q, bool(i % 2)) for i in range(5)])
+    score_row = {**_row(0, SCORE_Q, 1), "question_id": question_id(NOUL_Q)}
+    swapped = [dataclasses.replace(records[0], raw=score_row), *records[1:]]
+    with pytest.raises(SheetInputError, match="answered as noul, score"):
+        build_sheet(swapped, TEXT, 1, 2)
 
 
 def test_build_sheet_quotes_a_multiline_id_from_the_records() -> None:

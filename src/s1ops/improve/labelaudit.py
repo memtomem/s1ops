@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from s1ops.contracts._validation import pydantic_errors
 from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, QuestionModel, ScoreQuestion, parse_wire_question
 from s1ops.contracts.questions import question_id as question_id_of
-from s1ops.contracts.records import Record, parse_record, probability_total
+from s1ops.contracts.records import Record, parse_record, probability_total, reparse
 from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
 
@@ -378,7 +378,12 @@ def build_sheet(
     mapping) that is the records' question in id, primitive and classes (`check_question`).
     The records are then ranked under `fit` (`rank_with_skips`, class-balanced unless `balance`
     is false) and the sheet rendered: `k`
-    flagged items and `control_k` random controls, with their states from `text_of`."""
+    flagged items and `control_k` random controls, with their states from `text_of`.
+
+    The records' raw rows are the source: each is parsed again (`reparse`, which keeps its file in
+    errors) before anything is checked, and the same rows are ranked, so a `Record` edited after
+    parsing, or parsed with looser options, is read as its row says."""
+    records = [reparse(r) for r in records]
     eligible = [r for r in records if r.model_served is not None and r.label is not None]
     if not eligible:
         raise SheetInputError("no answered, labeled record to put on a sheet")
@@ -407,11 +412,7 @@ def build_sheet(
             check_question(question, eligible[0].primitive, eligible[0].classes)
         except ValueError as e:
             raise SheetInputError(f"question {question_id}: {e}", source="question") from None
-    # Rank exactly the records checked above: a record left out of them (no answer or no label as
-    # parsed) must not come back through a re-parse of its raw row.
     flags, _ = rank_with_skips([r.raw for r in eligible], temperature=fit, balance=balance)
-    if {f.question_id for f in flags} != {question_id} or len(flags) != len(eligible):
-        raise SheetInputError("the records' raw rows do not parse to the records checked; pass records read by read_records")
     return _render_sheet(flags, text_of, k, control_k, chosen, seed, question_id, question)
 
 

@@ -1,5 +1,6 @@
 """Blind label noise auditor: calibrated disagreement ranking, blind sheet with random control, and Wilson lift."""
 
+import json
 import math
 import random
 import re
@@ -11,6 +12,7 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from s1ops.contracts._validation import pydantic_errors
+from s1ops.contracts.questions import QuestionModel
 from s1ops.contracts.records import Record, parse_record, probability_total
 from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
@@ -183,6 +185,94 @@ def quote(text: str) -> str:
     return "\n".join("> " + line for line in (text.splitlines() or [""]))
 
 
+def _normalized(answer: str) -> str:
+    """What `parse_answers` makes of a reviewer's answer."""
+    return " ".join(answer.split())
+
+
+def check_sheet_records(records: Sequence[Record]) -> None:
+    """Refuse answered, labeled records of one question that one review sheet cannot ask about
+    consistently: more than one primitive, different class sets, or one item labeled differently
+    by two records (a sheet shows each item once, so it would keep whichever label ranked first)."""
+    if not records:
+        return
+    primitives = sorted({r.primitive for r in records})
+    if len(primitives) > 1:
+        raise ValueError(f"question {records[0].question_id} is answered as {', '.join(primitives)}; a sheet asks one kind of question")
+    first = records[0]
+    labels: dict[Identity, Record] = {}
+    for r in records:
+        # Primitive first: noul (False, True) and score (0, 1) compare equal as sets.
+        if set(r.classes) != set(first.classes):
+            raise ValueError(
+                f"item {r.item} of model {r.model_served!r} has classes {list(r.classes)}, "
+                f"item {first.item} of model {first.model_served!r} has {list(first.classes)}"
+            )
+        seen = labels.setdefault(r.item, r)
+        if seen.label != r.label:
+            raise ValueError(
+                f"item {r.item} is labeled {seen.label!r} in a record of model {seen.model_served!r} "
+                f"and {r.label!r} in one of model {r.model_served!r}"
+            )
+
+
+def sheet_options(records: Sequence[Record], given: Sequence[str] | None = None) -> list[str]:
+    """The answers a sheet offers for one question, as `Flag.label` writes labels into its key:
+    `str()` of each class, noul as `True, False`. Given options must cover every class, and every
+    option must survive `parse_answers`' whitespace normalization unchanged and stay distinct."""
+    first = records[0]
+    classes = [str(c) for c in first.classes]
+    derived = ["True", "False"] if first.primitive == "noul" else classes
+    options = list(given) if given is not None else derived
+    for o in options:
+        if not o or _normalized(o) != o:
+            raise ValueError(
+                f"option {o!r} cannot be answered: a reviewer's answer is read with its spaces collapsed and trimmed"
+            )
+    dup = sorted({o for o in options if options.count(o) > 1})
+    if dup:
+        raise ValueError(f"options repeat {dup}")
+    missing = [c for c in classes if c not in options]
+    if missing:
+        raise ValueError(f"options {options} cannot answer labels {missing} of question {first.question_id}")
+    return options
+
+
+def _shown(value: object) -> str:
+    return value if isinstance(value, str) else json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+
+def check_question(question: QuestionModel, primitive: str, classes: Sequence) -> None:
+    """Refuse a question that is not the one the records answer: another primitive, choice keys
+    that differ, or score levels past its criteria."""
+    if question.type != primitive:
+        raise ValueError(f"the question is a {question.type} question, the records answer a {primitive} one")
+    if question.type == "choice" and set(question.criteria) != {str(c) for c in classes}:
+        raise ValueError(f"the question's options {sorted(question.criteria)} differ from the records' {sorted(map(str, classes))}")
+    if question.type == "score" and any(c >= len(question.criteria) for c in classes):
+        raise ValueError(f"the records' levels {list(classes)} go past the question's {len(question.criteria)} levels")
+
+
+def question_lines(question_id: str, question: QuestionModel | None) -> list[str]:
+    """The block printed under a sheet's title. Every line of the question's own text is quoted,
+    so wording that holds `## 1` or `답:` cannot open an answer section; so is the id, which the
+    record parser accepts with newlines in it."""
+    lines = ["질문 ID:", "", quote(question_id), ""]
+    if question is None:
+        return lines
+    lines += ["질문:", "", quote(_shown(question.instructions)), ""]
+    if question.type == "noul":
+        criteria = [(o, (question.criteria or {}).get(k)) for o, k in (("True", "true"), ("False", "false"))]
+        criteria = [(o, c) for o, c in criteria if c is not None]
+    elif question.type == "choice":
+        criteria = list(question.criteria.items())
+    else:
+        criteria = [(str(i), c) for i, c in enumerate(question.criteria)]
+    if criteria:
+        lines += ["선택지:", "", quote("\n".join(f"- {o}: {_shown(c)}" for o, c in criteria)), ""]
+    return lines
+
+
 def blind_sheet(
     ranked: Sequence[Flag],
     text_of: Mapping[Identity, str],
@@ -191,6 +281,8 @@ def blind_sheet(
     options: Sequence[str],
     seed: int = 0,
     title: str = "라벨 블라인드 재검수",
+    header: Sequence[str] = (),
+    question_id: str | None = None,
 ) -> Sheet:
     if k <= 0 or control_k <= 0:
         raise ValueError("k and control_k must be positive")
@@ -218,8 +310,11 @@ def blind_sheet(
         "",
         f"각 항목의 올바른 답을 하나 고르세요: {', '.join(options)}. `답:` 뒤에 적어 주세요.",
         "",
+        *header,
     ]
     key = {"seed": seed, "k": k, "control_k": control_k, "options": list(options), "items": []}
+    if question_id is not None:
+        key["question_id"] = question_id
     for n, (f, arm) in enumerate(items, 1):
         key["items"].append(
             {

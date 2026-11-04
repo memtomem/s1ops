@@ -329,6 +329,10 @@ def test_blind_sheet_takes_the_question_itself() -> None:
     assert "질문 ID:\n\n> q-x\n" in only_id.form and "질문:" not in only_id.form and only_id.key["question_id"] == "q-x"
     with pytest.raises(TypeError):
         blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], header=["## 1"])
+    for q in (CHOICE_Q, parsed):  # wording and id from two questions cannot be combined
+        for qid in (question_id(SCORE_Q), question_id(CHOICE_Q)):
+            with pytest.raises(ValueError, match="not both"):
+                blind_sheet(flags, text_of, k=2, control_k=2, options=["sports"], question=q, question_id=qid)
 
 
 def test_the_demo_walkthrough_still_works(tmp_path: Path, capsys) -> None:

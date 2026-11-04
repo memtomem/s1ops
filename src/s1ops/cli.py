@@ -763,7 +763,7 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
         options=options,
         seed=args.seed,
         question=question,
-        question_id=question_id,
+        question_id=None if question is not None else question_id,
     )
     Path(args.output).write_text(sheet.form, encoding="utf-8")
     Path(args.key).write_text(json.dumps(sheet.key, indent=2) + "\n", encoding="utf-8")

@@ -287,12 +287,15 @@ def blind_sheet(
 ) -> Sheet:
     """A blind review sheet and its secret key for `ranked` (one question's flags).
 
-    `question` (a parsed question or its wire mapping) prints its wording and option criteria
-    under the title, every line quoted; `question_id` defaults to its id. With only `question_id`,
-    the sheet names the id. Either way the key records `question_id`."""
-    if question is not None and not isinstance(question, (NoulQuestion, ChoiceQuestion, ScoreQuestion)):
-        question = parse_wire_question(dict(question))
-    if question is not None and question_id is None:
+    Pass one of `question` or `question_id`. `question` (a parsed question or its wire mapping)
+    prints its wording and option criteria under the title, every line quoted, and its id is
+    computed from it, so wording and id cannot disagree. `question_id` alone names the id only.
+    Either way the key records the id."""
+    if question is not None and question_id is not None:
+        raise ValueError("pass question or question_id, not both: a question's id is computed from its wording")
+    if question is not None:
+        if not isinstance(question, (NoulQuestion, ChoiceQuestion, ScoreQuestion)):
+            question = parse_wire_question(dict(question))
         question_id = question_id_of(question)
     header = question_lines(question_id, question) if question_id is not None else []
     if k <= 0 or control_k <= 0:

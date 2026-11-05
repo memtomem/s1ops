@@ -75,7 +75,14 @@ from s1ops.lint.lint import ProbeInputError, audit_probe_records, format_text, l
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
-from s1ops.monitor.runner import DeterministicMockBackend, check_reservation, check_states, run_batch
+from s1ops.monitor.runner import (
+    DeterministicMockBackend,
+    check_questions,
+    check_reservation,
+    check_states,
+    probe_tasks,
+    run_batch,
+)
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
 
 EXIT_OK = 0
@@ -952,6 +959,12 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         q_map = {k: v for k, v in q_doc.items() if isinstance(v, dict) and "type" in v}
     else:
         raise CliError(f"{args.questions}: must be a JSON object mapping names to questions")
+    # Every question, its extension and the backend's refusals are checked before the ledger or
+    # the output is opened; run_batch repeats the same deterministic expansion.
+    try:
+        tasks = probe_tasks(q_map, probe_mode=not args.no_expand_probes)
+    except ValueError as e:
+        raise CliError(f"{args.questions}: {e}") from None
     if args.max_retries < 0:
         raise CliError("--max-retries must be >= 0")
     # None takes the backend's measured default inside run_batch; check an explicit value up front.
@@ -971,6 +984,10 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     failed = 0
     lost = False
     try:
+        try:  # inside the `finally` that closes the backend, before the ledger or output is opened
+            check_questions(tasks, backend)
+        except ValueError as e:
+            raise CliError(f"{args.questions}: {e}") from None
         with Ledger(ledger_path, cap_usd=args.cap_usd) as ledger:
             others = [ledger_path, lock_path(ledger_path), Path(args.states), Path(args.questions)]
             with _open_output_apart(out_path, others) as fh:

@@ -1,7 +1,8 @@
 """Read a questions file mapping question name to a `/v1/systemone` or OpenAI `/v1/decisions` question.
 
-Supports both `x-s1-lint` and `x-jev-lint` extension keys for rule suppression (`ignore`) and
-inverse phrasing (`inverse`).
+Supports both `x-s1-lint` and `x-jev-lint` extension keys (one per question) for rule
+suppression (`ignore`) and inverse phrasing (`inverse`, the wording `s1 probe` sends as the
+inverse probe).
 """
 
 import json
@@ -68,10 +69,13 @@ def parse_question(name: str, raw: object, known_rules: frozenset[str]) -> Quest
     if not isinstance(raw, dict):
         return QuestionSpec(name, None, errors=["a question must be a JSON object"])
     duplicates = list(getattr(raw.get("criteria"), "duplicates", [])) if raw.get("type") == "choice" else []
-    ext_key = next((k for k in EXTENSION_KEYS if k in raw), EXTENSION_KEYS[0])
+    present = [k for k in EXTENSION_KEYS if k in raw]
+    ext_key = present[0] if present else EXTENSION_KEYS[0]
     body = _plain({k: v for k, v in raw.items() if k not in EXTENSION_KEYS})
     extension = _plain(raw.get(ext_key, {}))
     errors: list[str] = []
+    if len(present) > 1:
+        errors.append(f"use one of {' or '.join(present)}, not both")
 
     ignore: frozenset[str] = frozenset()
     inverse: NoulQuestion | None = None

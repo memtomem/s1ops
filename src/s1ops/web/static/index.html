@@ -588,7 +588,7 @@
           <h3>Probe Coherence Audit (Noul vs Yes/No Twin &amp; Polarity Inverse Sum)</h3>
           <table>
             <thead>
-              <tr><th>Probe Question</th><th>Model Served</th><th>n</th><th>Mean Twin Gap</th><th>Twin Flip Rate</th><th>Mean Inverse Error |p+p_inv-1|</th></tr>
+              <tr><th>Probe Question</th><th>Model Served</th><th>n</th><th>Mean Twin Gap</th><th>Twin Flip Rate</th><th>Mean Inverse Error |p+p_inv-1|</th><th>Inverse Wording</th></tr>
             </thead>
             <tbody>
               ${probes.map(p => `
@@ -599,6 +599,7 @@
                   <td class="mono">${p.mean_twin_gap !== null ? p.mean_twin_gap.toFixed(4) : 'N/A'}</td>
                   <td class="mono">${p.twin_flip_rate !== null ? (p.twin_flip_rate * 100).toFixed(1) + '%' : 'N/A'}</td>
                   <td class="mono">${p.mean_inverse_error !== null ? p.mean_inverse_error.toFixed(4) : 'N/A'}</td>
+                  <td class="mono">${p.inverse_source !== null ? esc(p.inverse_source) : 'N/A'}</td>
                 </tr>
               `).join('')}
             </tbody>

@@ -7,9 +7,10 @@ Key guarantees:
    the reservation) otherwise. A measured cost above its reservation stops the run.
 2. **Zero-State Privacy (`safe-v1`)**: Raw `state` text is hashed (`state_sha256`) in memory and
    never written to output `s1-record/1` JSONL files or ledger metadata.
-3. **Automatic Probe Expansion (`expand_probes`)**: Given a `NoulQuestion`, automatically constructs
-   its `twin` (`ChoiceQuestion` with `{"yes", "no"}`) and `inverse` (`NoulQuestion` with negated
-   instructions) for coherence auditing (`s1 lint probe-audit`).
+3. **Automatic Probe Expansion (`probe_tasks`)**: Given a `NoulQuestion`, automatically constructs
+   its `twin` (`ChoiceQuestion` with `{"yes", "no"}`) and `inverse` (the question's
+   `x-s1-lint.inverse` when supplied, else a generated negation) for coherence auditing
+   (`s1 lint probe-audit`). Each inverse record says which (`probe_inverse`).
 """
 
 from __future__ import annotations
@@ -20,17 +21,18 @@ import hashlib
 import json
 import math
 import time
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from s1ops.contracts.questions import (
     ChoiceQuestion,
     NoulQuestion,
     QuestionModel,
     ScoreQuestion,
-    parse_wire_question,
     question_id,
 )
 from s1ops.ledger.journal import BudgetExceeded, Ledger, LedgerUnusable, Reservation, token_bound
+from s1ops.lint.loader import parse_question
+from s1ops.lint.rules import RULES
 
 
 @dataclass(frozen=True)
@@ -166,14 +168,14 @@ class DeterministicMockBackend:
         raise ValueError(f"Unsupported question model: {type(question)}")
 
 
-def check_questions(work_questions: Sequence[tuple[str, str, QuestionModel]], backend: Backend | None = None) -> None:
+def check_questions(work_questions: Sequence[ProbeTask | tuple[str, str, QuestionModel]], backend: Backend | None = None) -> None:
     """Reject questions no backend can answer, or this one cannot, before anything is reserved.
 
     A backend may define `check_question(question)`, raising `ValueError` for a question its API
     cannot take.
     """
     check = getattr(backend, "check_question", None)
-    for name, role, q in work_questions:
+    for name, role, q, *_ in work_questions:
         if isinstance(q, (ChoiceQuestion, ScoreQuestion)) and not q.criteria:
             raise ValueError(f"question {name!r}: {q.type} criteria is empty")
         if check is not None:
@@ -237,28 +239,70 @@ def _backoff_s(attempt: int, initial: float, maximum: float) -> float:
     return min(maximum, initial * 2**attempt)
 
 
-def expand_probes(
+_KNOWN_RULES = frozenset(RULES)
+
+
+class ProbeTask(NamedTuple):
+    name: str
+    role: str
+    question: QuestionModel
+    inverse_source: str | None = None
+
+
+def _read_question(name: str, raw: QuestionModel | dict[str, Any]) -> tuple[QuestionModel, NoulQuestion | None]:
+    """A question and its supplied inverse, read as `s1 lint check` reads them."""
+    if not isinstance(raw, dict):
+        return raw, None
+    spec = parse_question(name, raw, _KNOWN_RULES)
+    if spec.errors:
+        raise ValueError(f"question {name!r}: {'; '.join(spec.errors)}")
+    return spec.question, spec.inverse
+
+
+def _generated_inverse(q: NoulQuestion) -> NoulQuestion:
+    criteria = None
+    if q.criteria is not None:
+        criteria = {k: q.criteria[other] for k, other in (("true", "false"), ("false", "true")) if other in q.criteria}
+    return NoulQuestion(instructions=f"Is it false that: {q.instructions.strip()}", criteria=criteria)
+
+
+def probe_tasks(
     questions: Mapping[str, QuestionModel | dict[str, Any]],
-) -> list[tuple[str, str, QuestionModel]]:
-    """Expand each `NoulQuestion` into `(base_name, probe_role, QuestionModel)` triples:
-    `noul`, `twin` (yes/no `ChoiceQuestion`), and `inverse` (negated `NoulQuestion`).
+    *,
+    probe_mode: bool,
+) -> list[ProbeTask]:
+    """The questions `run_batch` sends, in order.
+
+    A dict question may carry an `x-s1-lint` / `x-jev-lint` extension, read and stripped as lint
+    does, so its `question_id` is lint's. In probe mode a `NoulQuestion` becomes `noul`, `twin`
+    (yes/no `ChoiceQuestion`) and `inverse`: the extension's `inverse` when one is supplied,
+    otherwise "Is it false that: <instructions>" with the true/false criteria swapped (only for
+    string instructions). Everything else is `primary`.
     """
-    out: list[tuple[str, str, QuestionModel]] = []
-    for name, q_raw in questions.items():
-        q = parse_wire_question(q_raw) if isinstance(q_raw, dict) else q_raw
-        if isinstance(q, NoulQuestion) and isinstance(q.instructions, str):
-            out.append((name, "noul", q))
+    out: list[ProbeTask] = []
+    for name, raw in questions.items():
+        q, supplied = _read_question(name, raw)
+        if probe_mode and isinstance(q, NoulQuestion) and (supplied is not None or isinstance(q.instructions, str)):
+            out.append(ProbeTask(name, "noul", q))
             twin = ChoiceQuestion(
                 instructions=q.instructions,
                 criteria={"yes": "True / Yes", "no": "False / No"},
             )
-            out.append((name, "twin", twin))
-            inv_instr = f"Is it false that: {q.instructions.strip()}"
-            inv = NoulQuestion(instructions=inv_instr)
-            out.append((name, "inverse", inv))
+            out.append(ProbeTask(name, "twin", twin))
+            if supplied is not None:
+                out.append(ProbeTask(name, "inverse", supplied, "supplied"))
+            else:
+                out.append(ProbeTask(name, "inverse", _generated_inverse(q), "generated"))
         else:
-            out.append((name, "primary", q))
+            out.append(ProbeTask(name, "primary", q))
     return out
+
+
+def expand_probes(
+    questions: Mapping[str, QuestionModel | dict[str, Any]],
+) -> list[tuple[str, str, QuestionModel]]:
+    """`(base_name, probe_role, QuestionModel)` for each probe `run_batch(probe_mode=True)` sends."""
+    return [(t.name, t.role, t.question) for t in probe_tasks(questions, probe_mode=True)]
 
 
 def run_batch(
@@ -292,17 +336,7 @@ def run_batch(
 
     Never writes raw `state` into returned `s1-record/1` dicts or ledger metadata.
     """
-    if probe_mode:
-        work_questions = expand_probes(questions)
-    else:
-        work_questions = [
-            (
-                name,
-                "primary",
-                parse_wire_question(q) if isinstance(q, dict) else q,
-            )
-            for name, q in questions.items()
-        ]
+    work_questions = probe_tasks(questions, probe_mode=probe_mode)
 
     check_states(states)
     check_questions(work_questions, backend)
@@ -317,7 +351,7 @@ def run_batch(
         state_text = str(item["state"])
         state_sha = hashlib.sha256(state_text.encode("utf-8")).hexdigest()
 
-        for base_name, role, q_model in work_questions:
+        for base_name, role, q_model, inverse_source in work_questions:
             qid = question_id(q_model)
             q_wire = json.dumps(q_model.wire_dict())
             est_tokens = token_bound(state_text) + token_bound(q_wire) + reserve_overhead_tokens
@@ -400,6 +434,8 @@ def run_batch(
             if probe_mode and role in ("noul", "twin", "inverse"):
                 rec["probe_role"] = role
                 rec["probe_question"] = base_name
+                if inverse_source is not None:
+                    rec["probe_inverse"] = inverse_source
             records_out.append(rec)
             if on_record is not None:
                 on_record(rec)

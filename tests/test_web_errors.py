@@ -21,6 +21,7 @@ _TEXT_FIELDS = (
     "question_id", "model_served", "primitive", "item_id", "dataset", "label", "predicted",
     "slice", "feature", "message", "fix", "rule", "question", "probe_question", "band",
     "primary_model", "shadow_model", "status", "method", "direction", "null_kind",
+    "inverse_source",
 )
 _SAFE_INTERPOLATIONS = {
     "res.status",  # numeric HTTP status, only ever reaches the page via showError's esc()

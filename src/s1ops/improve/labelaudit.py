@@ -29,8 +29,9 @@ Calibration = float | Mapping[FitKey, float] | Sequence[Fit] | None
 
 class SheetInputError(ValueError):
     """`build_sheet` cannot make a sheet a reviewer can answer for one question. `source` says
-    where the problem is: `"records"` or `"question"` (the question passed in); `many_questions`
-    is set when the records hold more than one question, so a caller can say how to pick one."""
+    where the problem is: `"records"`, `"question"` (the question passed in) or `"states"` (the
+    state text passed in); `many_questions` is set when the records hold more than one question,
+    so a caller can say how to pick one."""
 
     def __init__(self, message: str, source: str = "records", many_questions: bool = False) -> None:
         super().__init__(message)
@@ -320,16 +321,17 @@ def _render_sheet(
             seen.add((f.dataset, f.item_id))
             unique.append(f)
     if len(unique) < k + control_k:
-        raise ValueError(f"need at least {k + control_k} distinct items, got {len(unique)}")
+        raise SheetInputError(f"need at least {k + control_k} distinct items, got {len(unique)}")
     rng = random.Random(seed)
     flags = [(f, "flag") for f in unique[:k]]
     controls = [(f, "control") for f in rng.sample(unique[k:], control_k)]
     items = flags + controls
     missing = [(f.dataset, f.item_id) for f, _ in items if (f.dataset, f.item_id) not in text_of]
     if missing:
-        raise ValueError(
+        raise SheetInputError(
             f"no state for {len(missing)} of the {len(items)} items under review, first {missing[0]!r}; "
-            "the states file must hold every flagged and control item"
+            "the states file must hold every flagged and control item",
+            source="states",
         )
     rng.shuffle(items)
     lines = [

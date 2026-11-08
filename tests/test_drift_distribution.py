@@ -236,7 +236,7 @@ def test_calibrated_and_raw_only_cannot_be_combined(ws, capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         cli_main(["drift", ws["records"], ws["records"], "--calibrated", "--raw-only"])
     assert exc.value.code == 1
-    assert capsys.readouterr().err.splitlines()[-1] == "s1: argument --raw-only: not allowed with argument --calibrated"
+    assert capsys.readouterr().err.splitlines()[-1] == "s1: argument --raw-only: not allowed with argument --calibrated; see s1 drift -h"
 
 
 def test_web_drift_is_the_cli_default_report(ws, tmp_path: Path, capsys) -> None:

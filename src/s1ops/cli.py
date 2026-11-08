@@ -24,7 +24,7 @@ from s1ops.bridges.openinference import export_openinference_jsonl
 from s1ops.contracts._validation import UNDECODABLE
 from s1ops.contracts.questions import parse_wire_question
 from s1ops.contracts.questions import question_id as question_id_of
-from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr
+from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, read_records_hashed, select, short_repr
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -40,7 +40,6 @@ from s1ops.improve.calibrate import (
     fit_group,
     load_fits,
     save_fits,
-    sha256_file,
     transform,
 )
 from s1ops.improve.labelaudit import (
@@ -329,9 +328,8 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _cmd_fit(args: argparse.Namespace) -> int:
-    records = read_records(args.records)
+    records, src_sha = read_records_hashed(args.records)
     sel = select(records, split=args.split, allow_model_mismatch=True)
-    src_sha = sha256_file(args.records)
     fits: list[Fit] = []
     for grp in sel.groups:
         if args.question and grp.question_id != args.question:
@@ -412,7 +410,7 @@ def _check_policy_args(args: argparse.Namespace) -> None:
 
 def _cmd_policy(args: argparse.Namespace) -> int:
     _check_policy_args(args)
-    records = read_records(args.records, use_calib=args.use_calib)
+    records, src_sha = read_records_hashed(args.records, use_calib=args.use_calib)
     sel = select(records, allow_model_mismatch=True)
     if args.policy_cmd == "curve":
         curves: list[dict[str, Any]] = []
@@ -444,7 +442,6 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     if false_pass is not None and args.max_escalation is not None:
         raise CliError("--max-escalation sizes the F1 band, which --max-false-pass replaces; pass one of them")
     max_escalation = 0.35 if args.max_escalation is None else args.max_escalation
-    src_sha = sha256_file(args.records)
     tuned_rows = _tuned_rows(records) if args.use_calib else {}
     selected = [
         grp

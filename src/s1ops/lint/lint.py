@@ -124,7 +124,7 @@ INVERSE_SOURCES = ("supplied", "generated")
 
 class ProbeInputError(ValueError):
     """A probe record `audit_probe_records` cannot pair: an unknown role, a mistyped tag, a role
-    answered with the wrong primitive, one role twice for an item, or a second inverse wording for
+    answered with the wrong primitive, one role twice for an item, or a second wording for one role for
     a question and model. Names the line and field."""
 
 
@@ -168,7 +168,7 @@ def audit_probe(records: list[Record]) -> list[dict]:
     Records without `probe_role` are not probes and are skipped, as are failed probes
     (`model_served: null`) once their tags check out. A tagged record that cannot be paired
     raises `ProbeInputError` before anything is computed, and so does a question and model whose
-    inverse probes carry more than one `question_id`: two wordings would share one rate.
+    probes of one role carry more than one `question_id`: two wordings would share one rate.
 
     `inverse_source` is the `probe_inverse` tag every inverse record of the group carries
     (`supplied`: the question's `x-s1-lint.inverse`; `generated`: "Is it false that: ..."), or
@@ -176,7 +176,7 @@ def audit_probe(records: list[Record]) -> list[dict]:
     """
     by_q_item: dict[tuple[str, str], dict[tuple[str | None, str], dict[str, dict]]] = defaultdict(lambda: defaultdict(dict))
     first_line: dict[tuple[str, str, tuple[str | None, str], str], int] = {}
-    inverse_ids: dict[tuple[str, str], dict[str, int]] = defaultdict(dict)
+    role_ids: dict[tuple[tuple[str, str], str], dict[str, int]] = defaultdict(dict)
     inverse_tags: dict[tuple[str, str], set[str | None]] = defaultdict(set)
     for r in records:
         line = r.line
@@ -197,16 +197,16 @@ def audit_probe(records: list[Record]) -> list[dict]:
             raise ProbeInputError(f"line {line}: a second '{role}' probe for the same item and model as line {first_line[key]}")
         first_line[key] = line
         group = (base_q, r.model_served)
+        seen = role_ids[(group, role)]
+        if r.question_id not in seen and seen:
+            other_id, other_line = next(iter(seen.items()))
+            raise ProbeInputError(
+                f"line {line}: {role} probe {r.question_id} for question {base_q!r} and model "
+                f"{r.model_served!r} is worded differently from line {other_line} ({other_id}); "
+                "audit one wording at a time"
+            )
+        seen.setdefault(r.question_id, line)
         if role == "inverse":
-            seen = inverse_ids[group]
-            if r.question_id not in seen and seen:
-                other_id, other_line = next(iter(seen.items()))
-                raise ProbeInputError(
-                    f"line {line}: inverse probe {r.question_id} for question {base_q!r} and model "
-                    f"{r.model_served!r} is worded differently from line {other_line} ({other_id}); "
-                    "audit one wording at a time"
-                )
-            seen.setdefault(r.question_id, line)
             inverse_tags[group].add(tag)
         by_q_item[group][r.item][role] = r.raw
 

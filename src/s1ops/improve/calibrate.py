@@ -150,7 +150,8 @@ def fit_group(group: Group, method: str, split: str, *, source_sha256: str = "",
         raise FitError(f"method must be one of {sorted(METHODS)}, got {method!r}")
     if group.primitive not in METHODS[method]:
         raise FitError(
-            f"{method} is not defined for {group.primitive}; use one of {[m for m, p in METHODS.items() if group.primitive in p]}"
+            f"{method} is not defined for {group.primitive} (question {group.question_id}); "
+            f"use one of {[m for m, p in METHODS.items() if group.primitive in p]}, or select a question this method fits with --question"
         )
     if len(np.unique(group.y)) < 2:
         raise FitError(f"{group.question_id} ({group.model_served}): every label is the same class; nothing to fit")

@@ -47,6 +47,14 @@ if TYPE_CHECKING:
         transform,
     )
     from s1ops.improve.policy import select_threshold
+    from s1ops.improve.trainset import (
+        ManifestError,
+        TrainedItemError,
+        TrainingManifest,
+        build_manifest,
+        load_manifest,
+        save_manifest,
+    )
     from s1ops.lint.lint import lint_path
     from s1ops.monitor.drift import (
         DriftReport,
@@ -104,6 +112,12 @@ _LAZY = {
     "save_fits": "s1ops.improve.calibrate",
     "transform": "s1ops.improve.calibrate",
     "select_threshold": "s1ops.improve.policy",
+    "ManifestError": "s1ops.improve.trainset",
+    "TrainedItemError": "s1ops.improve.trainset",
+    "TrainingManifest": "s1ops.improve.trainset",
+    "build_manifest": "s1ops.improve.trainset",
+    "load_manifest": "s1ops.improve.trainset",
+    "save_manifest": "s1ops.improve.trainset",
     "lint_path": "s1ops.lint.lint",
     "DriftReport": "s1ops.monitor.drift",
     "audit_drift": "s1ops.monitor.drift",
@@ -156,6 +170,12 @@ __all__ = [
     "audit_group",
     "compare_records",
     "select_threshold",
+    "ManifestError",
+    "TrainedItemError",
+    "TrainingManifest",
+    "build_manifest",
+    "load_manifest",
+    "save_manifest",
     "lint_path",
     "DriftReport",
     "audit_drift",

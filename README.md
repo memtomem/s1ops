@@ -235,6 +235,7 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 - **Drift Alerts Need Evidence (`s1 drift`)**: PSI of two samples from one distribution grows with smaller samples (about 0.33 at 54 records per side, over the `CRITICAL` threshold of 0.25), so a PSI over a threshold raises the status only when a permutation test puts it outside sampling noise: `CRITICAL` needs PSI >= 0.25 and p < 0.01, `WARN` needs PSI >= 0.10 and p < 0.05. The p-value (`psi_p_value`) is a Monte Carlo estimate from 1,000 resamples of the answered records' bin counts (seeded per question; the draws can differ under another numpy, which matters only for a p near alpha). A PSI over a threshold that is not significant is listed in `notes`, not `alerts`; each question also reports `n_ref_answered` / `n_cur_answered`, the records the test used. `OK` does not establish stability: small samples miss real shifts (in one measurement, 50 of 120 comparisons with a moderate shift at about 54 records per side stayed `OK`). The test treats records as exchangeable, so it does not fit autocorrelated windows, and its alpha holds per question and per comparison, not across questions or repeated runs. Model changes, `model_requested` mismatches and failure-rate jumps alert as before. `audit_drift(..., psi_resamples=0)` restores the threshold-only rule. s1ops 0.6.0 and earlier alerted on PSI alone.
 - **Out-of-Sample & Model-Mismatch Enforcement (`s1 apply` & `DecisionGate`)**:
   - Attempting to apply a calibration fit to any `(dataset, item_id)` used during `s1 fit` exits with **code `2`**.
+  - With `--training-manifest`, fitting or evaluating a checkpoint on an item it trained on also exits with **code `2`** ([Fine-Tuning](#fine-tuning-around-an-external-trainer)).
   - Attempting to apply a calibration fit or runtime `DecisionGate` to a record whose `model_served` differs from the fitted/compiled model exits with **code `3`** (`ModelServedMismatchError`). For a production file that mixes models, `s1 apply --pass-through-unfitted` calibrates the records it has a fit for, writes the others unchanged (except a top-level `state`, as above), and prints how many of each (with the reason per group); class mismatches and in-sample items are still refused.
   - `s1 drift --fit` and `s1 export langfuse|phoenix --fit` do the same in memory, so no intermediate file is needed: reports and export files equal the ones made through `s1 apply --pass-through-unfitted`, a stored `calib` is replaced on a record the fit file has a fit for and kept on any other, in-sample items exit `2` (`--allow-in-sample`), and class mismatches exit `1`. A refusal to apply the fit, and an input line the record reader refuses, name the input file and its own line. `s1 drift`'s report and the printed export summaries gain a `fit` block with what was calibrated and what was passed through, per file; an export file is unchanged. `s1 drift --fit` needs `--policy` or `--calibrated`, since a raw comparison without a policy compares and routes no calibrated probabilities. The web workbench does not take a fit. In the SDK: `apply_fits(read_records(path), fits, pass_through_unfitted=True).records`.
 - **Policy Fingerprint (`policy_sha256`)**: every `PolicyEntry` carries a canonical SHA-256 fingerprint of its routing fields. Verification is opt-in: pass the expected fingerprint to `DecisionGate.evaluate_noul(expected_policy_sha256=...)` or `s1 gate --expected-sha256`, and a mismatch raises `PolicyIntegrityError`. Loading `policy.json` also compares each row's stored fingerprint with one recomputed from its fields and refuses a mismatch (`PolicyFingerprintError`, CLI exit 1, web 400), so a threshold or band edited after `s1 policy tune` wrote the file is caught at load. To accept a deliberate hand edit, remove that row's `policy_sha256`; a row without one is only recomputed.
@@ -244,13 +245,89 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 
 ---
 
+## Fine-Tuning Around an External Trainer
+
+s1ops starts no training. It writes down what a checkpoint will train on and refuses to fit or evaluate that checkpoint on those items. The trainer is yours; [Kev](https://github.com/jaredpalmer/kev)'s `kev.train --data` takes the rows the recipe below writes.
+
+```bash
+# These run as written on the offline mock, which answers the same whatever the name, so its results judge nothing. Against a
+# real server, add to every probe: --backend systemone --base-url URL --usd-per-input-token RATE (see Live probes).
+
+# 1. Give each states row a `split` (train, cal, eval); `s1 probe` copies it into its records, as it does `label`:
+#    {"dataset": "tickets", "item_id": "t1", "state": "...", "split": "train", "label": true}
+s1 probe questions.json --no-expand-probes --model current-1 --states states_local.jsonl -o current.jsonl --ledger ledger.jsonl
+
+# 2. Name the new checkpoint and write what it trains on. `--parent previous_manifest.json` adds what a checkpoint it
+#    starts from trained on.
+s1 trainset export current.jsonl --split train --checkpoint tickets-r1 -o training_manifest.json
+
+# 3. Build train.jsonl with the recipe below, train outside s1ops, then serve the checkpoint under that name and probe the
+#    held-out items, with the cal and eval rows
+#    of the states file in files of their own. Probe the current model on the same eval rows for step 4's drift.
+s1 probe questions.json --no-expand-probes --model current-1 --states states_eval.jsonl -o current_eval.jsonl --ledger ledger.jsonl
+s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_cal.jsonl -o candidate_cal.jsonl --ledger ledger.jsonl
+s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_eval.jsonl -o candidate_eval.jsonl --ledger ledger.jsonl
+
+# 4. Promotion check. A new name starts with no fit and no policy: the current model's `s1 apply` exits 3 on it, and `DecisionGate`
+#    raises `ModelServedMismatchError`.
+s1 compare current.jsonl candidate_eval.jsonl --training-manifest training_manifest.json
+s1 fit candidate_cal.jsonl --training-manifest training_manifest.json -o fits.json
+s1 apply candidate_eval.jsonl --fit fits.json -o candidate_eval_calibrated.jsonl
+s1 policy tune candidate_eval_calibrated.jsonl --use-calib --training-manifest training_manifest.json -o policy.json
+s1 drift current_eval.jsonl candidate_eval.jsonl
+```
+
+`s1 drift` across a rename reports every question `CRITICAL` with the alert that `model_served` changed, and `--fail-on-critical` exits 4, so read its PSI and quantiles here rather than its status. A later run against the promoted checkpoint's own records is the monitor. A probe's states row holds one `label`, so give each question its own states file when the labels differ.
+
+**The manifest** (`s1-training-manifest/1`) holds `(dataset, item_id)`, `question_id` and label for each row, plus the checkpoint's name, the split and the records file's SHA-256. It holds no `state` text and no question wording, so `s1 probe` and `s1 labelaudit sheet` stay the only readers of a states file. The trainer joins them from its own local files, checking the wording by `question_id`:
+
+```python
+import json
+
+from s1ops import question_id
+from s1ops.lint.loader import read_question_entries
+from s1ops.monitor.runner import probe_tasks
+
+manifest = json.load(open("training_manifest.json", encoding="utf-8"))
+entries, errors = read_question_entries("questions.json")  # read as `s1 probe` reads the file
+if errors:
+    raise SystemExit("; ".join(errors))
+tasks = probe_tasks(entries, probe_mode=False)
+wording = {question_id(t.question): t.question.wire_dict() for t in tasks}
+states = {}
+for line in open("states_local.jsonl", encoding="utf-8"):
+    row = json.loads(line)
+    states[(row.get("dataset", "default"), str(row["item_id"]))] = row["state"]
+
+rows = {}
+for item in manifest["items"]:
+    key = (item["dataset"], item["item_id"])
+    row = rows.setdefault(key, {"state": states[key], "questions": {}})
+    row["questions"][item["question_id"]] = {**wording[item["question_id"]], "label": item["label"]}
+
+with open("train.jsonl", "w", encoding="utf-8") as f:
+    for row in rows.values():
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+```
+
+**The refusal.** `--training-manifest` is repeatable on `s1 fit`, `s1 audit`, `s1 policy tune`, `s1 policy curve` and `s1 compare`. It exits 2 when a group those filters select is served under the manifest's checkpoint and holds an item it trained on; `s1 compare` checks each pair against the model of its side, and a candidate's training item the other file lacks is not compared. An item is its `(dataset, item_id)` across questions, because the model saw the state and rewording a question changes its `question_id`. Another model's answers on those items pass. A manifest whose checkpoint answered no record in the input file exits 1, which catches a misspelled name; it does not promise that the rows selected include that model, so `--model current-1` on a mixed file checks no candidate row.
+
+**What it does not cover:**
+
+- The check runs only in a command given the flag. `s1 apply`, `s1 drift`, `s1 slice`, `s1 labelaudit` and the workbench do not take it, and `s1 policy tune --use-calib` does not look behind a stored `calib`: an `s1 fit` on trained items without the flag, followed by `s1 apply` on clean items, passes a checked `tune`. `fits.json` does not record that a check ran.
+- `--parent` covers ancestors exported through s1ops. A released base checkpoint's training set is unknown here.
+- Identity is exact. A near-duplicate or another item from a trained source is not refused, though it can inflate a score the same way.
+- `--model` is your claim about what answers. A server such as `kev.serve` echoes the requested name without checking it, so name every checkpoint differently: fits, policies and drift's model comparison key on that name and see two checkpoints under one name as one model. A name is 1-128 characters, an ASCII letter or digit and then ASCII letters, digits or `._:/@+-`, the form a live backend accepts as `model_served`. `s1 trainset export` reports `answered_as_checkpoint` when the source file already holds records under the name.
+
+---
+
 ## CLI Exit Codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
 | `1` | Usage error, missing or malformed input, no matching groups, `lint check --strict` findings, policy fingerprint mismatch, ledger error, `s1 demo` target not new or empty |
-| `2` | `s1 apply`, or `s1 drift` or `s1 export` with `--fit`, refused an in-sample item (override with `--allow-in-sample`) |
+| `2` | In-sample refusal: `s1 apply`, or `s1 drift` or `s1 export` with `--fit`, on an item the fit used (override with `--allow-in-sample`), or `--training-manifest` on an item the checkpoint trained on |
 | `3` | `model_served` mismatch against the fit or policy (`s1 apply` without `--pass-through-unfitted`, `s1 gate`) |
 | `4` | `s1 drift --fail-on-critical` found a `CRITICAL` question |
 

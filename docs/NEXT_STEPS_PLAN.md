@@ -160,6 +160,17 @@
 
 ---
 
+### 파인튜닝 지원 (#89, 학습 실행은 소유자 결정으로 유보)
+
+- [x] `s1 trainset export`: `s1-training-manifest/1` 작성. id·`question_id`·라벨만 담고 `state`와 질문 문구는 담지 않음. `--parent`로 부모 체크포인트의 학습 항목을 상속
+- [x] `--training-manifest`: `fit`·`audit`·`policy tune`/`curve`·`compare`에서 학습 항목이면 exit 2
+- [x] 체크포인트 이름 규칙과 승격 순서를 README에 문서화, `s1 probe`가 states 행의 `split`을 레코드에 복사
+- [ ] 리뷰 라벨 교정 반영(`labelaudit patch` / `pull`)
+- [ ] 승격 순서 wrapper
+- [ ] 워크벤치 읽기 전용 체크포인트 뷰(GET만)
+
+---
+
 ### 후보: 로드 시 `policy_sha256` 대조
 
 - (0.2.0까지의 동작) `load_policies`는 `policy.json`에 저장된 `policy_sha256`을 버리고 재계산했으므로, 파일 내 필드 변조는 호출자가 `expected_policy_sha256`을 따로 넘기지 않는 한 감지되지 않았습니다.

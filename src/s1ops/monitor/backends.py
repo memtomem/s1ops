@@ -19,19 +19,16 @@ from email.utils import parsedate_to_datetime
 import json
 import logging
 import math
-import re
 import time
 from collections.abc import Mapping
 from typing import Any
 
 from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, QuestionModel, ScoreQuestion, to_openai_decision
-from s1ops.contracts.records import RecordError, parse_record
+from s1ops.contracts.records import MODEL_NAME, RecordError, parse_record
 from s1ops.monitor.runner import BackendError, BackendResponse
 
 RETRY_STATUSES = frozenset({408, 429, *range(500, 600)})
 _NAME = "q"
-# `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
-_MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 
 def _close_keeping_first_error(backend: Any, exc_type: object) -> None:
     """A `with backend:` block's own error wins over a `close()` that fails while it unwinds."""
@@ -286,7 +283,7 @@ class HttpSystemOneBackend:
 
         usage_usd = self._usd(_tokens(resp.usage.input_tokens))
         try:
-            if not isinstance(resp.model, str) or not _MODEL_NAME.fullmatch(resp.model):
+            if not isinstance(resp.model, str) or not MODEL_NAME.fullmatch(resp.model):
                 raise _Invalid
             answer = _typesafe_answer(question, resp.answers.get(_NAME), sdk)
         except _Invalid:
@@ -483,7 +480,7 @@ class OpenAIDecisionsBackend:
         usage_usd = self._usd(_openai_tokens(body))
         model = body.get("model") if isinstance(body, dict) else None
         try:
-            if not isinstance(model, str) or not _MODEL_NAME.fullmatch(model):
+            if not isinstance(model, str) or not MODEL_NAME.fullmatch(model):
                 raise _Invalid
             answer = _openai_answer(question, body)
         except _Refused:

@@ -298,3 +298,50 @@ def test_probe_inverse_on_another_role_is_refused(role) -> None:
         recs[0] = _rec(1, "i0", "noul", "q-base", 0.9, "generated")
     with pytest.raises(ProbeInputError, match=f"^line {recs[index].line}: 'probe_inverse' is only for probe_role 'inverse', got '{role}'$"):
         audit_probe(recs)
+
+
+def _run(tmp_path: Path, name: str, wording: str, item: str, *extension) -> list[dict]:
+    q = {"type": "noul", "instructions": wording}
+    if extension:
+        q["x-s1-lint"] = {"inverse": extension[0]}
+    run = tmp_path / name
+    run.mkdir()
+    states = run / "s.jsonl"
+    states.write_text(json.dumps({"dataset": "d", "item_id": item, "state": "s"}) + "\n", encoding="utf-8")
+    assert cli_main(["probe", str(_write(run / "q.json", {"pos": q})), "--states", str(states), "-o", str(run / "o.jsonl"), "--ledger", str(run / "j.jsonl")]) == 0
+    return _rows(run / "o.jsonl")
+
+
+def _audit(tmp_path: Path, rows: list[dict], capsys) -> tuple[int, list[str]]:
+    capsys.readouterr()
+    path = tmp_path / "pooled.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    rc = cli_main(["lint", "probe-audit", str(path)])
+    return rc, capsys.readouterr().err.strip().splitlines()
+
+
+def test_two_wordings_under_one_name_are_refused_with_a_shared_inverse(tmp_path: Path, capsys) -> None:
+    shared = {"instructions": "Is this review negative?"}
+    first = _run(tmp_path, "a", "Is this review positive?", "a", shared)
+    second = _run(tmp_path, "b", "Was the reviewer pleased?", "b", shared)
+    rc, err = _audit(tmp_path, first + second, capsys)
+    assert rc == 1 and len(err) == 1
+    assert "noul probe" in err[0] and "'pos'" in err[0] and "worded differently from line 1" in err[0]
+
+
+@pytest.mark.parametrize("role", ["noul", "twin"])
+def test_each_role_alone_is_checked(tmp_path: Path, capsys, role) -> None:
+    first = [row for row in _run(tmp_path, "a", "Is this review positive?", "a") if row["probe_role"] == role]
+    second = [row for row in _run(tmp_path, "b", "Was the reviewer pleased?", "b") if row["probe_role"] == role]
+    assert first[0]["question_id"] != second[0]["question_id"]
+    rc, err = _audit(tmp_path, first + second, capsys)
+    assert rc == 1 and len(err) == 1
+    assert f"{role} probe {second[0]['question_id']}" in err[0] and f"({first[0]['question_id']})" in err[0]
+
+
+def test_the_same_wording_over_two_runs_pools(tmp_path: Path, capsys) -> None:
+    rows = _run(tmp_path, "a", "Is this review positive?", "a") + _run(tmp_path, "b", "Is this review positive?", "b")
+    path = tmp_path / "pooled.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    (report,) = audit_probe_records(path)
+    assert (report["probe_question"], report["n_states"]) == ("pos", 2)

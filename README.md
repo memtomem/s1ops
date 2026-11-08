@@ -257,7 +257,9 @@ s1 probe questions.json --no-expand-probes --model current-1 --states states_loc
 #    starts from trained on.
 s1 trainset export current.jsonl --split train --checkpoint tickets-r1 -o training_manifest.json
 
-# 3. Train outside s1ops, then serve the checkpoint under that name and probe the held-out items.
+# 3. Train outside s1ops, then serve the checkpoint under that name and probe the held-out items, with the cal and eval rows
+#    of the states file in files of their own. Probe the current model on the same eval rows for step 4's drift.
+s1 probe questions.json --no-expand-probes --model current-1 --states states_eval.jsonl -o current_eval.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_cal.jsonl -o candidate_cal.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_eval.jsonl -o candidate_eval.jsonl --ledger ledger.jsonl
 

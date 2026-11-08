@@ -340,15 +340,24 @@ def test_an_all_failed_file_names_no_model(tmp_path: Path, manifest: Path, capsy
     assert "answered no record" in capsys.readouterr().err
 
 
-def test_the_flag_repeats_and_two_manifests_for_a_checkpoint_add_up(tmp_path: Path, manifest: Path) -> None:
+@pytest.fixture
+def two_manifests(tmp_path: Path, manifest: Path) -> tuple[Path, Path]:
     second = tmp_path / "m2.json"
     assert _export(_write(tmp_path / "b2.jsonl", _spread("u", 6, "train")), second) == 0
-    flags = ["--training-manifest", str(manifest), "--training-manifest", str(second)]
+    return manifest, second
+
+
+@pytest.mark.parametrize("prefix", ["t", "u"])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_two_manifests_for_a_checkpoint_add_up(tmp_path: Path, two_manifests, prefix: str, reverse: bool) -> None:
+    first, second = reversed(two_manifests) if reverse else two_manifests
+    flags = ["--training-manifest", str(first), "--training-manifest", str(second)]
     clean = _write(tmp_path / "clean.jsonl", _spread("h", 6, None, CANDIDATE))
     assert cli_main(["fit", clean, "-o", str(tmp_path / "f.json"), *flags]) == 0
-    hit = _write(tmp_path / "hit.jsonl", _spread("u", 6, None, CANDIDATE))
+    hit = _write(tmp_path / "hit.jsonl", _spread(prefix, 6, None, CANDIDATE))
     assert cli_main(["fit", hit, "-o", str(tmp_path / "f.json"), *flags]) == 2
-    assert cli_main(["fit", hit, "-o", str(tmp_path / "f.json"), "--training-manifest", str(manifest)]) == 0
+    baseline = _write(tmp_path / "base.jsonl", _spread(prefix, 6, None, BASELINE))
+    assert cli_main(["compare", baseline, hit, *flags]) == 2
 
 
 def test_a_refused_fit_writes_nothing(tmp_path: Path, manifest: Path) -> None:

@@ -892,6 +892,8 @@ _MOCK_MODEL = "jev-1.13.0"
 
 def _probe_backend(args: argparse.Namespace):
     if args.backend == "mock":
+        if not args.model:
+            raise CliError("--model must not be empty")
         return DeterministicMockBackend(served_model=args.served_model or args.model)
     if args.served_model is not None:
         raise CliError("--served-model applies only to --backend mock")

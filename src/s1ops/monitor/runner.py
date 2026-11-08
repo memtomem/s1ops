@@ -325,7 +325,8 @@ def run_batch(
     """Run System 1 questions over a batch of states with strict `Ledger` reserve-then-settle.
 
     `model_requested` is the name sent to the backend. It has no default: `model_served` is whatever the
-    server reports, and a server that echoes the request reports this name.
+    server reports, and a server that echoes the request reports this name. It must be a non-empty string,
+    the rule `read_records` applies to the records written here.
 
     Each attempt reserves `(token_bound(state) + token_bound(question) + reserve_overhead_tokens) *
     worst_usd_per_token`. `reserve_overhead_tokens` defaults to the backend's own
@@ -339,6 +340,8 @@ def run_batch(
 
     Never writes raw `state` into returned `s1-record/1` dicts or ledger metadata.
     """
+    if not isinstance(model_requested, str) or not model_requested:
+        raise ValueError(f"model_requested must be a non-empty string, got {model_requested!r}")
     work_questions = probe_tasks(questions, probe_mode=probe_mode)
 
     check_states(states)

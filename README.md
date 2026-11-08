@@ -33,6 +33,8 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 
 **Inputs** (local files; everything except a live probe runs offline): `questions.json`; decision records `records.jsonl` / `records_canary.jsonl` (`jev-record/1`, `s1-record/1`); pre-declared slice features `features.jsonl`; an optional local state store `states_local.jsonl`.
 
+**Questions file.** A JSON object mapping question names to questions, or that mapping under one key, `{"questions": {...}}`. `s1 lint check`, `s1 probe` and `s1 labelaudit sheet --questions` read it the same way. An entry that is not a question, a repeated name, an empty file, or nesting past 100 levels stops `s1 probe` and `s1 labelaudit sheet` before anything is sent or written; `s1 lint check` reports each as a `JL000` finding and exits 1.
+
 **Core engine** (`import s1ops` / `import s1`):
 
 1. **Lint & Probe Runner** — rules `JL000`–`JL060`, budget-guarded probe runner, Noul/Choice twin and inverse coherence.

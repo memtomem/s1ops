@@ -226,6 +226,32 @@ def test_every_questions_entry_is_checked(tmp_path: Path, capsys, wrapped, bad_f
     assert "'broken'" in _err(capsys)
 
 
+def test_a_lint_annotated_questions_file_prints_the_same_sheet(tmp_path: Path, capsys) -> None:
+    rec, states = _mixed(tmp_path)
+    args = _sheet(tmp_path, rec, states, "--question", question_id(NOUL_Q))
+    plain = tmp_path / "plain.json"
+    plain.write_text(json.dumps({"positive": NOUL_Q}), encoding="utf-8")
+    annotated = tmp_path / "annotated.json"
+    extension = {"inverse": {"instructions": "Is this review negative?"}, "ignore": ["JL040"]}
+    annotated.write_text(json.dumps({"positive": {**NOUL_Q, "x-s1-lint": extension}}), encoding="utf-8")
+    assert cli_main([*args, "--questions", str(plain)]) == 0
+    expected = (tmp_path / "sheet.md").read_text(encoding="utf-8")
+    assert "> Is this review positive?" in expected
+    assert cli_main([*args, "--questions", str(annotated)]) == 0
+    assert (tmp_path / "sheet.md").read_text(encoding="utf-8") == expected
+
+
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_a_malformed_extension_is_refused_wherever_the_match_is(tmp_path: Path, capsys, bad_first) -> None:
+    rec, states = _mixed(tmp_path)
+    entries = [("positive", NOUL_Q), ("broken", {**CHOICE_Q, "x-s1-lint": {"ignore": ["JL999"]}})]
+    qfile = tmp_path / "questions.json"
+    qfile.write_text(json.dumps(dict(reversed(entries) if bad_first else entries)), encoding="utf-8")
+    assert cli_main(_sheet(tmp_path, rec, states, "--question", question_id(NOUL_Q), "--questions", str(qfile))) == 1
+    line = _err(capsys)
+    assert "'broken'" in line and "JL999" in line
+
+
 def test_structured_wording_renders_as_sorted_json(tmp_path: Path, capsys) -> None:
     q = {"type": "choice", "instructions": {"question": "Topic?", "focus": "the headline"},
          "criteria": {"a": {"desc": "first", "eg": ["x"]}, "b": "second", "c": "third"}}

@@ -503,6 +503,11 @@ def precision_at_k(hits: int, k: int) -> tuple[float, tuple[float, float]]:
     return hits / k, wilson(hits, k)
 
 
+def _finite_or_none(value: float) -> float | None:
+    """Infinity is not JSON; `Estimate` keeps it for `outcome`, and only its dict says null."""
+    return value if math.isfinite(value) else None
+
+
 @dataclass(frozen=True)
 class Estimate:
     flag_precision: float
@@ -523,6 +528,9 @@ class Estimate:
     def as_dict(self, factor: float = 2.0) -> dict:
         return {
             **asdict(self),
+            "lift": _finite_or_none(self.lift),
+            "conservative_lift": _finite_or_none(self.conservative_lift),
+            "lift_note": None if math.isfinite(self.lift) else "control rate is 0",
             "flag_ci": list(self.flag_ci),
             "control_ci": list(self.control_ci),
             "outcome": self.outcome(factor),

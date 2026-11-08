@@ -22,8 +22,6 @@ from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
 from s1ops.contracts._validation import UNDECODABLE
-from s1ops.contracts.questions import parse_wire_question
-from s1ops.contracts.questions import question_id as question_id_of
 from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, read_records_hashed, select, short_repr
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
@@ -70,7 +68,8 @@ from s1ops.ledger.journal import (
     read as ledger_read,
     recover as ledger_recover,
 )
-from s1ops.lint.lint import ProbeInputError, audit_probe_records, format_text, lint_path
+from s1ops.lint.lint import KNOWN_RULES, ProbeInputError, audit_probe_records, format_text, lint_path
+from s1ops.lint.loader import parse_question, read_question_entries
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
@@ -625,24 +624,23 @@ def _filtered_records(args: argparse.Namespace) -> list:
     return records
 
 
+def _question_entries(path: str) -> dict[str, Any]:
+    """A questions file's raw entries, as `s1 lint check` reads them. A read failure is `main()`'s to report."""
+    entries, errors = read_question_entries(path, Path(path).read_bytes())
+    if errors:
+        raise CliError(f"{path}: {'; '.join(errors)}")
+    return entries
+
+
 def _question_from_file(path: str, question_id: str):
-    """The question with `question_id` in a questions file (names to questions, or
-    `{"questions": {...}}`, as `s1 probe` reads it)."""
-    doc = _read_json(Path(path))
-    if isinstance(doc, dict) and isinstance(doc.get("questions"), dict):
-        entries = doc["questions"]
-    elif isinstance(doc, dict):
-        entries = doc
-    else:
-        raise CliError(f"{path}: must be a JSON object mapping names to questions")
+    """The question with `question_id` in a questions file."""
     found = None
-    for name, raw in entries.items():  # every entry is checked, wherever the match is
-        try:
-            parsed = parse_wire_question(raw)
-        except ValueError as e:
-            raise CliError(f"{path}: question {name!r}: {e}") from None
-        if found is None and question_id_of(parsed) == question_id:
-            found = parsed
+    for name, raw in _question_entries(path).items():  # every entry is checked, wherever the match is
+        spec = parse_question(name, raw, KNOWN_RULES)
+        if spec.errors:
+            raise CliError(f"{path}: question {name!r}: {'; '.join(spec.errors)}")
+        if found is None and spec.qid == question_id:
+            found = spec.question
     if found is None:
         raise CliError(f"{path}: no question has question_id {question_id}")
     return found
@@ -957,13 +955,7 @@ def _os_error_message(e: OSError) -> str:
 
 
 def _cmd_probe(args: argparse.Namespace) -> int:
-    q_doc = _read_json(Path(args.questions))
-    if isinstance(q_doc, dict) and "questions" in q_doc and isinstance(q_doc["questions"], dict):
-        q_map = q_doc["questions"]
-    elif isinstance(q_doc, dict):
-        q_map = {k: v for k, v in q_doc.items() if isinstance(v, dict) and "type" in v}
-    else:
-        raise CliError(f"{args.questions}: must be a JSON object mapping names to questions")
+    q_map = _question_entries(args.questions)
     # Every question, its extension and the backend's refusals are checked before the ledger or
     # the output is opened; run_batch repeats the same deterministic expansion.
     try:

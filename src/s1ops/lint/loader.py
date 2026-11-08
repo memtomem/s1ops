@@ -21,6 +21,7 @@ from s1ops.contracts.questions import (
 
 EXTENSION_KEYS = ("x-s1-lint", "x-jev-lint")
 _EXTENSION_FIELDS = {"ignore", "inverse"}
+MAX_NESTING = 100
 
 
 @dataclass
@@ -115,20 +116,61 @@ def parse_question(name: str, raw: object, known_rules: frozenset[str]) -> Quest
     return QuestionSpec(name, question, ignore, inverse, errors, duplicates)
 
 
-def load_questions(path: str | Path, known_rules: frozenset[str], data: bytes | None = None) -> QuestionsFile:
+def _nested_too_deep(document: object) -> bool:
+    """Whether containers nest past `MAX_NESTING`. Iterative, since every later reader recurses."""
+    level = [document]
+    for _ in range(MAX_NESTING):
+        level = [
+            child
+            for node in level
+            if isinstance(node, (dict, list))
+            for child in (node.values() if isinstance(node, dict) else node)
+        ]
+        if not level:
+            return False
+    return any(isinstance(node, (dict, list)) for node in level)
+
+
+def _is_wrapper(document: dict) -> bool:
+    """`{"questions": {...}}`. A question's `type` is a string; a question named `type` is an object there."""
+    inner = document.get("questions")
+    return len(document) == 1 and isinstance(inner, dict) and not isinstance(inner.get("type"), str)
+
+
+def _repeated(entries: _Obj) -> list[str]:
+    return [f"question name {name!r} appears more than once" for name in entries.duplicates]
+
+
+def read_question_entries(path: str | Path, data: bytes | None = None) -> tuple[dict[str, object], list[str]]:
+    """The one reader of a questions file: its raw entries by name, and what is wrong with the file.
+
+    The file maps names to questions, or is `{"questions": <that mapping>}`.
+    """
     try:
         text = Path(path).read_text(encoding="utf-8") if data is None else data.decode("utf-8")
     except OSError as error:
-        return QuestionsFile([], [f"cannot read {path}: {error.strerror}"])
+        return {}, [f"cannot read {path}: {error.strerror}"]
     except UnicodeDecodeError as error:
-        return QuestionsFile([], [f"not valid UTF-8: {error}"])
+        return {}, [f"not valid UTF-8: {error}"]
     try:
         parsed = json.loads(text, object_pairs_hook=_pairs)
-    except json.JSONDecodeError as error:
-        return QuestionsFile([], [f"not valid JSON: {error}"])
+    except ValueError as error:  # JSONDecodeError, or the decoder's integer-digit limit
+        return {}, [f"not valid JSON: {error}"]
+    except RecursionError:
+        return {}, [f"nested more than {MAX_NESTING} levels"]
+    if _nested_too_deep(parsed):
+        return {}, [f"nested more than {MAX_NESTING} levels"]
     if not isinstance(parsed, dict):
-        return QuestionsFile([], ["the file must be a JSON object mapping question names to questions"])
-    errors = [f"question name {name!r} appears more than once; only the last one is kept" for name in parsed.duplicates]
-    if not parsed:
+        return {}, ["the file must be a JSON object mapping question names to questions"]
+    errors = _repeated(parsed)
+    entries = parsed["questions"] if _is_wrapper(parsed) else parsed
+    if entries is not parsed:
+        errors += _repeated(entries)
+    if not entries:
         errors.append("the file has no questions")
-    return QuestionsFile([parse_question(name, raw, known_rules) for name, raw in parsed.items()], errors)
+    return entries, errors
+
+
+def load_questions(path: str | Path, known_rules: frozenset[str], data: bytes | None = None) -> QuestionsFile:
+    entries, errors = read_question_entries(path, data)
+    return QuestionsFile([parse_question(name, raw, known_rules) for name, raw in entries.items()], errors)

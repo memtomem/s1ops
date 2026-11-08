@@ -251,7 +251,7 @@ class ProbeTask(NamedTuple):
 
 def _read_question(name: str, raw: QuestionModel | dict[str, Any]) -> tuple[QuestionModel, NoulQuestion | None]:
     """A question and its supplied inverse, read as `s1 lint check` reads them."""
-    if not isinstance(raw, dict):
+    if isinstance(raw, (NoulQuestion, ChoiceQuestion, ScoreQuestion)):
         return raw, None
     spec = parse_question(name, raw, _KNOWN_RULES)
     if spec.errors:

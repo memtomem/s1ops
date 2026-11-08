@@ -25,7 +25,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 | **Distribution & Model Drift** | Token/latency or generic embedding drift | **Label-Free Probability PSI & Jensen-Shannon Divergence**, **Silent `model_served` Upgrade Alert**, & **Escalation Band Rate Shift** |
 | **Data Privacy Default** | Logs full prompt/response bodies by default | **`safe-v1` Zero-State Default**: never writes raw item `state` into records, probe ledgers, or exported spans/scores |
 
-`s1ops` bridges both worlds: you run rigorous System 1 calibration, linting, drift monitoring, and policy compilation locally (`s1` CLI + `s1 web`), execute sub-millisecond runtime gating via `s1.DecisionGate`, and export **`safe-v1` body-free scores, annotation queues, and OpenInference spans** directly into **Langfuse** and **Arize Phoenix**.
+`s1ops` bridges both worlds: you run rigorous System 1 calibration, linting, drift monitoring, and policy compilation locally (`s1` CLI + `s1 web`), execute sub-millisecond runtime gating via `s1.DecisionGate`, and export **`safe-v1` body-free scores, annotation queues, and OpenInference spans** as local files for **Langfuse** and **Arize Phoenix**; `s1 export` uploads nothing.
 
 ---
 
@@ -58,7 +58,7 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 
 ```bash
 pip install s1ops                # or: uv add s1ops
-pip install "s1ops[langfuse]"    # optional: the Langfuse client for live upload
+pip install "s1ops[langfuse]"    # optional: the Langfuse client, for your own upload of `s1 export` files
 pip install "s1ops[typesafe]"    # optional: live `s1 probe --backend systemone`
 pip install "s1ops[openai]"      # optional: live `s1 probe --backend openai`
 ```

@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import random
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,7 @@ from s1ops.contracts.schemas import PolicyEntry, save_policies
 from s1ops.eval.metrics import top_label
 from s1ops.improve.calibrate import apply_to_record, fit_for, fit_group, save_fits, sha256_file
 from s1ops.improve.policy import select_threshold
+from s1ops.runtime.routing import routed_metrics
 
 
 def _sha256(text: str) -> str:
@@ -329,6 +331,7 @@ def generate_workspace(out_dir: str | Path, *, seed: int = 42) -> dict[str, str]
         calibrated=True,
         fit_sha256=fit_noul.fit_sha256,
     )
+    policy_entry = replace(policy_entry, metrics_on_split=routed_metrics(policy_entry, grp_eval))
     policy_path = out / "policy.json"
     save_policies([policy_entry], policy_path)
 
@@ -482,20 +485,19 @@ def _categorical_workspace(out: Path, seed: int, qid_choice: str, options: list[
     policies = []
     for grp in select(read_records(rec_path, use_calib=True), allow_model_mismatch=True).groups:
         conf, correct = top_label(grp.P, grp.y)
-        policies.append(
-            PolicyEntry(
-                question_id=grp.question_id,
-                model_served=grp.model_served,
-                primitive=grp.primitive,
-                mode="error_budget",
-                split="eval",
-                n=grp.n,
-                threshold=select_threshold(conf, correct, budget=0.10),
-                error_budget=0.10,
-                calibrated=True,
-                fit_sha256=fit_for(fits, grp.key).fit_sha256,
-            )
+        policy = PolicyEntry(
+            question_id=grp.question_id,
+            model_served=grp.model_served,
+            primitive=grp.primitive,
+            mode="error_budget",
+            split="eval",
+            n=grp.n,
+            threshold=select_threshold(conf, correct, budget=0.10),
+            error_budget=0.10,
+            calibrated=True,
+            fit_sha256=fit_for(fits, grp.key).fit_sha256,
         )
+        policies.append(replace(policy, metrics_on_split=routed_metrics(policy, grp)))
     policy_path = out / "policy_categorical.json"
     save_policies(policies, policy_path)
     return {

@@ -15,6 +15,7 @@ import os
 import stat
 import sys
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,7 @@ from s1ops.monitor.runner import (
     run_batch,
 )
 from s1ops.runtime.gate import DecisionGate, ModelServedMismatchError, PolicyIntegrityError
+from s1ops.runtime.routing import routed_metrics
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -488,23 +490,23 @@ def _cmd_policy(args: argparse.Namespace) -> int:
                 band_hi = best.band.hi
 
         mode = "escalation_band" if (band_lo is not None and band_hi is not None) else "error_budget"
-        policies.append(
-            PolicyEntry(
-                question_id=grp.question_id,
-                model_served=grp.model_served,
-                primitive=grp.primitive,
-                mode=mode,
-                split="eval",
-                n=grp.n,
-                threshold=tau,
-                error_budget=args.error_budget,
-                band_lo=band_lo,
-                band_hi=band_hi,
-                calibrated=args.use_calib,
-                fit_sha256=_tuned_fit_sha256(grp, tuned_rows[grp.key]) if args.use_calib else None,
-                source_sha256=src_sha,
-            )
+        policy = PolicyEntry(
+            question_id=grp.question_id,
+            model_served=grp.model_served,
+            primitive=grp.primitive,
+            mode=mode,
+            split="eval",
+            n=grp.n,
+            threshold=tau,
+            error_budget=args.error_budget,
+            band_lo=band_lo,
+            band_hi=band_hi,
+            calibrated=args.use_calib,
+            fit_sha256=_tuned_fit_sha256(grp, tuned_rows[grp.key]) if args.use_calib else None,
+            source_sha256=src_sha,
         )
+        metrics = routed_metrics(policy, grp, use_cp_upper=args.use_cp_upper, cp_alpha=args.cp_alpha)
+        policies.append(replace(policy, metrics_on_split=metrics))
 
     if not policies:
         raise _no_groups(args, sel, args.records)
@@ -1238,7 +1240,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pt.add_argument("-o", "--output", required=True, help="policy.json to write")
     p_pt.add_argument("--question", default=None, help=_H_QUESTION)
     p_pt.add_argument("--model", default=None, help=_H_MODEL)
-    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it (choice and score groups only under --max-false-pass)")
+    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it. A noul F1 band, when one is chosen, routes instead and is not bound by this: metrics_on_split.accepted_error says what it does (choice and score groups only under --max-false-pass)")
     p_pt.add_argument("--use-cp-upper", action="store_true", help="judge the budget (or --max-false-pass) against the Clopper-Pearson upper bound instead of the point estimate")
     p_pt.add_argument("--cp-alpha", type=float, default=0.05, help="significance level of the Clopper-Pearson bound")
     p_pt.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)

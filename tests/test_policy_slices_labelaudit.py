@@ -111,7 +111,7 @@ def test_labelaudit_ranking_and_blind_sheet_estimation() -> None:
 
     records = [parse_record(row, n) for n, row in enumerate(rows, 1)]
     sheet = build_sheet(records, states, 6, 12, options=["True", "False"], seed=0, balance=False)
-    completed_form = re.sub(r"^답: $", "답: True", sheet.form, flags=re.M)
+    completed_form = re.sub(r"^Answer: $", "Answer: True", sheet.form, flags=re.M)
     scored = score_sheet(completed_form, sheet.key)
     est = estimate(
         scored["flag"]["reviewer_disagrees_with_label"],

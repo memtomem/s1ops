@@ -35,6 +35,10 @@ Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) ar
 
 **Questions file.** A JSON object mapping question names to questions, or that mapping under one key, `{"questions": {...}}`. `s1 lint check`, `s1 probe` and `s1 labelaudit sheet --questions` read it the same way. An entry that is not a question, a repeated name, an empty file, or nesting past 100 levels stops `s1 probe` and `s1 labelaudit sheet` before anything is sent or written; `s1 lint check` reports each as a `JL000` finding and exits 1.
 
+**Fix the wording before probing.** `question_id` hashes the exact wording, option order included. Data that permutes a question's options per row gives every permutation its own `question_id`, and so its own fits and policies: pick one wording per question first.
+
+**A rating is a judgment.** "How many stars did this reviewer give?" with levels `"1 star: very negative"` .. `"5 stars: very positive"` gets `JL012` (counting) and `JL031` (numeric levels), which are written for quantities the model would have to count. Suppress them on that question with `"x-s1-lint": {"ignore": ["JL012", "JL031"]}`; `question_id` does not change.
+
 **Core engine** (`import s1ops` / `import s1`):
 
 1. **Lint & Probe Runner** — rules `JL000`–`JL060`, budget-guarded probe runner, Noul/Choice twin and inverse coherence.

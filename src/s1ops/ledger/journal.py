@@ -428,7 +428,7 @@ class Ledger:
                 raise LedgerUnusable(self._stopped or self._overrun)
             if self.spent + self.reserved + worst_usd > self.cap:
                 raise BudgetExceeded(
-                    f"spent ${self.spent:.4f} + reserved ${self.reserved:.4f} + ${worst_usd:.6f} > cap ${self.cap:.2f}"
+                    f"spent ${self.spent:.4f} + reserved ${self.reserved:.4f} + ${worst_usd:.6f} > cap ${self.cap:.6f}"
                 )
             reservation = Reservation(uuid.uuid4().hex, worst_usd)
 

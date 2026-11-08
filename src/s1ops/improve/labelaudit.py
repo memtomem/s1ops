@@ -19,7 +19,7 @@ from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
 
 EPS = 1e-6
-SHEET_TITLE = "라벨 블라인드 재검수"
+SHEET_TITLE = "Label blind review"
 ANSWER_RE = re.compile(r"^## (\d+)[ \t]*\n(.*?)(?=^## \d+[ \t]*$|\Z)", re.M | re.S)
 
 FitKey = tuple[str, str | None]
@@ -280,12 +280,12 @@ def check_question(question: QuestionModel, primitive: str, classes: Sequence) -
 
 def question_lines(question_id: str, question: QuestionModel | None) -> list[str]:
     """The block printed under a sheet's title. Every line of the question's own text is quoted,
-    so wording that holds `## 1` or `답:` cannot open an answer section; so is the id, which the
+    so wording that holds `## 1` or `Answer:` cannot open an answer section; so is the id, which the
     record parser accepts with newlines in it."""
-    lines = ["질문 ID:", "", quote(question_id), ""]
+    lines = ["Question ID:", "", quote(question_id), ""]
     if question is None:
         return lines
-    lines += ["질문:", "", quote(_shown(question.instructions)), ""]
+    lines += ["Question:", "", quote(_shown(question.instructions)), ""]
     if question.type == "noul":
         criteria = [(o, (question.criteria or {}).get(k)) for o, k in (("True", "true"), ("False", "false"))]
         criteria = [(o, c) for o, c in criteria if c is not None]
@@ -294,7 +294,7 @@ def question_lines(question_id: str, question: QuestionModel | None) -> list[str
     else:
         criteria = [(str(i), c) for i, c in enumerate(question.criteria)]
     if criteria:
-        lines += ["선택지:", "", quote("\n".join(f"- {o}: {_shown(c)}" for o, c in criteria)), ""]
+        lines += ["Options:", "", quote("\n".join(f"- {o}: {_shown(c)}" for o, c in criteria)), ""]
     return lines
 
 
@@ -337,7 +337,7 @@ def _render_sheet(
     lines = [
         f"# {SHEET_TITLE}",
         "",
-        f"각 항목의 올바른 답을 하나 고르세요: {', '.join(options)}. `답:` 뒤에 적어 주세요.",
+        f"Choose one answer for each item: {', '.join(options)}. Write it after `Answer:`.",
         "",
         *header,
     ]
@@ -355,7 +355,7 @@ def _render_sheet(
                 "score": f.score,
             }
         )
-        lines += [f"## {n}", "", quote(text_of[(f.dataset, f.item_id)]), "", "답: ", ""]
+        lines += [f"## {n}", "", quote(text_of[(f.dataset, f.item_id)]), "", "Answer: ", ""]
     return Sheet("\n".join(lines), key)
 
 
@@ -418,13 +418,17 @@ def build_sheet(
     return _render_sheet(flags, text_of, k, control_k, chosen, seed, question_id, question)
 
 
+# `답:` is what sheets printed by s1ops 0.6.0 and earlier say, and one may still be with a reviewer.
+ANSWER_MARKER = re.compile(r"^(?:Answer:|답:)", re.M)
+
+
 def parse_answers(form: str, options: Sequence[str]) -> dict[str, str]:
     allowed = set(options)
     out: dict[str, str] = {}
     for n, body in ANSWER_RE.findall(form):
-        parts = re.split(r"^답:", body, flags=re.M)
+        parts = ANSWER_MARKER.split(body)
         if len(parts) != 2:
-            raise ValueError(f"item {n}: expected one line starting with 답:")
+            raise ValueError(f"item {n}: expected one line starting with Answer:")
         answer = " ".join(parts[1].split())
         if answer not in allowed:
             raise ValueError(f"item {n}: answer {parts[1].strip()!r} is not one of {sorted(allowed)}")
@@ -503,6 +507,11 @@ def precision_at_k(hits: int, k: int) -> tuple[float, tuple[float, float]]:
     return hits / k, wilson(hits, k)
 
 
+def _finite_or_none(value: float) -> float | None:
+    """Infinity is not JSON; `Estimate` keeps it for `outcome`, and only its dict says null."""
+    return value if math.isfinite(value) else None
+
+
 @dataclass(frozen=True)
 class Estimate:
     flag_precision: float
@@ -523,6 +532,9 @@ class Estimate:
     def as_dict(self, factor: float = 2.0) -> dict:
         return {
             **asdict(self),
+            "lift": _finite_or_none(self.lift),
+            "conservative_lift": _finite_or_none(self.conservative_lift),
+            "lift_note": None if math.isfinite(self.lift) else "control rate is 0",
             "flag_ci": list(self.flag_ci),
             "control_ci": list(self.control_ci),
             "outcome": self.outcome(factor),

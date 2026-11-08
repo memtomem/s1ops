@@ -28,7 +28,7 @@ from s1ops.eval.compare import CompareInputError, compare_records
 from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
 from s1ops.eval.metrics import top_label
-from s1ops.improve.calibrate import Fit, fit_for, load_fits, transform
+from s1ops.improve.calibrate import Fit, fit_for, fitted_items, load_fits, transform
 from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
 from s1ops.improve.policy import (
     Band,
@@ -295,11 +295,13 @@ def create_app(
                 after=after_P,
             )
             if fit is not None:
+                in_sample = fitted_items([fit])[fit.key]
                 report["fit"] = {
                     "method": fit.method,
                     "params": fit.params,
                     "nll_before": fit.nll_before,
                     "nll_after": fit.nll_after,
+                    "n_in_sample": sum(item in in_sample for item in grp.items),
                 }
             results.append(report)
         return {"groups": results}

@@ -328,15 +328,28 @@ def read_records(
         for n, text in enumerate(f, start=1):
             if not text.strip():
                 continue
-            try:
-                records.append(_read_line(text, n, sum_tol, require_answer, use_calib, path))
-            except RecordError as e:
-                raise RecordError(e.line, e.reason, path) from None
+            records.append(read_row(text, n, path, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib))
     return records
 
 
+def read_row(
+    text: str,
+    line: int,
+    path: str | Path | None,
+    *,
+    sum_tol: float = DEFAULT_SUM_TOL,
+    require_answer: bool = True,
+    use_calib: bool = False,
+) -> Record:
+    """One line of a records file, read as `read_records` reads it: a `RecordError` names `path`."""
+    try:
+        return _read_line(text, line, sum_tol, require_answer, use_calib, path)
+    except RecordError as e:
+        raise RecordError(e.line, e.reason, path) from None
+
+
 def _read_line(
-    text: str, n: int, sum_tol: float, require_answer: bool, use_calib: bool, path: str | Path
+    text: str, n: int, sum_tol: float, require_answer: bool, use_calib: bool, path: str | Path | None
 ) -> Record:
     if UNDECODABLE.search(text):
         raise RecordError(n, "not valid UTF-8")

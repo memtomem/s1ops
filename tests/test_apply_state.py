@@ -5,6 +5,7 @@ through (calibrated, passed through, failed) leaves the top-level `state` out an
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -108,7 +109,8 @@ def test_a_refusal_prints_no_summary(ws, tmp_path: Path, capsys, flags: tuple, c
     out = tmp_path / "out.jsonl"
     assert _apply(_write(tmp_path / "in.jsonl", rows), ws["fits"], out, *flags) == code
     captured = capsys.readouterr()
-    assert captured.out == "" and captured.err.startswith("s1: refusing")
+    assert captured.out == ""
+    assert re.match(rf"s1: {re.escape(str(tmp_path / 'in.jsonl'))}: line \d+: refusing", captured.err)
     assert not out.exists()
 
 

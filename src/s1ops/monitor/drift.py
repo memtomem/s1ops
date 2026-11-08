@@ -90,7 +90,8 @@ def _compared(records: Sequence[Record], use_calib: bool, side: str) -> list[Rec
             raise DriftInputError(
                 r.line,
                 "a calibrated comparison needs calibrated probabilities and this record has none; "
-                "run `s1 apply` on both files, or compare raw probabilities",
+                "run `s1 apply` on both files, pass a `--fit` with a fit for this record's group, "
+                "or compare raw probabilities",
                 side,
             )
     return out

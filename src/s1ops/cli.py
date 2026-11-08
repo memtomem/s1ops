@@ -24,7 +24,7 @@ from s1ops.bridges.openinference import export_openinference_jsonl
 from s1ops.contracts._validation import UNDECODABLE
 from s1ops.contracts.questions import parse_wire_question
 from s1ops.contracts.questions import question_id as question_id_of
-from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr, without_state
+from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, select, short_repr
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -32,13 +32,13 @@ from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
 from s1ops.eval.metrics import top_label
 from s1ops.improve.calibrate import (
+    AppliedFits,
     Fit,
-    apply_to_record,
+    FitApplyError,
+    apply_fits,
     fit_for,
     fit_group,
-    fitted_items,
     load_fits,
-    refusal,
     save_fits,
     sha256_file,
     transform,
@@ -90,6 +90,7 @@ EXIT_ERROR = 1
 EXIT_IN_SAMPLE = 2
 EXIT_MODEL_MISMATCH = 3
 EXIT_DRIFT_CRITICAL = 4
+_FIT_APPLY_EXIT = {"in_sample": EXIT_IN_SAMPLE, "model_mismatch": EXIT_MODEL_MISMATCH, "other": EXIT_ERROR}
 
 
 class CliError(Exception):
@@ -377,52 +378,18 @@ def _cmd_fit(args: argparse.Namespace) -> int:
 def _cmd_apply(args: argparse.Namespace) -> int:
     records = read_records(args.records, require_answer=True)
     fits = load_fits(args.fit)
-    in_sample_map = fitted_items(fits)
-
-    out_objs: list[dict[str, Any]] = []
-    calibrated = 0
-    # `safe-v1`: no row is written with its item `state` (every path below leaves it out).
+    # `safe-v1`: no row is written with its item `state`.
     state_dropped = sum(1 for rec in records if "state" in rec.raw)
-    passed: dict[tuple, dict[str, Any]] = {}
-    for rec in records:
-        if rec.model_served is None:
-            out_objs.append(without_state(rec.raw))
-            continue
-        fit = fit_for(fits, rec.key)
-        if fit is None:
-            msg = refusal(fits, rec.key, rec.classes) or f"no fit for {rec.key}"
-            if args.pass_through_unfitted:
-                qid, served, primitive = rec.key
-                group = passed.setdefault(rec.key, {"question_id": qid, "model_served": served, "primitive": primitive, "n": 0, "reason": msg})
-                group["n"] += 1
-                out_objs.append(without_state(rec.raw))
-                continue
-            code = EXIT_MODEL_MISMATCH if "model_served" in msg else EXIT_ERROR
-            return _fail(f"refusing to apply fit: {msg}", code)
-
-        err = refusal(fits, rec.key, rec.classes)
-        if err is not None:
-            return _fail(f"refusing to apply fit: {err}")
-
-        in_sample = rec.item in in_sample_map.get(fit.key, frozenset())
-        if in_sample and not args.allow_in_sample:
-            return _fail(
-                f"refusing in-sample calibration apply on {rec.item}; "
-                "pass --allow-in-sample to override",
-                EXIT_IN_SAMPLE,
-            )
-
-        out_objs.append(apply_to_record(fit, rec, in_fit_sample=in_sample))
-        calibrated += 1
+    applied = apply_fits(records, fits, allow_in_sample=args.allow_in_sample, pass_through_unfitted=args.pass_through_unfitted)
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as fh:
-        for o in out_objs:
-            fh.write(json.dumps(o, sort_keys=True) + "\n")
-    summary: dict[str, Any] = {"calibrated": calibrated}
+        for line in applied.lines:
+            fh.write(line + "\n")
+    summary: dict[str, Any] = {"calibrated": applied.calibrated}
     if args.pass_through_unfitted:
-        summary["passed_through"] = list(passed.values())
+        summary["passed_through"] = applied.passed_through
     if state_dropped:
         summary["state_dropped"] = state_dropped
     if len(summary) > 1:
@@ -809,11 +776,24 @@ def _cmd_judge(args: argparse.Namespace) -> int:
     return 0
 
 
+def _check_fit_args(args: argparse.Namespace) -> None:
+    if args.allow_in_sample and not args.fit:
+        raise CliError("--allow-in-sample applies only with --fit")
+
+
+def _applied_in_memory(path: str, fits: list[Fit], args: argparse.Namespace) -> AppliedFits:
+    """`path` as `s1 apply <path> --fit ... --pass-through-unfitted` would write it."""
+    return apply_fits(read_records(path), fits, allow_in_sample=args.allow_in_sample, pass_through_unfitted=True)
+
+
 def _cmd_export(args: argparse.Namespace) -> int:
-    records = read_records(args.records)
+    _check_fit_args(args)
     policies: list[PolicyEntry] | None = None
     if args.policy:
         policies = load_policies(args.policy)
+    applied = _applied_in_memory(args.records, load_fits(args.fit), args) if args.fit else None
+    records = applied.records if applied else read_records(args.records)
+    fit_info = {"fit": applied.summary()} if applied else {}
 
     if args.export_cmd == "langfuse":
         payload = export_langfuse_file(
@@ -822,7 +802,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
             run_name=args.run_name,
             policies=policies,
         )
-        print(json.dumps(payload["summary"], indent=2, sort_keys=True))
+        print(json.dumps({**payload["summary"], **fit_info}, indent=2, sort_keys=True))
         return 0
 
     spans = export_openinference_jsonl(
@@ -833,7 +813,7 @@ def _cmd_export(args: argparse.Namespace) -> int:
     )
     print(
         json.dumps(
-            {"output": str(args.output), "n_spans": len(spans), "redaction": "safe-v1"},
+            {"output": str(args.output), "n_spans": len(spans), "redaction": "safe-v1", **fit_info},
             indent=2,
             sort_keys=True,
         )
@@ -881,15 +861,27 @@ def _cmd_ledger(args: argparse.Namespace) -> int:
 
 
 def _cmd_drift(args: argparse.Namespace) -> int:
+    _check_fit_args(args)
+    if args.fit and not (args.policy or args.calibrated):
+        raise CliError(
+            "--fit does not change a raw comparison without a policy: "
+            "pass --calibrated to compare calibrated probabilities, or --policy to route them"
+        )
     policies = load_policies(args.policy) if args.policy else None
+    reference, current, fit_info = args.reference, args.current, {}
+    if args.fit:
+        fits = load_fits(args.fit)
+        applied_ref, applied_cur = _applied_in_memory(reference, fits, args), _applied_in_memory(current, fits, args)
+        reference, current = applied_ref.records, applied_cur.records
+        fit_info = {"fit": {"reference": applied_ref.summary(), "current": applied_cur.summary()}}
     rep = audit_drift(
-        args.reference,
-        args.current,
+        reference,
+        current,
         policies=policies,
         bins=args.bins,
         use_calib=args.calibrated,
     )
-    print(json.dumps(rep, indent=2, sort_keys=True))
+    print(json.dumps({**rep, **fit_info}, indent=2, sort_keys=True))
     if args.fail_on_critical and rep["summary"]["critical"] > 0:
         return EXIT_DRIFT_CRITICAL
     return EXIT_OK
@@ -1160,6 +1152,8 @@ _H_RECORDS = "decision records (jev-record/1 or s1-record/1 JSONL)"
 _H_OUTPUT = "output path"
 _H_FIT_IN = "fits.json from `s1 fit`"
 _H_POLICY_IN = "policy.json from `s1 policy tune`"
+_H_FIT_IN_MEMORY = "fits.json from `s1 fit`; calibrates each input file in memory first, as `s1 apply --pass-through-unfitted` writes it: a record with a fit gets its `calib`, replacing a stored one, and any other keeps what it carries"
+_H_ALLOW_IN_SAMPLE = "with --fit, calibrate items the fit was trained on rather than exiting 2"
 _H_USE_CALIB = "use the calibrated probabilities written by `s1 apply` instead of the raw ones"
 _H_COST_S1 = "USD cost of one System 1 call"
 _H_COST_SYS2 = "USD cost of escalating one item to System 2 (LLM or human)"
@@ -1322,6 +1316,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_drf_dist = p_drf.add_mutually_exclusive_group()
     p_drf_dist.add_argument("--calibrated", action="store_true", help="compare calibrated probabilities (PSI, JS divergence, quantiles, entropy); every answered record in both files must carry `calib` from `s1 apply`, made by one fit per (question, model) group (or by none, for records applied before s1ops recorded it). The escalation rate always routes what each policy was tuned on")
     p_drf_dist.add_argument("--raw-only", action="store_true", help="compare raw probabilities; the default, kept for scripts written for s1ops 0.1.0")
+    p_drf.add_argument("--fit", default=None, help=f"{_H_FIT_IN_MEMORY}; needs --policy or --calibrated, and the report gains a `fit` block saying what was calibrated")
+    p_drf.add_argument("--allow-in-sample", action="store_true", help=_H_ALLOW_IN_SAMPLE)
     p_drf.add_argument("--fail-on-critical", action="store_true", help="exit 4 if any question is CRITICAL")
     p_drf.set_defaults(func=_cmd_drift)
 
@@ -1367,11 +1363,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_el.add_argument("records", help=_H_RECORDS)
     p_el.add_argument("-o", "--output", required=True, help="Langfuse export JSON to write")
     p_el.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; routes each record with the compiled threshold or band instead of a fixed 0.5")
+    p_el.add_argument("--fit", default=None, help=f"{_H_FIT_IN_MEMORY}; the printed summary gains a `fit` block saying what was calibrated")
+    p_el.add_argument("--allow-in-sample", action="store_true", help=_H_ALLOW_IN_SAMPLE)
     p_el.add_argument("--run-name", default="s1ops-eval", help="dataset run name")
     p_ep = sub_exp.add_parser("phoenix", help="Export safe-v1 OpenInference spans JSONL", **_FMT)
     p_ep.add_argument("records", help=_H_RECORDS)
     p_ep.add_argument("-o", "--output", required=True, help="OpenInference spans JSONL to write")
     p_ep.add_argument("--policy", default=None, help=f"{_H_POLICY_IN}; routes with the compiled threshold or band and adds s1.policy_sha256, s1.threshold, s1.band_lo, s1.band_hi")
+    p_ep.add_argument("--fit", default=None, help=f"{_H_FIT_IN_MEMORY}; the printed summary gains a `fit` block saying what was calibrated")
+    p_ep.add_argument("--allow-in-sample", action="store_true", help=_H_ALLOW_IN_SAMPLE)
     p_ep.add_argument("--run-name", default="s1ops-eval", help="run name attribute")
     p_exp.set_defaults(func=_cmd_export)
 
@@ -1418,6 +1418,10 @@ def main(argv: list[str] | None = None) -> int:
         if debug:
             raise
         return _fail(str(e), EXIT_MODEL_MISMATCH)
+    except FitApplyError as e:
+        if debug:
+            raise
+        return _fail(str(e), _FIT_APPLY_EXIT[e.kind])
     except OSError as e:
         if debug:
             raise

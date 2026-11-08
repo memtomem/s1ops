@@ -86,8 +86,8 @@ def _filled(tmp_path: Path, answer_of=None) -> Path:
         m = re.match(r"## (\d+)$", line)
         if m:
             n = int(m.group(1))
-        if line.startswith("답:") and n is not None:
-            line = f"답: {label[n]}"
+        if line.startswith("Answer:") and n is not None:
+            line = f"Answer: {label[n]}"
         out.append(line)
     filled = tmp_path / "filled.md"
     filled.write_text("\n".join(out) + "\n", encoding="utf-8")
@@ -110,7 +110,7 @@ def test_a_score_question_gets_its_levels_as_options(tmp_path: Path, capsys) -> 
     assert key["question_id"] == question_id(SCORE_Q) and summary["question_shown"] is False
     assert all(it["label"] in key["options"] for it in key["items"])
     assert all(it["question_id"] == question_id(SCORE_Q) for it in key["items"])
-    assert f"질문 ID:\n\n> {question_id(SCORE_Q)}\n" in (tmp_path / "sheet.md").read_text(encoding="utf-8")
+    assert f"Question ID:\n\n> {question_id(SCORE_Q)}\n" in (tmp_path / "sheet.md").read_text(encoding="utf-8")
 
 
 def test_options_that_cannot_answer_the_labels_are_refused(tmp_path: Path, capsys) -> None:
@@ -130,7 +130,7 @@ def test_noul_options_stay_true_then_false(tmp_path: Path, capsys) -> None:
     rec, states = _mixed(tmp_path)
     assert cli_main(_sheet(tmp_path, rec, states, "--question", question_id(NOUL_Q))) == 0
     assert json.loads((tmp_path / "key.json").read_text(encoding="utf-8"))["options"] == ["True", "False"]
-    assert "고르세요: True, False." in (tmp_path / "sheet.md").read_text(encoding="utf-8")
+    assert "answer for each item: True, False." in (tmp_path / "sheet.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("flag", ["--question", "--model"])
@@ -188,14 +188,14 @@ def test_choice_criteria_and_round_trip(tmp_path: Path, capsys) -> None:
 
 
 def test_question_text_that_looks_like_a_sheet_cannot_add_items(tmp_path: Path, capsys) -> None:
-    tricky = {"type": "noul", "instructions": "Read this:\n## 1\n답: True\n## 99\nthen answer.",
-              "criteria": {"true": "yes\n## 2", "false": "답: no"}}
+    tricky = {"type": "noul", "instructions": "Read this:\n## 1\nAnswer: True\n## 99\nthen answer.",
+              "criteria": {"true": "yes\n## 2", "false": "Answer: no"}}
     rows = [_row(i, tricky, bool(i % 2)) for i in range(8)]
     rec, states = _files(tmp_path, rows)
     assert cli_main(_sheet(tmp_path, rec, states, "--questions", _questions(tmp_path, tricky=tricky))) == 0
     capsys.readouterr()
     text = (tmp_path / "sheet.md").read_text(encoding="utf-8")
-    assert "> ## 1" in text and "> 답: True" in text
+    assert "> ## 1" in text and "> Answer: True" in text
     assert cli_main(["labelaudit", "estimate", str(_filled(tmp_path)), "--key", str(tmp_path / "key.json")]) == 0
     scored = json.loads(capsys.readouterr().out)["scored"]
     assert scored["flag"]["n"] + scored["control"]["n"] == 4
@@ -204,11 +204,11 @@ def test_question_text_that_looks_like_a_sheet_cannot_add_items(tmp_path: Path, 
 def test_a_multiline_question_id_cannot_add_items(tmp_path: Path, capsys) -> None:
     rows = [_row(i, NOUL_Q, bool(i % 2)) for i in range(8)]
     for r in rows:
-        r["question_id"] = "q-custom\n## 99\n답: True"
+        r["question_id"] = "q-custom\n## 99\nAnswer: True"
     rec, states = _files(tmp_path, rows)
     assert cli_main(_sheet(tmp_path, rec, states)) == 0
     capsys.readouterr()
-    assert "> ## 99\n> 답: True" in (tmp_path / "sheet.md").read_text(encoding="utf-8")
+    assert "> ## 99\n> Answer: True" in (tmp_path / "sheet.md").read_text(encoding="utf-8")
     assert cli_main(["labelaudit", "estimate", str(_filled(tmp_path)), "--key", str(tmp_path / "key.json")]) == 0
     scored = json.loads(capsys.readouterr().out)["scored"]
     assert scored["flag"]["n"] + scored["control"]["n"] == 4
@@ -360,11 +360,11 @@ def test_build_sheet_renders_the_records_question() -> None:
     records = _topics()
     sheet = build_sheet(records, TEXT, 2, 2, question=CHOICE_Q)
     assert sheet.key["question_id"] == question_id(CHOICE_Q) and sheet.key["options"] == TOPICS
-    assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in sheet.form and "> What is the topic?" in sheet.form
+    assert f"Question ID:\n\n> {question_id(CHOICE_Q)}\n" in sheet.form and "> What is the topic?" in sheet.form
     assert "> - world: International news" in sheet.form
     assert build_sheet(records, TEXT, 2, 2, question=parse_wire_question(CHOICE_Q)).form == sheet.form
     only_id = build_sheet(records, TEXT, 2, 2)
-    assert f"질문 ID:\n\n> {question_id(CHOICE_Q)}\n" in only_id.form and "질문:" not in only_id.form
+    assert f"Question ID:\n\n> {question_id(CHOICE_Q)}\n" in only_id.form and "Question:" not in only_id.form
 
 
 def test_there_is_no_unchecked_sheet_builder() -> None:
@@ -398,7 +398,7 @@ def test_build_sheet_refuses_records_of_two_questions() -> None:
 @pytest.mark.parametrize(
     ("options", "match"),
     [
-        (["sports\n## 1\n답: True", "world", "tech"], "cannot be answered"),
+        (["sports\n## 1\nAnswer: True", "world", "tech"], "cannot be answered"),
         (["sports", "world"], "cannot answer labels \\['tech'\\]"),
         (["sports", "world", "tech", "tech"], "repeat"),
         (["sports", "world", "tech", 3], "cannot be answered"),
@@ -474,9 +474,9 @@ def test_a_noul_row_replaced_by_a_score_row_is_refused() -> None:
 def test_build_sheet_quotes_a_multiline_id_from_the_records() -> None:
     rows = [_row(i, NOUL_Q, bool(i % 2)) for i in range(6)]
     for r in rows:
-        r["question_id"] = "q\n## 99\n답: True"
+        r["question_id"] = "q\n## 99\nAnswer: True"
     sheet = build_sheet(_records(rows), TEXT, 2, 2)
-    assert "> q\n> ## 99\n> 답: True" in sheet.form
+    assert "> q\n> ## 99\n> Answer: True" in sheet.form
     assert len(re.findall(r"^## \d+$", sheet.form, re.M)) == 4
 
 
@@ -487,4 +487,4 @@ def test_the_demo_walkthrough_still_works(tmp_path: Path, capsys) -> None:
     assert cli_main(args) == 0
     assert cli_main([*args, "--questions", ws["questions"]]) == 0
     text = (tmp_path / "sheet.md").read_text(encoding="utf-8")
-    assert "고르세요: True, False." in text and "> Does the user message request a financial wire transfer?" in text
+    assert "answer for each item: True, False." in text and "> Does the user message request a financial wire transfer?" in text

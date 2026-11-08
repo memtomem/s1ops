@@ -98,7 +98,7 @@ def test_a_blank_sheet_names_the_sheet(ws, tmp_path, capsys) -> None:
 
 def test_an_invalid_answer_names_the_sheet(ws, tmp_path, capsys) -> None:
     sheet, key, form = _made_sheet(ws, tmp_path, capsys)
-    sheet.write_text(form.replace("\n답: \n", "\n답: nope\n", 1), encoding="utf-8")
+    sheet.write_text(form.replace("\nAnswer: \n", "\nAnswer: nope\n", 1), encoding="utf-8")
     assert cli_main(["labelaudit", "estimate", str(sheet), "--key", str(key)]) == 1
     line = _one_line(capsys)
     assert line.startswith(f"s1: {sheet}: item ") and "nope" in line

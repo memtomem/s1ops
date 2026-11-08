@@ -782,13 +782,9 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 
 
 def _cmd_trainset(args: argparse.Namespace) -> int:
-    if not stat.S_ISREG(os.stat(args.records).st_mode):
-        raise CliError(f"{args.records}: must be a regular file: the manifest records its sha256, read after the records")
-    records = read_records(args.records)
+    records, src_sha = read_records_hashed(args.records)
     parent = load_manifest(args.parent) if args.parent else None
-    built = build_manifest(
-        records, split=args.split, checkpoint=args.checkpoint, source_sha256=sha256_file(args.records), parent=parent
-    )
+    built = build_manifest(records, split=args.split, checkpoint=args.checkpoint, source_sha256=src_sha, parent=parent)
     output = Path(args.output)
     if output.exists():
         for other in (args.records, args.parent):
@@ -1376,7 +1372,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_ts = sub.add_parser("trainset", help="Training sets for an external trainer (s1ops starts no training)", **_FMT)
     sub_ts = p_ts.add_subparsers(dest="trainset_cmd", required=True)
     p_tse = sub_ts.add_parser("export", help="Write the items and labels a checkpoint will train on (ids only, no state or wording)", **_FMT)
-    p_tse.add_argument("records", help=f"{_H_RECORDS}; a regular file")
+    p_tse.add_argument("records", help=_H_RECORDS)
     p_tse.add_argument("-o", "--output", required=True, help="training manifest to write")
     p_tse.add_argument("--split", required=True, help="the `split` to train on; the other splits stay for fitting and evaluation")
     p_tse.add_argument("--checkpoint", required=True, help="the name the new checkpoint will answer under in `s1 probe --model`; unique per checkpoint")

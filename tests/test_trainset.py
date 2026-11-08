@@ -148,12 +148,12 @@ def test_reused_name_and_other_splits_are_reported_not_refused(tmp_path: Path, c
     assert summary["also_in_other_splits"] == {"n": 1, "first": ["d", "t0"]}
 
 
-def test_a_fifo_source_is_refused(tmp_path: Path) -> None:
+def test_a_fifo_source_gets_its_own_digest(tmp_path: Path) -> None:
     source = _write(tmp_path / "r.jsonl", [_row("t0", "train")])
     script = f"s1=({_python_s1()}); \"${{s1[@]}}\" trainset export <(cat '{source}') --split train --checkpoint c -o '{tmp_path / 'm.json'}'"
     done = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=60)
-    assert done.returncode == 1 and "regular file" in done.stderr
-    assert not (tmp_path / "m.json").exists()
+    assert done.returncode == 0, done.stderr
+    assert load_manifest(tmp_path / "m.json").source_sha256 == hashlib.sha256(Path(source).read_bytes()).hexdigest()
 
 
 def _python_s1() -> str:
@@ -451,14 +451,20 @@ def test_a_malformed_split_is_refused_before_anything_is_sent(bad) -> None:
 # ---- the documented sequence ----
 
 
-@pytest.mark.parametrize("wrapped", [False, True])
-def test_the_readme_recipe_builds_rows_from_the_manifest(tmp_path: Path, monkeypatch, wrapped: bool) -> None:
+@pytest.mark.parametrize(
+    "shape",
+    [
+        pytest.param(lambda q: {"urgent": q}, id="flat"),
+        pytest.param(lambda q: {"questions": {"urgent": q}}, id="wrapped"),
+        pytest.param(lambda q: {"questions": q}, id="a-question-named-questions"),
+    ],
+)
+def test_the_readme_recipe_builds_rows_from_the_manifest(tmp_path: Path, monkeypatch, shape) -> None:
     readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Fine-Tuning Around an External Trainer", 1)[1]
     recipe = re.search(r"```python\n(.*?)```", section, re.S).group(1)
     question = {"type": "noul", "instructions": "Is this urgent?", "x-s1-lint": {"ignore": ["JL012"]}}
-    questions = {"urgent": question}
-    (tmp_path / "questions.json").write_text(json.dumps({"questions": questions} if wrapped else questions), encoding="utf-8")
+    (tmp_path / "questions.json").write_text(json.dumps(shape(question)), encoding="utf-8")
     states = tmp_path / "states_local.jsonl"
     _write(states, [
         {"item_id": "a", "state": "state of a", "split": "train", "label": True},

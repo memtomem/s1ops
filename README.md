@@ -285,11 +285,14 @@ s1 drift current_eval.jsonl candidate_eval.jsonl
 import json
 
 from s1ops import question_id
+from s1ops.lint.loader import read_question_entries
 from s1ops.monitor.runner import probe_tasks
 
 manifest = json.load(open("training_manifest.json", encoding="utf-8"))
-questions = json.load(open("questions.json", encoding="utf-8"))
-tasks = probe_tasks(questions.get("questions", questions), probe_mode=False)  # read as `s1 probe` reads the file
+entries, errors = read_question_entries("questions.json")  # read as `s1 probe` reads the file
+if errors:
+    raise SystemExit("; ".join(errors))
+tasks = probe_tasks(entries, probe_mode=False)
 wording = {question_id(t.question): t.question.wire_dict() for t in tasks}
 states = {}
 for line in open("states_local.jsonl", encoding="utf-8"):

@@ -41,6 +41,7 @@ from s1ops.improve.calibrate import (
     transform,
 )
 from s1ops.improve.labelaudit import (
+    LabelAuditInputError,
     SheetInputError,
     build_sheet,
     check_key,
@@ -116,8 +117,7 @@ class _Parser(argparse.ArgumentParser):
     """Usage errors exit 1, so exit 2 stays reserved for the in-sample refusal."""
 
     def error(self, message: str) -> None:  # type: ignore[override]
-        self.print_usage(sys.stderr)
-        self.exit(EXIT_ERROR, f"s1: {_one_line(message)}\n")
+        self.exit(EXIT_ERROR, f"s1: {_one_line(f'{message}; see {self.prog} -h')}\n")
 
 
 # Input arguments by dest name: (what it is, the command that produces it).
@@ -646,6 +646,11 @@ def _question_from_file(path: str, question_id: str):
     return found
 
 
+def _fit_refused(args: argparse.Namespace, error: LabelAuditInputError) -> CliError:
+    """A records file and a `--fit` file that do not go together: the error is about the pair."""
+    return CliError(f"{args.records} with --fit {args.fit}: {error}")
+
+
 def _cmd_labelaudit(args: argparse.Namespace) -> int:
     if args.la_cmd == "estimate":
         _require_file(args.key, "secret key", "s1 labelaudit sheet")
@@ -655,7 +660,12 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
             check_key(key_doc)
         except ValueError as e:
             raise CliError(f"{args.key}: {e}") from None
-        scored = score_sheet(form_text, key_doc)
+        try:
+            scored = score_sheet(form_text, key_doc)
+        except ValueError as e:
+            if os.environ.get("S1_DEBUG"):
+                raise
+            raise CliError(f"{args.sheet}: {e}") from None
         est = estimate(
             scored["flag"]["reviewer_disagrees_with_label"],
             scored["flag"]["n"],
@@ -675,7 +685,12 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
     # `--fit` given means calibrate, even when the file holds no fits: every record is then refused.
     fits = load_fits(args.fit) if getattr(args, "fit", None) else None
     if args.la_cmd == "rank":
-        flags, skipped = rank_with_skips([r.raw for r in records], temperature=fits)
+        try:
+            flags, skipped = rank_with_skips([r.raw for r in records], temperature=fits)
+        except LabelAuditInputError as e:
+            if os.environ.get("S1_DEBUG"):
+                raise
+            raise _fit_refused(args, e) from None
         payload = {
             "n_candidates": len(flags),
             "skipped": {"no_response": skipped.no_response, "unlabeled": skipped.unlabeled},
@@ -713,8 +728,14 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
             fit=fits,
             seed=args.seed,
         )
+    except LabelAuditInputError as e:
+        if os.environ.get("S1_DEBUG"):
+            raise
+        raise _fit_refused(args, e) from None
     except SheetInputError as e:
-        where = args.questions if e.source == "question" else args.records
+        if os.environ.get("S1_DEBUG"):
+            raise
+        where = {"question": args.questions, "states": args.states}.get(e.source, args.records)
         raise CliError(f"{where}: {e}" + (": pass --question" if e.many_questions else "")) from None
     question_id, options = sheet.key["question_id"], sheet.key["options"]
     Path(args.output).write_text(sheet.form, encoding="utf-8")

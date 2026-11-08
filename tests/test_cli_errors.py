@@ -174,9 +174,7 @@ def test_usage_error_exits_1(capsys) -> None:
     with pytest.raises(SystemExit) as exc:
         cli_main(["fit"])
     assert exc.value.code == 1
-    err = capsys.readouterr().err
-    assert err.startswith("usage: ")
-    assert "\ns1: the following arguments are required" in err
+    assert capsys.readouterr().err == "s1: the following arguments are required: records, -o/--output; see s1 fit -h\n"
 
 
 def test_help_shows_non_obvious_defaults(capsys) -> None:
@@ -463,10 +461,7 @@ def test_a_usage_error_message_is_one_escaped_line(tmp_path: Path, capsys) -> No
     with pytest.raises(SystemExit) as exc:
         cli_main(["lint", "check", str(path), "x\ny\x1b[2J"])
     assert exc.value.code == 1
-    err = capsys.readouterr().err
-    assert err.startswith("usage: ")
-    assert err.splitlines()[-1] == "s1: unrecognized arguments: x\\ny\\x1b[2J"
-    assert err.endswith("s1: unrecognized arguments: x\\ny\\x1b[2J\n")
+    assert capsys.readouterr().err == "s1: unrecognized arguments: x\\ny\\x1b[2J; see s1 -h\n"
 
 
 QID = "q\nextra"

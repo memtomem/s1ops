@@ -10,6 +10,7 @@ import pytest
 
 from s1ops.cli import main as cli_main
 from s1ops.contracts.questions import NoulQuestion
+from s1ops.contracts.records import read_records
 from s1ops.ledger.journal import Ledger
 from s1ops.monitor import backends as backends_mod
 from s1ops.monitor.runner import DeterministicMockBackend, run_batch
@@ -98,6 +99,48 @@ def test_mock_takes_a_given_model(tmp_path, capsys) -> None:
     rc, out, _ = _probe(tmp_path, "--model", "kev-1.0", "--served-model", "kev-1.1")
     assert rc == 0
     assert _models(out) == [("kev-1.0", "kev-1.1")]
+
+
+@pytest.mark.parametrize("given", [(), ("--served-model", "m")], ids=["alone", "with-served-model"])
+def test_mock_refuses_an_empty_model_before_anything_exists(tmp_path, capsys, given) -> None:
+    rc, _, ledger = _probe(tmp_path, "--model", "", *given)
+    assert rc == 1
+    assert capsys.readouterr().err.strip().splitlines() == ["s1: --model must not be empty"]
+    assert not ledger.parent.exists()  # so no journal, `.lock` or output either
+
+
+@pytest.mark.parametrize("value", ["", None, 7, b"m"], ids=["empty", "none", "int", "bytes"])
+def test_run_batch_refuses_a_name_read_records_would_refuse(tmp_path, value) -> None:
+    class NeverCalled(DeterministicMockBackend):
+        def infer(self, *args, **kwargs):
+            raise AssertionError("no request may be sent")
+
+    journal = tmp_path / "journal.jsonl"
+    with Ledger(journal, cap_usd=1.0) as ledger:
+        with pytest.raises(ValueError) as refused:
+            run_batch(
+                [{"item_id": "i1", "state": "s"}],
+                {"q1": NoulQuestion(instructions="x?")},
+                backend=NeverCalled(),
+                ledger=ledger,
+                model_requested=value,
+            )
+    assert str(refused.value) == f"model_requested must be a non-empty string, got {value!r}"
+    assert not journal.exists()
+
+
+def test_run_batch_records_read_back_under_the_rule_it_checks(tmp_path) -> None:
+    out = tmp_path / "out.jsonl"
+    with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
+        rows = run_batch(
+            [{"item_id": "i1", "state": "s"}],
+            {"q1": NoulQuestion(instructions="x?")},
+            backend=DeterministicMockBackend(served_model="m"),
+            ledger=ledger,
+            model_requested=" ",
+        )
+    out.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    assert [r.raw["model_requested"] for r in read_records(out)] == [" "]
 
 
 def test_run_batch_needs_a_model_and_reserves_nothing_without_one(tmp_path) -> None:

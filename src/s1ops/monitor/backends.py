@@ -33,6 +33,15 @@ _NAME = "q"
 # `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
 _MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 
+def _close_keeping_first_error(backend: Any, exc_type: object) -> None:
+    """A `with backend:` block's own error wins over a `close()` that fails while it unwinds."""
+    try:
+        backend.close()
+    except Exception:
+        if exc_type is None:
+            raise
+
+
 _IN_INFER: contextvars.ContextVar[bool] = contextvars.ContextVar("s1ops_backend_infer", default=False)
 
 # A logger's filter does not see records from its child loggers, so every logger that can carry server
@@ -232,8 +241,8 @@ class HttpSystemOneBackend:
     def __enter__(self) -> HttpSystemOneBackend:
         return self
 
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+    def __exit__(self, exc_type: object, *exc: object) -> None:
+        _close_keeping_first_error(self, exc_type)
 
     def infer(
         self,
@@ -427,8 +436,8 @@ class OpenAIDecisionsBackend:
     def __enter__(self) -> OpenAIDecisionsBackend:
         return self
 
-    def __exit__(self, *exc: object) -> None:
-        self.close()
+    def __exit__(self, exc_type: object, *exc: object) -> None:
+        _close_keeping_first_error(self, exc_type)
 
     def infer(
         self,

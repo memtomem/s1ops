@@ -1445,6 +1445,41 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(str(e))
 
 
+def _silence_stdout() -> None:
+    """Close and drop the stream, so neither shutdown nor its finalizer has a flush left to fail on."""
+    stream, sys.stdout = sys.stdout, None
+    try:
+        stream.close()
+    except (OSError, ValueError):  # the failed flush, once more; the stream is closed regardless
+        pass
+
+
+def _flushed(code: int) -> int:
+    """Write what was printed while the exit code can still be chosen. The first failure stands."""
+    try:
+        if sys.stdout is not None:
+            sys.stdout.flush()
+    except BrokenPipeError:  # the reader left early, as `| head` does: not this command's failure
+        _silence_stdout()
+    except OSError as e:
+        _silence_stdout()
+        if code == EXIT_OK:
+            return _fail(_os_error_message(e))
+    return code
+
+
+def console_main() -> None:
+    """The `s1` and `s1ops` commands: `main`, plus what only a process's owner may do to its stdout."""
+    try:
+        code = main()
+    except SystemExit as e:  # argparse: `-h`, `--version`, or a usage error
+        code = int(e.code or EXIT_OK)
+    except BaseException:  # a traceback is still exit 1, not 120
+        _flushed(EXIT_ERROR)
+        raise
+    sys.exit(_flushed(code))
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    console_main()
 

@@ -353,6 +353,30 @@
       `;
     }
 
+    // What the fit did on these records: the bootstrap CI of ECE(after) - ECE(before), then
+    // where the fitted ECE sits against its own noise floor. The fit's NLL is on its own records.
+    function fitVerdictHtml(g) {
+      const delta = g.delta_ci && g.delta_ci.ece_mass;
+      const floor = g.ece_floor_after && g.ece_floor_after.mass;
+      if (!g.after || !delta || !floor) return '';
+      const signed = v => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+      const [cls, text] = delta[0] > 0 ? ['badge-err', 'Fit worsened ECE']
+        : delta[1] < 0 ? ['badge-ok', 'Fit improved ECE']
+        : ['badge-info', 'No clear ECE change'];
+      const above = g.after.ece_mass > floor.p95;
+      const inSample = g.fit ? g.fit.n_in_sample : 0;
+      return `
+        <div>
+          ${inSample ? `<span class="badge badge-warn">Not held out: ${inSample} of ${g.n} records were in the fit's sample</span>` : ''}
+          <span class="badge ${cls}">${text} (Δ bootstrap 95% CI [${signed(delta[0])}, ${signed(delta[1])}])</span>
+          <span class="badge ${above ? 'badge-warn' : 'badge-ok'}">
+            ${above ? `Miscalibrated after fit (${esc(g.direction_after)})` : 'Within Noise Floor after fit'}
+            / floor ${floor.p95.toFixed(4)}
+          </span>
+        </div>
+      `;
+    }
+
     // Groups from /api/groups, indexed by the picker's option values.
     let GROUPS = [];
 
@@ -409,6 +433,7 @@
                 <div class="sub">Calibrated ECE / Brier / LogLoss</div>
                 <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : bef.brier.toFixed(4)}</span></div>
                 <span class="sub">${g.fit ? `Fit: ${esc(g.fit.method)} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
+                ${fitVerdictHtml(g)}
               </div>
               <div>
                 <div class="sub">Tie-Mass / Rounding Detector</div>
@@ -716,6 +741,10 @@
           </div>
         </div>
       `).join('');
+      // Both files present but nothing to pair is not the same as no files.
+      if (d.shadow && d.shadow.shared_pairs === 0) {
+        shadowHtml = `<div class="card">No items shared between the two record files (${d.shadow.primary_only} primary only, ${d.shadow.shadow_only} shadow only).</div>`;
+      }
 
       let judgeHtml = '';
       if (j && j.overall) {
@@ -744,7 +773,8 @@
         `;
       }
 
-      document.getElementById("compare-container").innerHTML = shadowHtml + judgeHtml;
+      document.getElementById("compare-container").innerHTML = (shadowHtml + judgeHtml) ||
+        `<div class="card">No shadow comparison records or judge grades found.</div>`;
     }
 
     async function loadDrift() {

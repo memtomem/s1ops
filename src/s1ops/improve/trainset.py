@@ -8,7 +8,7 @@ checkpoint on them. A manifest holds ids, question ids and labels, which records
 
 import json
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -55,6 +55,8 @@ class TrainingManifest:
     items: tuple[TrainingItem, ...]
     inherited_items: tuple[ItemKey, ...] = ()
     """What the parent checkpoints trained on, which this one inherits; not part of its training data."""
+    path: str | Path | None = field(default=None, kw_only=True, repr=False, compare=False)
+    """The file `load_manifest` read this from; `None` for one just built. Errors about it name it."""
 
     @property
     def trained(self) -> frozenset[ItemKey]:
@@ -83,17 +85,20 @@ def build_manifest(
     checkpoint: str,
     source_sha256: str,
     parent: TrainingManifest | None = None,
+    source: str | Path = "the records",
 ) -> ManifestBuild:
     """The manifest of `checkpoint`, trained on the answered, labeled records of `split`.
 
     One item and question answered by several models is one row, and its labels must agree:
     labels are compared with their primitive, since `True == 1`. `parent` is the manifest of the
-    checkpoint this one starts from; what it trained on is recorded as inherited.
+    checkpoint this one starts from; what it trained on is recorded as inherited. `source` names the
+    records in an error, since an empty input has no record to take a path from.
     """
     if not MODEL_NAME.fullmatch(checkpoint):
         raise ManifestError(f"checkpoint {checkpoint!r} is not a model name: use {_NAME_RULE}")
     if parent is not None and parent.checkpoint == checkpoint:
-        raise ManifestError(f"the parent manifest is for the same checkpoint {checkpoint!r}; name the new one differently")
+        where = parent.path or "the parent manifest"
+        raise ManifestError(f"{where}: is for the same checkpoint {checkpoint!r}; name the new one differently")
     records = list(records)
     no_response = unlabeled = other_split = 0
     chosen: dict[tuple[ItemKey, str], Record] = {}
@@ -115,7 +120,7 @@ def build_manifest(
                 )
     if not chosen:
         raise ManifestError(
-            f"no answered, labeled record has split {split!r} "
+            f"{source}: no answered, labeled record has split {split!r} "
             f"({no_response} without a response, {unlabeled} unlabeled, {other_split} in other splits)"
         )
     ordered = sorted(chosen.values(), key=lambda r: (_item_order(r.item), r.question_id))
@@ -206,6 +211,7 @@ def load_manifest(path: str | Path) -> TrainingManifest:
         created_at=parsed.created_at,
         items=items,
         inherited_items=tuple((i.dataset, i.item_id) for i in parsed.inherited_items),
+        path=path,
     )
 
 

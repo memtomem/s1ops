@@ -784,7 +784,7 @@ def _cmd_compare(args: argparse.Namespace) -> int:
 def _cmd_trainset(args: argparse.Namespace) -> int:
     records, src_sha = read_records_hashed(args.records)
     parent = load_manifest(args.parent) if args.parent else None
-    built = build_manifest(records, split=args.split, checkpoint=args.checkpoint, source_sha256=src_sha, parent=parent)
+    built = build_manifest(records, split=args.split, checkpoint=args.checkpoint, source_sha256=src_sha, parent=parent, source=args.records)
     output = Path(args.output)
     if output.exists():
         for other in (args.records, args.parent):

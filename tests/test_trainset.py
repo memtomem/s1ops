@@ -129,8 +129,16 @@ def test_a_failed_probe_gives_no_row(tmp_path: Path, capsys) -> None:
 
 
 def test_no_rows_is_an_error_that_says_what_was_skipped(tmp_path: Path, capsys) -> None:
-    assert _export(_write(tmp_path / "r.jsonl", _spread("c", 2, "cal")), tmp_path / "m.json") == 1
-    assert "2 in other splits" in capsys.readouterr().err
+    source = _write(tmp_path / "r.jsonl", _spread("c", 2, "cal"))
+    assert _export(source, tmp_path / "m.json") == 1
+    err = capsys.readouterr().err
+    assert source in err and "2 in other splits" in err
+
+
+def test_an_empty_source_is_named(tmp_path: Path, capsys) -> None:
+    source = _write(tmp_path / "empty.jsonl", [])
+    assert _export(source, tmp_path / "m.json") == 1
+    assert source in capsys.readouterr().err
 
 
 def test_a_name_no_server_could_report_is_refused(tmp_path: Path, capsys) -> None:
@@ -182,7 +190,8 @@ def test_parent_items_are_inherited_through_a_chain(tmp_path: Path) -> None:
 def test_a_parent_of_the_same_name_is_refused(tmp_path: Path, manifest: Path, capsys) -> None:
     source = _write(tmp_path / "r.jsonl", [_row("y", "train")])
     assert _export(source, tmp_path / "m2.json", "--parent", str(manifest)) == 1
-    assert "same checkpoint" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert str(manifest) in err and "same checkpoint" in err
 
 
 # ---- loading ----

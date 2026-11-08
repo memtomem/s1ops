@@ -77,6 +77,8 @@ def _as_on_main(files: dict, fits_path: str) -> int:
     for pol in files["policy.json"]["policies"]:
         assert pol["fit_sha256"] == fit.fit_sha256
         pol["fit_sha256"] = None
+        assert pol["metrics_on_split"]["n"] == pol["n"]  # outside the fingerprint, checked by tests/test_policy_metrics.py
+        pol["metrics_on_split"] = {}
         pol["policy_sha256"] = PolicyEntry(**{k: v for k, v in pol.items() if k != "policy_sha256"}).policy_sha256
         checked += 1
     return checked

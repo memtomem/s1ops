@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from s1ops.contracts.records import Record, has_calib, reparse, short_repr
+from s1ops.contracts.records import Group, Record, has_calib, reparse, short_repr
 from s1ops.contracts.schemas import PolicyEntry
 
 ROUTING_RULE = "3"
@@ -75,6 +75,31 @@ def route(policy: PolicyEntry, classes: Sequence, probs: Sequence[float]) -> Rou
     if policy.primitive in ("choice", "score"):
         return _route_categorical(policy, list(classes), probs)
     raise ValueError(f"policy for {policy.question_id} has unknown primitive {policy.primitive!r}")
+
+
+def routed_metrics(policy: PolicyEntry, group: Group, *, use_cp_upper: bool = False, cp_alpha: float | None = None) -> dict:
+    """What `policy` does to `group` under the one rule, so `policy.json` says what the threshold buys.
+
+    Accepted means not escalated, `ALLOW` and `BLOCK` alike; an error is an accepted answer that
+    differs from the label. `group` holds the distribution the policy was tuned on.
+    """
+    accepted = errors = 0
+    for probs, label in zip(group.P, group.y):
+        routed = route(policy, group.classes, probs)
+        if not routed.escalated:
+            accepted += 1
+            errors += routed.predicted != group.classes[label]
+    return {
+        "selection": policy.mode,
+        "error_budget": policy.error_budget,
+        "use_cp_upper": use_cp_upper,
+        "cp_alpha": cp_alpha if use_cp_upper else None,  # unchecked and unused otherwise
+        "n": group.n,
+        "accepted": accepted,
+        "coverage": accepted / group.n,
+        "errors": errors,
+        "accepted_error": errors / accepted if accepted else None,
+    }
 
 
 def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tuple[float, ...]]:

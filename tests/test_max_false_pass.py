@@ -234,12 +234,12 @@ def test_choice_and_score_groups_keep_the_error_budget(tmp_path: Path, capsys) -
     assert by_primitive["noul"].metrics_on_split["selection"] == "max_false_pass"
     for prim in ("choice", "score"):
         assert by_primitive[prim].mode == "error_budget" and by_primitive[prim].error_budget == 0.10
-        assert by_primitive[prim].metrics_on_split == {}
+        assert by_primitive[prim].metrics_on_split["selection"] == "error_budget"
 
 
 def test_without_the_flag_the_noul_band_is_unchanged(pipeline, capsys) -> None:
     (pol,) = _tune(capsys, pipeline["applied"], pipeline["tmp"] / "policy.json", "--use-calib")
-    assert pol.metrics_on_split == {} and pol.error_budget == 0.10 and pol.threshold is not None
+    assert pol.metrics_on_split["selection"] == "escalation_band" and pol.error_budget == 0.10 and pol.threshold is not None
 
 
 # --- CLI errors -----------------------------------------------------------------------------------

@@ -918,6 +918,18 @@ def _probe_backend(args: argparse.Namespace):
         raise CliError(str(e)) from None
 
 
+def _close_backend(backend: Any) -> Exception | None:
+    """Close `backend` and return what `close()` raised, so that it cannot replace the command's own result."""
+    close = getattr(backend, "close", None)
+    if close is None:
+        return None
+    try:
+        close()
+    except Exception as e:
+        return e
+    return None
+
+
 def _open_output_apart(path: Path, others: list[Path]):
     """Open `path` for writing, refusing if it is the same file as any of `others`.
 
@@ -1030,9 +1042,13 @@ def _cmd_probe(args: argparse.Namespace) -> int:
             message += f"; the record of an already settled request was not written to {out_path}"
         raise CliError(f"{message}; {written} records kept in {out_path}") from None
     finally:
-        close = getattr(backend, "close", None)
-        if close is not None:
-            close()
+        close_error = _close_backend(backend)
+
+    # Reached only when the run finished. The type alone: an SDK's text may repeat what a server sent.
+    if close_error is not None:
+        if os.environ.get("S1_DEBUG"):
+            raise close_error
+        raise CliError(f"closing the backend failed ({type(close_error).__name__}) after the run finished; {written} records kept in {out_path}, {failed} of them failed")
 
     st = ledger_read(args.ledger)
     print(

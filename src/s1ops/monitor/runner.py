@@ -311,7 +311,7 @@ def run_batch(
     *,
     backend: Backend,
     ledger: Ledger,
-    model_requested: str = "jev-1.13.0",
+    model_requested: str,
     worst_usd_per_token: float = 2e-6,
     reserve_overhead_tokens: float | None = None,
     probe_mode: bool = False,
@@ -323,6 +323,9 @@ def run_batch(
     sleep: Callable[[float], None] = time.sleep,
 ) -> list[dict[str, Any]]:
     """Run System 1 questions over a batch of states with strict `Ledger` reserve-then-settle.
+
+    `model_requested` is the name sent to the backend. It has no default: `model_served` is whatever the
+    server reports, and a server that echoes the request reports this name.
 
     Each attempt reserves `(token_bound(state) + token_bound(question) + reserve_overhead_tokens) *
     worst_usd_per_token`. `reserve_overhead_tokens` defaults to the backend's own

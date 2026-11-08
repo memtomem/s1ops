@@ -70,6 +70,7 @@ def run(tmp_path: Path, server: Server, question=NOUL, **kw):
             {"q1": question},
             backend=backend(server),
             ledger=ledger,
+            model_requested="jev-1.13.0",
             on_record=emitted.append,
             sleep=sleeps.append,
             **kw,
@@ -261,6 +262,7 @@ def test_overrun_reported_inside_an_sdk_rejected_body_still_stops(tmp_path: Path
                 {"q1": NOUL},
                 backend=backend(server),
                 ledger=ledger,
+                model_requested="jev-1.13.0",
             )
     assert len(server.bodies) == 1 and ledger_read(journal).overruns
 
@@ -285,6 +287,7 @@ def test_overrun_on_the_last_request_stops_after_keeping_its_record(tmp_path: Pa
                 {"q1": NOUL},
                 backend=backend(server),
                 ledger=ledger,
+                model_requested="jev-1.13.0",
                 on_record=emitted.append,
             )
     assert [r["p"] for r in emitted] == [0.9]
@@ -312,6 +315,7 @@ def test_http_error_usage_is_measured_and_stops_on_overrun(tmp_path: Path) -> No
                 {"q1": NOUL},
                 backend=backend(server),
                 ledger=ledger,
+                model_requested="jev-1.13.0",
                 max_retries=2,
                 on_record=emitted.append,
                 sleep=lambda s: None,
@@ -334,6 +338,7 @@ def test_refused_retry_still_records_the_paid_failure(tmp_path: Path) -> None:
                 {"q1": NOUL},
                 backend=backend(server),
                 ledger=ledger,
+                model_requested="jev-1.13.0",
                 max_retries=2,
                 on_record=emitted.append,
                 sleep=lambda s: None,
@@ -346,7 +351,7 @@ def test_interrupt_mid_request_charges_the_reservation(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     with Ledger(journal, cap_usd=1.0) as ledger:
         with pytest.raises(KeyboardInterrupt):
-            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=_Raising(KeyboardInterrupt()), ledger=ledger)
+            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=_Raising(KeyboardInterrupt()), ledger=ledger, model_requested="jev-1.13.0")
     st = ledger_read(journal)
     assert outcomes(st) == ["unknown"] and st.outstanding == []
 
@@ -370,7 +375,7 @@ def test_interrupt_after_the_answer_but_before_settling(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     with Ledger(journal, cap_usd=1.0) as ledger:
         with pytest.raises(KeyboardInterrupt):
-            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=Answering(), ledger=ledger)
+            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=Answering(), ledger=ledger, model_requested="jev-1.13.0")
     st = ledger_read(journal)
     assert outcomes(st) == ["unknown"] and st.outstanding == []
 
@@ -389,7 +394,7 @@ def test_interrupt_inside_settle_is_not_settled_twice(tmp_path: Path, monkeypatc
 
         monkeypatch.setattr(ledger, "settle", settle)
         with pytest.raises(KeyboardInterrupt):
-            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=Cheap(), ledger=ledger)
+            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=Cheap(), ledger=ledger, model_requested="jev-1.13.0")
     assert calls == ["measured"]
 
 
@@ -401,6 +406,7 @@ def test_unsent_failure_is_charged_nothing(tmp_path: Path) -> None:
             {"q1": NOUL},
             backend=_Raising(BackendError("invalid_request", sent=False)),
             ledger=ledger,
+            model_requested="jev-1.13.0",
             max_retries=3,
         )
     assert recs[0]["error_code"] == "invalid_request"
@@ -435,6 +441,7 @@ def test_failed_settlement_sends_nothing_more(tmp_path: Path, monkeypatch, reach
                 {"q1": NOUL},
                 backend=Cheap(),
                 ledger=ledger,
+                model_requested="jev-1.13.0",
                 max_retries=3,
             )
     assert Cheap.calls == 1 and settles == ["measured"]
@@ -450,6 +457,7 @@ def test_empty_criteria_rejected_before_any_reservation(tmp_path: Path) -> None:
                 {"ok": NOUL, "bad": ChoiceQuestion(instructions="x", criteria={})},
                 backend=_Raising(AssertionError("must not be called")),
                 ledger=ledger,
+                model_requested="jev-1.13.0",
             )
     assert not journal.exists() or ledger_read(journal).settlements == []
 
@@ -549,7 +557,7 @@ def test_cli_live_probe_writes_records_and_hides_state(probe_files, live, capsys
     import logging
 
     monkeypatch.setattr(logging.getLogger("typesafe_sdk"), "level", logging.DEBUG)
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 0
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7") == 0
     out = capsys.readouterr()
     assert "TOP_SECRET" not in out.out + out.err
     summary = json.loads(out.out)
@@ -560,26 +568,26 @@ def test_cli_live_probe_writes_records_and_hides_state(probe_files, live, capsys
 
 
 def test_cli_live_needs_a_price(probe_files, live, capsys) -> None:
-    assert probe(probe_files, "--backend", "systemone") == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0") == 1
     assert "--usd-per-input-token" in _one_line_error(capsys)
     assert live.bodies == [] and not probe_files["ledger"].exists()
 
 
 def test_cli_live_rejects_served_model(probe_files, live, capsys) -> None:
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", "--served-model", "x") == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7", "--served-model", "x") == 1
     assert "--served-model" in _one_line_error(capsys)
 
 
 def test_cli_live_missing_key_is_one_line(probe_files, live, capsys, monkeypatch) -> None:
     monkeypatch.delenv("TYPESAFE_API_KEY")
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7") == 1
     assert "TYPESAFE_API_KEY" in _one_line_error(capsys)
     assert live.bodies == []
 
 
 def test_cli_live_without_extra_names_it(probe_files, capsys, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "typesafe_sdk", None)
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7") == 1
     assert "s1ops[typesafe]" in _one_line_error(capsys)
 
 
@@ -588,7 +596,7 @@ def test_cli_budget_stop_keeps_paid_records(probe_files, live, capsys) -> None:
     live.replies = [ok({"type": "noul", "noul": 0.6}, tokens=400)]  # 4e-5 measured per request, below `worst`
     # The cap admits the first reservation; spent 4e-5 plus the next reservation exceeds it.
     cap = worst + 1e-5
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", "--cap-usd", repr(cap)) == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7", "--cap-usd", repr(cap)) == 1
     line = _one_line_error(capsys)
     assert "1 records kept in" in line
     assert len(probe_files["out"].read_text().splitlines()) == 1
@@ -639,7 +647,7 @@ def test_cli_records_reach_disk_as_they_arrive(probe_files, live, capsys) -> Non
         return reply
 
     live.replies = [counting]
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 0
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7") == 0
     # The old output stands until the first record replaces it.
     assert seen == [50, 1, 2]
     assert len(probe_files["out"].read_text().splitlines()) == 3
@@ -674,7 +682,7 @@ def test_cli_output_failure_keeps_the_partial_output_message(probe_files, live, 
         return Full(raw, encoding=encoding)
 
     monkeypatch.setattr("s1ops.cli.os.fdopen", fdopen)
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7") == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7") == 1
     line = _one_line_error(capsys)
     assert "No space left on device" in line
     assert "already settled request was not written" in line and f"{ok_lines} records kept in" in line
@@ -688,7 +696,7 @@ def test_cli_overflowing_retry_after_never_prints_the_echoed_state(probe_files, 
             headers={"retry-after": "Sun, 25 Oct 2026 12:00:00 +999999999999999999999999"},
         )
     ]
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", "--max-retries", "0") == 0
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7", "--max-retries", "0") == 0
     out = capsys.readouterr()
     assert "TOP_SECRET" not in out.out + out.err
     assert json.loads(out.out)["n_failed"] == 3
@@ -707,7 +715,7 @@ def test_cli_overflowing_retry_after_never_prints_the_echoed_state(probe_files, 
 )
 def test_cli_rejects_reservation_inputs_before_touching_files(probe_files, live, capsys, flag, value) -> None:
     probe_files["out"].write_text("keep\n", encoding="utf-8")
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", flag, value) == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7", flag, value) == 1
     assert flag.lstrip("-").replace("-", "_") in _one_line_error(capsys)
     assert live.bodies == [] and not probe_files["ledger"].exists()
     assert probe_files["out"].read_text() == "keep\n"
@@ -723,7 +731,7 @@ def test_cli_rejects_reservation_inputs_before_touching_files(probe_files, live,
 def test_cli_failure_before_any_request_keeps_previous_output(probe_files, live, capsys, questions, extra) -> None:
     probe_files["out"].write_text("previous paid results\n", encoding="utf-8")
     probe_files["questions"].write_text(json.dumps({"questions": questions}), encoding="utf-8")
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", *extra) == 1
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7", *extra) == 1
     _one_line_error(capsys)
     assert live.bodies == []
     assert probe_files["out"].read_text() == "previous paid results\n"
@@ -756,6 +764,7 @@ def test_reservation_takes_the_backend_overhead_unless_given(tmp_path: Path, exp
             {"q1": NOUL},
             backend=backend(Server(ok({"type": "noul", "noul": 0.5}))),
             ledger=ledger,
+            model_requested="jev-1.13.0",
             reserve_overhead_tokens=explicit,
         )
     estimate = token_bound("s") + token_bound(json.dumps(NOUL.wire_dict()))
@@ -764,7 +773,7 @@ def test_reservation_takes_the_backend_overhead_unless_given(tmp_path: Path, exp
 
 @pytest.mark.parametrize("extra, overhead", [((), HttpSystemOneBackend.reserve_overhead_tokens), (("--reserve-overhead-tokens", "0"), 0.0)])
 def test_cli_overhead_default_is_the_backends(probe_files, live, capsys, extra, overhead) -> None:
-    assert probe(probe_files, "--backend", "systemone", "--usd-per-input-token", "1e-7", *extra) == 0
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7", *extra) == 0
     estimate = token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict()))
     reserved = _reserved(probe_files["ledger"])
     assert len(reserved) == 3 and all(r == pytest.approx((estimate + overhead) * 2e-6) for r in reserved)
@@ -785,7 +794,7 @@ def test_measured_short_state_bill_fits_the_default_reservation(tmp_path: Path, 
     b = HttpSystemOneBackend(usd_per_input_token=2e-6, api_key="k", base_url="https://api.test", transport=httpx2.MockTransport(server))
     with Ledger(tmp_path / "journal.jsonl", cap_usd=1.0) as ledger:
         call = lambda: run_batch(  # noqa: E731
-            [{"item_id": "i1", "state": state}], {"q1": question}, backend=b, ledger=ledger, reserve_overhead_tokens=overhead
+            [{"item_id": "i1", "state": state}], {"q1": question}, backend=b, ledger=ledger, model_requested="jev-1.13.0", reserve_overhead_tokens=overhead
         )
         if stops:
             with pytest.raises(LedgerUnusable):
@@ -799,7 +808,7 @@ def test_mock_backend_has_no_overhead(tmp_path: Path) -> None:
 
     journal = tmp_path / "journal.jsonl"
     with Ledger(journal, cap_usd=1.0) as ledger:
-        run_batch([{"item_id": "i1", "state": "s" * 2000}], {"q1": NOUL}, backend=DeterministicMockBackend(), ledger=ledger)
+        run_batch([{"item_id": "i1", "state": "s" * 2000}], {"q1": NOUL}, backend=DeterministicMockBackend(), ledger=ledger, model_requested="jev-1.13.0")
     estimate = token_bound("s" * 2000) + token_bound(json.dumps(NOUL.wire_dict()))
     assert _reserved(journal) == [pytest.approx(estimate * 2e-6)]
 
@@ -807,4 +816,4 @@ def test_mock_backend_has_no_overhead(tmp_path: Path) -> None:
 def test_budget_exceeded_before_first_call(tmp_path: Path) -> None:
     with Ledger(tmp_path / "j.jsonl", cap_usd=1e-9) as ledger:
         with pytest.raises(BudgetExceeded):
-            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=_Raising(AssertionError()), ledger=ledger)
+            run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=_Raising(AssertionError()), ledger=ledger, model_requested="jev-1.13.0")

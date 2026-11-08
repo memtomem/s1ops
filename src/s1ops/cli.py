@@ -895,7 +895,7 @@ def _cmd_drift(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-_DEFAULT_MODEL = {"mock": "jev-1.13.0", "systemone": "jev-1.13.0", "openai": "gpt-6-luna"}
+_MOCK_MODEL = "jev-1.13.0"
 
 
 def _probe_backend(args: argparse.Namespace):
@@ -903,6 +903,8 @@ def _probe_backend(args: argparse.Namespace):
         return DeterministicMockBackend(served_model=args.served_model or args.model)
     if args.served_model is not None:
         raise CliError("--served-model applies only to --backend mock")
+    if not args.model:
+        raise CliError(f"--backend {args.backend} needs --model: there is no default, since a server that echoes the request would report it as the model that answered")
     if args.usd_per_input_token is None:
         raise CliError(f"--backend {args.backend} needs --usd-per-input-token: the API reports tokens, not dollars")
     try:
@@ -975,8 +977,8 @@ def _cmd_probe(args: argparse.Namespace) -> int:
         check_states(states)
     except ValueError as e:
         raise CliError(f"{args.states}: {e}") from None
-    if args.model is None:
-        args.model = _DEFAULT_MODEL[args.backend]
+    if args.model is None and args.backend == "mock":
+        args.model = _MOCK_MODEL
     backend = _probe_backend(args)
     out_path = Path(args.output)
     ledger_path = Path(args.ledger)
@@ -1314,7 +1316,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_prb.add_argument("-o", "--output", required=True, help="probe records JSONL to write")
     p_prb.add_argument("--ledger", required=True, help="budget journal; created if absent")
     p_prb.add_argument("--cap-usd", type=float, default=1.00, help="hard spend cap; the run stops before a call whose worst-case cost would exceed it")
-    p_prb.add_argument("--model", default=None, help="model_requested sent to the backend (default: jev-1.13.0; gpt-6-luna for --backend openai)")
+    p_prb.add_argument("--model", default=None, help="model_requested sent to the backend; required for a live backend (the mock defaults to jev-1.13.0)")
     p_prb.add_argument("--backend", choices=["mock", "systemone", "openai"], default="mock", help="mock: offline deterministic answers; systemone: live POST /v1/systemone (typesafe extra, TYPESAFE_API_KEY); openai: live POST /v1/decisions (openai extra, OPENAI_API_KEY)")
     p_prb.add_argument("--served-model", default=None, help="model_served the mock backend reports (defaults to --model); set it differently to simulate a silent upgrade")
     p_prb.add_argument("--usd-per-input-token", type=float, default=None, help="price per billable input token; required for a live backend, which reports tokens, not dollars")

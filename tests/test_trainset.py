@@ -136,7 +136,8 @@ def test_no_rows_is_an_error_that_says_what_was_skipped(tmp_path: Path, capsys) 
 def test_a_name_no_server_could_report_is_refused(tmp_path: Path, capsys) -> None:
     source = _write(tmp_path / "r.jsonl", [_row("t0", "train")])
     assert _export(source, tmp_path / "m.json", checkpoint="two words") == 1
-    assert "two words" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "two words" in err and "1-128 characters" in err
 
 
 def test_reused_name_and_other_splits_are_reported_not_refused(tmp_path: Path, capsys) -> None:
@@ -450,12 +451,14 @@ def test_a_malformed_split_is_refused_before_anything_is_sent(bad) -> None:
 # ---- the documented sequence ----
 
 
-def test_the_readme_recipe_builds_rows_from_the_manifest(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_the_readme_recipe_builds_rows_from_the_manifest(tmp_path: Path, monkeypatch, wrapped: bool) -> None:
     readme = (Path(__file__).parent.parent / "README.md").read_text(encoding="utf-8")
     section = readme.split("## Fine-Tuning Around an External Trainer", 1)[1]
     recipe = re.search(r"```python\n(.*?)```", section, re.S).group(1)
     question = {"type": "noul", "instructions": "Is this urgent?", "x-s1-lint": {"ignore": ["JL012"]}}
-    (tmp_path / "questions.json").write_text(json.dumps({"urgent": question}), encoding="utf-8")
+    questions = {"urgent": question}
+    (tmp_path / "questions.json").write_text(json.dumps({"questions": questions} if wrapped else questions), encoding="utf-8")
     states = tmp_path / "states_local.jsonl"
     _write(states, [
         {"item_id": "a", "state": "state of a", "split": "train", "label": True},

@@ -23,6 +23,9 @@ Trained = Mapping[str, frozenset[ItemKey]]
 """`checkpoint -> (dataset, item_id)` of every item it was trained on, inherited ones included."""
 
 
+_NAME_RULE = "1-128 characters, an ASCII letter or digit and then ASCII letters, digits or ._:/@+-"
+
+
 class ManifestError(ValueError):
     """A training manifest that is malformed or cannot be built or used as asked."""
 
@@ -88,7 +91,7 @@ def build_manifest(
     checkpoint this one starts from; what it trained on is recorded as inherited.
     """
     if not MODEL_NAME.fullmatch(checkpoint):
-        raise ManifestError(f"checkpoint {checkpoint!r} is not a model name a server could report")
+        raise ManifestError(f"checkpoint {checkpoint!r} is not a model name: use {_NAME_RULE}")
     if parent is not None and parent.checkpoint == checkpoint:
         raise ManifestError(f"the parent manifest is for the same checkpoint {checkpoint!r}; name the new one differently")
     records = list(records)
@@ -189,7 +192,7 @@ def load_manifest(path: str | Path) -> TrainingManifest:
     except ValidationError as e:
         raise ManifestError(f"{path}: " + "; ".join(pydantic_errors(e))) from None
     if not MODEL_NAME.fullmatch(parsed.checkpoint):
-        raise ManifestError(f"{path}: checkpoint {parsed.checkpoint!r} is not a model name a server could report")
+        raise ManifestError(f"{path}: checkpoint {parsed.checkpoint!r} is not a model name: use {_NAME_RULE}")
     items = tuple(TrainingItem(i.dataset, i.item_id, i.question_id, i.label) for i in parsed.items)
     seen: set[tuple[ItemKey, str]] = set()
     for i in items:

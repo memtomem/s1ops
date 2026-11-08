@@ -250,14 +250,19 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 s1ops starts no training. It writes down what a checkpoint will train on and refuses to fit or evaluate that checkpoint on those items. The trainer is yours; [Kev](https://github.com/jaredpalmer/kev)'s `kev.train --data` takes the rows the recipe below writes.
 
 ```bash
-# 1. Give each states row a `split` (train, cal, eval); `s1 probe` copies it into its records, as it does `label`.
+# These run as written on the offline mock, which answers the same whatever the name, so its results judge nothing. Against a
+# real server, add to every probe: --backend systemone --base-url URL --usd-per-input-token RATE (see Live probes).
+
+# 1. Give each states row a `split` (train, cal, eval); `s1 probe` copies it into its records, as it does `label`:
+#    {"dataset": "tickets", "item_id": "t1", "state": "...", "split": "train", "label": true}
 s1 probe questions.json --no-expand-probes --model current-1 --states states_local.jsonl -o current.jsonl --ledger ledger.jsonl
 
 # 2. Name the new checkpoint and write what it trains on. `--parent previous_manifest.json` adds what a checkpoint it
 #    starts from trained on.
 s1 trainset export current.jsonl --split train --checkpoint tickets-r1 -o training_manifest.json
 
-# 3. Train outside s1ops, then serve the checkpoint under that name and probe the held-out items, with the cal and eval rows
+# 3. Build train.jsonl with the recipe below, train outside s1ops, then serve the checkpoint under that name and probe the
+#    held-out items, with the cal and eval rows
 #    of the states file in files of their own. Probe the current model on the same eval rows for step 4's drift.
 s1 probe questions.json --no-expand-probes --model current-1 --states states_eval.jsonl -o current_eval.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_cal.jsonl -o candidate_cal.jsonl --ledger ledger.jsonl
@@ -279,11 +284,13 @@ s1 drift current_eval.jsonl candidate_eval.jsonl
 ```python
 import json
 
-from s1ops.lint.loader import load_questions
-from s1ops.lint.rules import RULES
+from s1ops import question_id
+from s1ops.monitor.runner import probe_tasks
 
 manifest = json.load(open("training_manifest.json", encoding="utf-8"))
-wording = {s.qid: s.question.wire_dict() for s in load_questions("questions.json", frozenset(RULES)).specs}
+questions = json.load(open("questions.json", encoding="utf-8"))
+tasks = probe_tasks(questions.get("questions", questions), probe_mode=False)  # read as `s1 probe` reads the file
+wording = {question_id(t.question): t.question.wire_dict() for t in tasks}
 states = {}
 for line in open("states_local.jsonl", encoding="utf-8"):
     row = json.loads(line)
@@ -307,7 +314,7 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
 - The check runs only in a command given the flag. `s1 apply`, `s1 drift`, `s1 slice`, `s1 labelaudit` and the workbench do not take it, and `s1 policy tune --use-calib` does not look behind a stored `calib`: an `s1 fit` on trained items without the flag, followed by `s1 apply` on clean items, passes a checked `tune`. `fits.json` does not record that a check ran.
 - `--parent` covers ancestors exported through s1ops. A released base checkpoint's training set is unknown here.
 - Identity is exact. A near-duplicate or another item from a trained source is not refused, though it can inflate a score the same way.
-- `--model` is your claim about what answers. A server such as `kev.serve` echoes the requested name without checking it, so name every checkpoint differently: fits, policies and drift's model comparison key on that name and see two checkpoints under one name as one model. `s1 trainset export` reports `answered_as_checkpoint` when the source file already holds records under the name.
+- `--model` is your claim about what answers. A server such as `kev.serve` echoes the requested name without checking it, so name every checkpoint differently: fits, policies and drift's model comparison key on that name and see two checkpoints under one name as one model. A name is 1-128 characters, an ASCII letter or digit and then ASCII letters, digits or `._:/@+-`, the form a live backend accepts as `model_served`. `s1 trainset export` reports `answered_as_checkpoint` when the source file already holds records under the name.
 
 ---
 

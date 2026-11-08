@@ -62,6 +62,7 @@ from s1ops.improve.policy import (
     threshold_curve,
 )
 from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
+from s1ops.improve.trainset import Trained, TrainedItemError, build_manifest, check_not_trained, load_manifest, load_trained, save_manifest
 from s1ops.ledger.journal import (
     BudgetExceeded,
     Ledger,
@@ -138,6 +139,8 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
     "fit": ("fits file", "s1 fit"),
     "policy": ("policy file", "s1 policy tune"),
     "sheet": ("review sheet", "s1 labelaudit sheet"),
+    "training_manifest": ("training manifest", "s1 trainset export"),
+    "parent": ("parent training manifest", "s1 trainset export"),
 }
 
 
@@ -166,8 +169,28 @@ def _check_inputs(args: argparse.Namespace) -> None:
         return
     for dest, (what, producer) in _INPUTS.items():
         value = getattr(args, dest, None)
-        if value is not None:
-            _require_file(value, what, producer)
+        for one in value if isinstance(value, list) else [value] if value is not None else []:
+            _require_file(one, what, producer)
+
+
+def _selected(args: argparse.Namespace, sel: Selection) -> list[Group]:
+    """The groups `--question` and `--model` leave."""
+    return [
+        grp
+        for grp in sel.groups
+        if not (args.question and grp.question_id != args.question) and not (args.model and grp.model_served != args.model)
+    ]
+
+
+def _trained(args: argparse.Namespace, records: list[Record]) -> Trained:
+    """What `--training-manifest` says each checkpoint trained on, bound to the whole input file."""
+    paths = args.training_manifest or []
+    return load_trained(paths, [r.model_served for r in records], args.records) if paths else {}
+
+
+def _refuse_trained(args: argparse.Namespace, groups: list[Group], trained: Trained) -> None:
+    for grp in groups:
+        check_not_trained(grp.key, grp.items, trained, args.records)
 
 
 def _tuned_rows(records: list[Record]) -> dict[GroupKey, list[Record]]:
@@ -301,13 +324,12 @@ def _cmd_lint(args: argparse.Namespace) -> int:
 def _cmd_audit(args: argparse.Namespace) -> int:
     records = read_records(args.records)
     fits = load_fits(args.fit) if args.fit else []
+    trained = _trained(args, records)
     sel = select(records, split=args.split, allow_model_mismatch=True)
+    selected = _selected(args, sel)
+    _refuse_trained(args, selected, trained)
     reports = []
-    for grp in sel.groups:
-        if args.question and grp.question_id != args.question:
-            continue
-        if args.model and grp.model_served != args.model:
-            continue
+    for grp in selected:
         fit = fit_for(fits, grp.key)
         after_P = (
             transform(fit.method, fit.primitive, fit.params, grp.P)
@@ -330,13 +352,12 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 def _cmd_fit(args: argparse.Namespace) -> int:
     records, src_sha = read_records_hashed(args.records)
+    trained = _trained(args, records)
     sel = select(records, split=args.split, allow_model_mismatch=True)
+    selected = _selected(args, sel)
+    _refuse_trained(args, selected, trained)
     fits: list[Fit] = []
-    for grp in sel.groups:
-        if args.question and grp.question_id != args.question:
-            continue
-        if args.model and grp.model_served != args.model:
-            continue
+    for grp in selected:
         f = fit_group(
             grp,
             method=args.method,
@@ -412,14 +433,13 @@ def _check_policy_args(args: argparse.Namespace) -> None:
 def _cmd_policy(args: argparse.Namespace) -> int:
     _check_policy_args(args)
     records, src_sha = read_records_hashed(args.records, use_calib=args.use_calib)
+    trained = _trained(args, records)
     sel = select(records, allow_model_mismatch=True)
+    selected = _selected(args, sel)
+    _refuse_trained(args, selected, trained)
     if args.policy_cmd == "curve":
         curves: list[dict[str, Any]] = []
-        for grp in sel.groups:
-            if args.question and grp.question_id != args.question:
-                continue
-            if args.model and grp.model_served != args.model:
-                continue
+        for grp in selected:
             conf, correct = top_label(grp.P, grp.y)
             curves.append(
                 {
@@ -444,11 +464,6 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         raise CliError("--max-escalation sizes the F1 band, which --max-false-pass replaces; pass one of them")
     max_escalation = 0.35 if args.max_escalation is None else args.max_escalation
     tuned_rows = _tuned_rows(records) if args.use_calib else {}
-    selected = [
-        grp
-        for grp in sel.groups
-        if not (args.question and grp.question_id != args.question) and not (args.model and grp.model_served != args.model)
-    ]
     if false_pass is not None and selected and not any(grp.primitive == "noul" for grp in selected):
         raise CliError("--max-false-pass applies to noul groups, and none is selected")
     policies: list[PolicyEntry] = []
@@ -761,8 +776,40 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
 
 
 def _cmd_compare(args: argparse.Namespace) -> int:
-    rep = compare_records(args.primary, args.shadow)
+    rep = compare_records(args.primary, args.shadow, training_manifests=args.training_manifest or ())
     print(json.dumps(rep, indent=2, sort_keys=True))
+    return 0
+
+
+def _cmd_trainset(args: argparse.Namespace) -> int:
+    if not stat.S_ISREG(os.stat(args.records).st_mode):
+        raise CliError(f"{args.records}: must be a regular file: the manifest records its sha256, read after the records")
+    records = read_records(args.records)
+    parent = load_manifest(args.parent) if args.parent else None
+    built = build_manifest(
+        records, split=args.split, checkpoint=args.checkpoint, source_sha256=sha256_file(args.records), parent=parent
+    )
+    output = Path(args.output)
+    if output.exists():
+        for other in (args.records, args.parent):
+            if other and output.samefile(other):
+                raise CliError(f"--output {output} is the same file as {other}")
+    save_manifest(built.manifest, output)
+    summary: dict[str, Any] = {
+        "output": str(output),
+        "checkpoint": built.manifest.checkpoint,
+        "split": built.manifest.split,
+        "source_sha256": built.manifest.source_sha256,
+        "items": len(built.manifest.items),
+        "questions": len({i.question_id for i in built.manifest.items}),
+        "inherited_items": len(built.manifest.inherited_items),
+        "skipped": {"no_response": built.no_response, "unlabeled": built.unlabeled, "other_split": built.other_split},
+    }
+    if built.also_in_other_splits:
+        summary["also_in_other_splits"] = {"n": len(built.also_in_other_splits), "first": list(built.also_in_other_splits[0])}
+    if built.answered_as_checkpoint:
+        summary["answered_as_checkpoint"] = built.answered_as_checkpoint
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
@@ -1168,6 +1215,9 @@ _H_FIT_IN = "fits.json from `s1 fit`"
 _H_POLICY_IN = "policy.json from `s1 policy tune`"
 _H_FIT_IN_MEMORY = "fits.json from `s1 fit`; calibrates each input file in memory first, as `s1 apply --pass-through-unfitted` writes it: a record with a fit gets its `calib`, replacing a stored one, and any other keeps what it carries"
 _H_ALLOW_IN_SAMPLE = "with --fit, calibrate items the fit was trained on rather than exiting 2"
+_H_TRAINING_MANIFEST = (
+    "training manifest from `s1 trainset export`, repeatable: refuse (exit 2) a selected group whose model trained on any of its items"
+)
 _H_USE_CALIB = "use the calibrated probabilities written by `s1 apply` instead of the raw ones"
 _H_COST_S1 = "USD cost of one System 1 call"
 _H_COST_SYS2 = "USD cost of escalating one item to System 2 (LLM or human)"
@@ -1205,6 +1255,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_aud.add_argument("--bins", type=int, default=10, help="reliability/ECE bins")
     p_aud.add_argument("--boot", type=int, default=200, help="Monte Carlo replicates for the ECE noise floor and bootstrap CIs")
     p_aud.add_argument("--seed", type=int, default=0, help="random seed")
+    p_aud.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
     p_aud.set_defaults(func=_cmd_audit)
 
     # fit
@@ -1221,6 +1272,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_fit.add_argument("--model", default=None, help=_H_MODEL)
     p_fit.add_argument("--split", default=None, help="only records whose `split` field equals this; the fit is tagged `cal` when unset")
     p_fit.add_argument("--min-n", type=int, default=30, help="groups with fewer labeled records are still fitted but get a small-sample warning")
+    p_fit.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
     p_fit.set_defaults(func=_cmd_fit)
 
     # apply
@@ -1253,6 +1305,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="for noul groups, in place of the F1 band: the smallest cutoff at which at most this share of label-false items pass (p >= cutoff), written as a band with band_lo == band_hi",
     )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
+    p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
     p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve", **_FMT)
     p_pc.add_argument("records", help=_H_RECORDS)
     p_pc.add_argument("--question", default=None, help=_H_QUESTION)
@@ -1260,6 +1313,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pc.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
     p_pc.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
     p_pc.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
+    p_pc.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
     p_pol.set_defaults(func=_cmd_policy)
 
     # slice
@@ -1311,7 +1365,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp = sub.add_parser("compare", help="Multi-backend shadow comparison (McNemar-Holm)", **_FMT)
     p_cmp.add_argument("primary", help=f"primary backend {_H_RECORDS}")
     p_cmp.add_argument("shadow", help=f"shadow backend {_H_RECORDS} on the same items")
+    p_cmp.add_argument(
+        "--training-manifest",
+        action="append",
+        help="training manifest from `s1 trainset export`, repeatable: refuse (exit 2) a compared pair in which a side's model trained on the item",
+    )
     p_cmp.set_defaults(func=_cmd_compare)
+
+    # trainset
+    p_ts = sub.add_parser("trainset", help="Training sets for an external trainer (s1ops starts no training)", **_FMT)
+    sub_ts = p_ts.add_subparsers(dest="trainset_cmd", required=True)
+    p_tse = sub_ts.add_parser("export", help="Write the items and labels a checkpoint will train on (ids only, no state or wording)", **_FMT)
+    p_tse.add_argument("records", help=f"{_H_RECORDS}; a regular file")
+    p_tse.add_argument("-o", "--output", required=True, help="training manifest to write")
+    p_tse.add_argument("--split", required=True, help="the `split` to train on; the other splits stay for fitting and evaluation")
+    p_tse.add_argument("--checkpoint", required=True, help="the name the new checkpoint will answer under in `s1 probe --model`; unique per checkpoint")
+    p_tse.add_argument("--parent", default=None, help="manifest of the checkpoint this one starts from, whose trained items it inherits")
+    p_ts.set_defaults(func=_cmd_trainset)
 
     # judge
     p_jdg = sub.add_parser("judge", help="Rubric judge agreement & weighted kappa audit", **_FMT)
@@ -1436,6 +1506,10 @@ def main(argv: list[str] | None = None) -> int:
         if debug:
             raise
         return _fail(str(e), _FIT_APPLY_EXIT[e.kind])
+    except TrainedItemError as e:
+        if debug:
+            raise
+        return _fail(str(e), EXIT_IN_SAMPLE)
     except OSError as e:
         if debug:
             raise

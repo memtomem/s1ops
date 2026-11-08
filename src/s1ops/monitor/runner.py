@@ -209,6 +209,9 @@ def check_states(states: Sequence[Any]) -> None:
         dataset = row.get("dataset")
         if dataset is not None and (not isinstance(dataset, str) or not dataset):
             raise ValueError(f"row {i}: 'dataset' must be a non-empty string, got {type(dataset).__name__}")
+        split = row.get("split")
+        if split is not None and (not isinstance(split, str) or not split):
+            raise ValueError(f"row {i}: 'split' must be a non-empty string, got {type(split).__name__}")
         key = (row.get("dataset", "default"), str(item_id))
         if key in seen:
             raise ValueError(f"row {i} is the same item as row {seen[key]}: (dataset, item_id) = {key!r}")
@@ -428,6 +431,8 @@ def run_batch(
                 "primitive": q_model.type,
                 "model_requested": model_requested,
             }
+            if item.get("split") is not None:
+                rec["split"] = item["split"]
             if error is None:
                 rec["model_served"] = resp.model_served
                 rec["latency_ms"] = resp.latency_ms

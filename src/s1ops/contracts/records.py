@@ -14,6 +14,7 @@ import io
 import json
 import math
 import os
+import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -38,6 +39,8 @@ MAX_SCORE_LEVEL = 2**53
 """Every level up to it is an exact float, so two levels never round to one and no sum over levels
 overflows."""
 _MAX_LEVEL_DIGITS = 20
+# `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
+MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 
 
 class RecordError(ValueError):

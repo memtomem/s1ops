@@ -157,6 +157,7 @@ def test_unsupported_question_is_refused_before_any_reservation(tmp_path: Path) 
                 {"ok": NOUL, "bad": NoulQuestion(instructions="x", criteria={"true": "yes"})},
                 backend=backend(server),
                 ledger=ledger,
+                model_requested="gpt-6-luna",
             )
     assert server.bodies == [] and not journal.exists()
 
@@ -317,6 +318,7 @@ def test_error_with_top_level_usage_is_measured_and_overrun_stops(tmp_path: Path
                 {"q1": NOUL},
                 backend=backend(server),
                 ledger=ledger,
+                model_requested="gpt-6-luna",
                 max_retries=2,
                 sleep=lambda s: None,
             )
@@ -341,7 +343,7 @@ def test_429_waits_for_retry_after(tmp_path: Path) -> None:
     server = Server(httpx2.Response(429, headers={"retry-after-ms": "300"}), decision(PRED))
     journal = tmp_path / "journal.jsonl"
     with Ledger(journal, cap_usd=1.0) as ledger:
-        recs = run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=backend(server), ledger=ledger, max_retries=1, sleep=sleeps.append)
+        recs = run_batch([{"item_id": "i1", "state": "s"}], {"q1": NOUL}, backend=backend(server), ledger=ledger, model_requested="gpt-6-luna", max_retries=1, sleep=sleeps.append)
     assert sleeps == [0.3] and recs[0]["p"] == 0.5
     assert outcomes(ledger_read(journal)) == ["unknown", "measured"]
 
@@ -485,15 +487,15 @@ def _one_line_error(capsys) -> str:
     return err[0]
 
 
-def test_cli_openai_probe_defaults_to_its_model(probe_files, live, capsys) -> None:
-    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7", "--no-expand-probes") == 0
+def test_cli_openai_probe_sends_the_given_model(probe_files, live, capsys) -> None:
+    assert probe(probe_files, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-7", "--no-expand-probes") == 0
     assert json.loads(capsys.readouterr().out)["n_records"] == 1
     assert [b["model"] for b in live.bodies] == ["gpt-6-luna"]
     assert SECRET not in probe_files["out"].read_text() + probe_files["ledger"].read_text()
 
 
 def test_cli_openai_probe_expands_probes(probe_files, live, capsys) -> None:
-    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7") == 0
+    assert probe(probe_files, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-7") == 0
     assert [b["questions"][0]["type"] for b in live.bodies] == ["predicate", "choice", "predicate"]
 
 
@@ -501,32 +503,27 @@ def test_cli_openai_refuses_an_unsupported_question_before_the_ledger(probe_file
     probe_files["questions"].write_text(
         json.dumps({"questions": {"q1": {"type": "noul", "instructions": "x", "criteria": {"true": "yes"}}}}), encoding="utf-8"
     )
-    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7") == 1
+    assert probe(probe_files, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-7") == 1
     assert "no criteria" in _one_line_error(capsys)
     assert live.bodies == [] and not probe_files["ledger"].exists()
 
 
 def test_cli_openai_missing_key_is_one_line(probe_files, live, capsys, monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY")
-    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7") == 1
+    assert probe(probe_files, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-7") == 1
     assert "OPENAI_API_KEY" in _one_line_error(capsys)
 
 
 def test_cli_openai_without_extra_names_it(probe_files, capsys, monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "openai", None)
-    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7") == 1
+    assert probe(probe_files, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-7") == 1
     assert "s1ops[openai]" in _one_line_error(capsys)
 
 
 def test_cli_openai_reservation_includes_its_overhead(probe_files, live, capsys) -> None:
     from s1ops.ledger.journal import token_bound
 
-    assert probe(probe_files, "--backend", "openai", "--usd-per-input-token", "1e-7", "--no-expand-probes") == 0
+    assert probe(probe_files, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-7", "--no-expand-probes") == 0
     reserved = [json.loads(l)["worst_usd"] for l in probe_files["ledger"].read_text().splitlines() if json.loads(l).get("event") == "reserve"]
     estimate = token_bound(SECRET) + token_bound(json.dumps(NOUL.wire_dict()))
     assert reserved == [pytest.approx((estimate + OpenAIDecisionsBackend.reserve_overhead_tokens) * 2e-6)]
-
-
-def test_cli_mock_and_systemone_keep_their_default_model(probe_files, capsys) -> None:
-    assert probe(probe_files, "--no-expand-probes") == 0
-    assert {json.loads(line)["model_requested"] for line in probe_files["out"].read_text().splitlines()} == {"jev-1.13.0"}

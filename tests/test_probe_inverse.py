@@ -128,6 +128,7 @@ def test_run_batch_library_call_takes_dicts_with_extensions(tmp_path: Path) -> N
             {"positive": {**BASE, "x-s1-lint": {"inverse": SUPPLIED, "ignore": ["JL040"]}}},
             backend=DeterministicMockBackend(served_model="m"),
             ledger=ledger,
+            model_requested="jev-1.13.0",
             probe_mode=True,
         )
     assert [(r["probe_role"], r.get("probe_inverse")) for r in recs] == [("noul", None), ("twin", None), ("inverse", "supplied")]
@@ -171,7 +172,7 @@ def test_backend_refusal_of_a_supplied_inverse_is_one_line_before_ledger_or_outp
     monkeypatch.setattr(OpenAIDecisionsBackend, "close", lambda self: (closed.append(True), real_close(self)))
     (tmp_path / "out.jsonl").write_text("previous\n", encoding="utf-8")
     predicate = {"type": "predicate", "instructions": "Is it positive?", "x-s1-lint": {"inverse": SUPPLIED}}
-    rc, out, ledger = _probe(tmp_path, {"pos": predicate}, "--backend", "openai", "--usd-per-input-token", "1e-6")
+    rc, out, ledger = _probe(tmp_path, {"pos": predicate}, "--backend", "openai", "--model", "gpt-6-luna", "--usd-per-input-token", "1e-6")
     assert rc == 1
     err = capsys.readouterr().err.strip().splitlines()
     assert err == [f"s1: {tmp_path / 'q.json'}: question 'pos' (inverse probe): an OpenAI predicate has no criteria; fold them into the instructions"]

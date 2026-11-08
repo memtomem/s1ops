@@ -99,7 +99,7 @@ def test_budget_guarded_probe_runner_and_zero_state_privacy(tmp_path: Path) -> N
     tiny_journal = tmp_path / "tiny.jsonl"
     with Ledger(tiny_journal, cap_usd=1e-9) as tiny_ledger:
         with pytest.raises(BudgetExceeded):
-            run_batch(states, {"wire": q}, backend=backend, ledger=tiny_ledger)
+            run_batch(states, {"wire": q}, backend=backend, ledger=tiny_ledger, model_requested="jev-1.13.0")
 
 
 def test_runtime_decision_gate_and_cli_web(tmp_path: Path) -> None:
@@ -227,7 +227,7 @@ def test_bad_state_rows_are_refused_before_any_reservation(tmp_path: Path, rows,
     journal = tmp_path / "journal.jsonl"
     with Ledger(journal, cap_usd=1.0) as ledger:
         with pytest.raises(ValueError) as info:
-            run_batch(rows, {"q": NoulQuestion(instructions="x?")}, backend=_NeverCalled(), ledger=ledger)
+            run_batch(rows, {"q": NoulQuestion(instructions="x?")}, backend=_NeverCalled(), ledger=ledger, model_requested="jev-1.13.0")
     assert str(info.value) == message
     # Messages carry the row and the type, never a state value.
     assert "987654321" not in str(info.value)
@@ -247,5 +247,6 @@ def test_integer_item_ids_and_missing_dataset_are_accepted(tmp_path: Path) -> No
             {"q": NoulQuestion(instructions="x?")},
             backend=DeterministicMockBackend(),
             ledger=ledger,
+            model_requested="jev-1.13.0",
         )
     assert [(r["dataset"], r["item_id"]) for r in recs] == [("default", "7"), (None, "b"), ("other", "7"), ("default", "b")]

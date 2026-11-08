@@ -499,7 +499,8 @@ def test_the_issue_paths_print_one_line(tmp_path: Path, capsys, path: str) -> No
         args = ["export", "phoenix", _write_rows(tmp_path / "r.jsonl", [_record(1)]), "-o", out,
                 "--policy", _policy_file(tmp_path / "p.json")]
         expected = (f"s1: {tmp_path / 'r.jsonl'}: line 1: policy for q\\nextra (m) was tuned on calibrated probabilities and this record has "
-                    "none; run `s1 apply` first (`--pass-through-unfitted` keeps records of models it has no fit for)\n")
+                    "none; run `s1 apply` first (`--pass-through-unfitted` keeps records of models it has no fit for), "
+                    "or pass `s1 drift` or `s1 export` a `--fit` with a fit for this group\n")
     elif path == "other-fit":
         args = ["export", "phoenix", _write_rows(tmp_path / "r.jsonl", [_record(1, calib={"p": 0.6, "fit_sha256": FIT_B})]),
                 "-o", out, "--policy", _policy_file(tmp_path / "p.json", fit_sha256=FIT_A)]

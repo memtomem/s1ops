@@ -129,7 +129,10 @@
     - 플래그를 주면 fit이 없는 레코드(다른 모델·질문·primitive, 즉 `fit_for`가 `None`)는 입력 행 그대로(있던 `calib` 포함) 쓰고, stdout에 `{"calibrated": n, "passed_through": [{question_id, model_served, primitive, n, reason}]}`(처음 나온 순서) 출력. 하나도 보정하지 않아도 exit 0(요약에 `calibrated: 0`). 플래그 없으면 출력·exit 3 그대로
     - fit이 있는 그룹은 그대로 거부: class 불일치 exit 1, in-sample exit 2(`--allow-in-sample`이면 보정하고 `in_fit_sample` 표시)
     - 라우팅 거부 메시지가 이 플래그를 안내
-    - 보류(B안): drift/export/SDK/web에서 `--fit`으로 메모리 보정. 보정을 두 번째 장소에서 계산하는 데서 생기는 설계 항목(gate와 bit 동일 helper, 전체 분포 Brier, class 불일치 오류 타입, in-sample 처리, 저장된 `calib`과 fit 우선순위, web의 `fits.json`)이 그대로 남아 #21에 열어 둠
+  - [x] **`s1 drift --fit`, `s1 export --fit`** (#21 B안): 입력 파일마다 `s1 apply --pass-through-unfitted`를 돌리고 그 결과로 명령을 실행하는 것과 같음. A안 때 보류한 이유였던 "보정을 두 번째 장소에서 계산"을 피하려고 `s1 apply`의 루프를 `improve/calibrate.py::apply_fits`로 옮겨 공유
+    - in-sample은 exit 2(`--allow-in-sample`), class 불일치는 exit 1, fit이 있는 레코드는 저장된 `calib`을 교체하고 나머지는 유지. 리포트와 export 파일은 `s1 apply` 경로와 같으므로 `ROUTING_RULE`은 그대로
+    - `s1 drift --fit`은 `--policy`나 `--calibrated`가 필요. SDK는 `fits=` 인자 대신 `apply_fits`를 조합
+    - web은 제외(소유자 결정): `/api/drift`의 400 메시지로 따라 할 수 있고, `fits.json` 자동 적용은 읽기만 하던 화면이 저장된 `calib`을 바꾸는 일이 됨
   - [x] **데모 choice/score 레코드** (#16): 별도 파일 `records_categorical_train.jsonl` / `records_categorical.jsonl`(choice `support_intent`, score `urgency` 각 150 + 150, `jev-1.13.0`)과 `fits_categorical.json` / `policy_categorical.json`. README walkthrough가 categorical fit → apply → audit → tune → `gate --probs` → export를 실제 정책으로 실행. `questions.json`에 score 질문 `urgency` 추가(`s1 probe` 호출 160건 증가). 별도 난수열이라 기존 noul 파일은 그대로(파일별 digest가 main과 같음). web workbench는 noul 파일만 읽음
 
 ---

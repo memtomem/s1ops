@@ -90,7 +90,8 @@ def policy_distribution(policy: PolicyEntry, record: Record) -> tuple[tuple, tup
             record.line,
             f"policy for {policy.question_id} ({policy.model_served}) was tuned on calibrated "
             "probabilities and this record has none; run `s1 apply` first "
-            "(`--pass-through-unfitted` keeps records of models it has no fit for)",
+            "(`--pass-through-unfitted` keeps records of models it has no fit for), "
+            "or pass `s1 drift` or `s1 export` a `--fit` with a fit for this group",
             path=record.path,
         )
     if policy.calibrated and policy.fit_sha256 is not None:

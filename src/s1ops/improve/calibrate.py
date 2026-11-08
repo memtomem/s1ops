@@ -3,7 +3,8 @@
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from scipy.special import expit, log_expit, log_softmax, logit, softmax
 
 from s1ops.contracts._validation import pydantic_errors, read_json_file
-from s1ops.contracts.records import Group, GroupKey, ItemKey, Record, without_state
+from s1ops.contracts.records import Group, GroupKey, ItemKey, Record, read_row, reparse, without_state
 from s1ops.eval.metrics import EPS, log_loss
 
 FIT_SCHEMAS = ("jev-calib-fit/2", "s1-calib-fit/1")
@@ -23,6 +24,18 @@ LOG_T_BOUNDS = (math.log(0.01), math.log(100.0))
 
 class FitError(ValueError):
     pass
+
+
+class FitApplyError(FitError):
+    """`apply_fits` refused a record. Carries its 1-based line, its file (`Record.path`, `None` for a
+    record built by `parse_record`) and why: `kind` is `"in_sample"`, `"model_mismatch"` (a fit exists
+    for this question and primitive, under another model) or `"other"`. The message starts with the
+    file when there is one, as `RecordError` does."""
+
+    def __init__(self, record: Record, kind: str, message: str) -> None:
+        self.line, self.path, self.kind = record.line, record.path, kind
+        where = f"line {record.line}" if record.path is None else f"{record.path}: line {record.line}"
+        super().__init__(f"{where}: {message}")
 
 
 @dataclass(frozen=True)
@@ -341,3 +354,84 @@ def apply_to_record(fit: Fit, record: Record, *, in_fit_sample: bool = False) ->
         calib["probabilities"] = {str(c): float(q) for c, q in zip(fit.classes, Q)}
         calib["score"] = float((np.asarray(fit.classes, dtype=float) * Q).sum())
     return {**without_state(record.raw), "calib": calib}
+
+
+@dataclass(frozen=True)
+class AppliedFits:
+    """What `apply_fits` produced: the output of `s1 apply`, before it is written anywhere."""
+
+    lines: list[str]
+    """One per input record, as `s1 apply` writes them (keys sorted, no newline). A Choice record's
+    classes follow key order, and under a policy a tied answer's `predicted` follows its classes."""
+    calibrated: int
+    passed_through: list[dict]
+    """One `{question_id, model_served, primitive, n, reason}` per group left without a fit, in the order first seen."""
+    sources: list[Record] = field(repr=False)
+
+    @property
+    def records(self) -> list[Record]:
+        """`lines` read back as a records file is read, keeping each input record's line and path, so
+        a report over them equals one over the written file."""
+        return [read_row(text, src.line, src.path) for text, src in zip(self.lines, self.sources)]
+
+    def summary(self) -> dict:
+        return {"calibrated": self.calibrated, "passed_through": self.passed_through}
+
+
+def apply_fits(
+    records: Iterable[Record],
+    fits: list[Fit],
+    *,
+    allow_in_sample: bool = False,
+    pass_through_unfitted: bool = False,
+) -> AppliedFits:
+    """Calibrate each record with its group's fit, adding or replacing `calib` and leaving out `state`.
+
+    The one apply path: `s1 apply` writes the result, and `s1 drift --fit` and `s1 export --fit` read
+    it in memory. Each record is first re-parsed from its `raw` on the raw distribution, with the
+    default `sum_tol`, so the result does not depend on how the caller parsed it. A record without an
+    answer is kept as it is. Raises `FitApplyError` for an in-sample item (unless `allow_in_sample`),
+    for a record of a fitted group whose classes differ from the fit's, and for a record with no fit
+    (unless `pass_through_unfitted`, which keeps it, and any `calib` it carries, unchanged). Raises
+    `FitError` for a repeated group key in `fits`, as `load_fits` does.
+    """
+    keys = [x.key for x in fits]
+    repeated = sorted({k for k in keys if keys.count(k) > 1})
+    if repeated:
+        raise FitError(f"more than one fit for {repeated}")
+    in_sample_items = fitted_items(fits)
+    sources: list[Record] = []
+    rows: list[dict] = []
+    calibrated = 0
+    passed: dict[GroupKey, dict] = {}
+    for record in records:
+        rec = reparse(record)
+        sources.append(rec)
+        if rec.model_served is None:
+            rows.append(without_state(rec.raw))
+            continue
+        fit = fit_for(fits, rec.key)
+        if fit is None:
+            reason = refusal(fits, rec.key, rec.classes)
+            if pass_through_unfitted:
+                qid, served, primitive = rec.key
+                group = passed.setdefault(rec.key, {"question_id": qid, "model_served": served, "primitive": primitive, "n": 0, "reason": reason})
+                group["n"] += 1
+                rows.append(without_state(rec.raw))
+                continue
+            kind = "model_mismatch" if _fitted_under_another_model(fits, rec.key) else "other"
+            raise FitApplyError(rec, kind, f"refusing to apply fit: {reason}")
+        problem = refusal(fits, rec.key, rec.classes)
+        if problem is not None:
+            raise FitApplyError(rec, "other", f"refusing to apply fit: {problem}")
+        in_sample = rec.item in in_sample_items[fit.key]
+        if in_sample and not allow_in_sample:
+            raise FitApplyError(rec, "in_sample", f"refusing in-sample calibration apply on {rec.item}; pass --allow-in-sample to override")
+        rows.append(apply_to_record(fit, rec, in_fit_sample=in_sample))
+        calibrated += 1
+    return AppliedFits([json.dumps(row, sort_keys=True) for row in rows], calibrated, list(passed.values()), sources)
+
+
+def _fitted_under_another_model(fits: list[Fit], key: GroupKey) -> bool:
+    qid, _, primitive = key
+    return any(x.question_id == qid and x.primitive == primitive for x in fits)

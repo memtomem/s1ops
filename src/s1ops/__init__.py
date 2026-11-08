@@ -35,8 +35,11 @@ if TYPE_CHECKING:
     from s1ops.eval.audit import audit_group
     from s1ops.eval.compare import compare_records
     from s1ops.improve.calibrate import (
+        AppliedFits,
         Fit,
+        FitApplyError,
         FitError,
+        apply_fits,
         fit_for,
         fit_group,
         load_fits,
@@ -92,6 +95,9 @@ _LAZY = {
     "compare_records": "s1ops.eval.compare",
     "Fit": "s1ops.improve.calibrate",
     "FitError": "s1ops.improve.calibrate",
+    "FitApplyError": "s1ops.improve.calibrate",
+    "AppliedFits": "s1ops.improve.calibrate",
+    "apply_fits": "s1ops.improve.calibrate",
     "fit_for": "s1ops.improve.calibrate",
     "fit_group": "s1ops.improve.calibrate",
     "load_fits": "s1ops.improve.calibrate",
@@ -139,6 +145,9 @@ __all__ = [
     "load_policies",
     "Fit",
     "FitError",
+    "FitApplyError",
+    "AppliedFits",
+    "apply_fits",
     "fit_group",
     "transform",
     "load_fits",

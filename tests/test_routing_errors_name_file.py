@@ -49,7 +49,8 @@ def _name(row: dict) -> str:
 CASES = {
     "no-calib": (None, lambda row: (
         f"{_name(row)} was tuned on calibrated probabilities and this record has none; run `s1 apply` first "
-        "(`--pass-through-unfitted` keeps records of models it has no fit for)"
+        "(`--pass-through-unfitted` keeps records of models it has no fit for), "
+        "or pass `s1 drift` or `s1 export` a `--fit` with a fit for this group"
     )),
     "not-a-string": ({"p": 0.6, "fit_sha256": 7}, lambda row: "calib.fit_sha256 must be a string, got 7"),
     "no-fit": ({"p": 0.6}, lambda row: (

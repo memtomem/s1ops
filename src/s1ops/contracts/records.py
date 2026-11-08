@@ -9,6 +9,8 @@ across groups: a different wording, option order or served model is a different 
 distribution.
 """
 
+import hashlib
+import io
 import json
 import math
 import os
@@ -16,6 +18,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -321,15 +324,21 @@ def read_records(
     require_answer: bool = True,
     use_calib: bool = False,
 ) -> list[Record]:
-    records = []
     # Text mode keeps universal newlines; surrogateescape lets a line that is not UTF-8 be refused
     # with its own number instead of failing a read-ahead block with a byte offset.
     with open(path, encoding="utf-8", errors="surrogateescape") as f:
-        for n, text in enumerate(f, start=1):
-            if not text.strip():
-                continue
-            records.append(read_row(text, n, path, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib))
-    return records
+        return _read_lines(f, path, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib)
+
+
+def read_records_hashed(path: str | Path, *, use_calib: bool = False) -> tuple[list[Record], str]:
+    """`read_records`, plus the SHA-256 of the bytes it parsed, from one read: a FIFO has only one."""
+    data = Path(path).read_bytes()
+    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="surrogateescape") as f:
+        return _read_lines(f, path, use_calib=use_calib), hashlib.sha256(data).hexdigest()
+
+
+def _read_lines(lines: Iterable[str], path: str | Path, **options: Any) -> list[Record]:
+    return [read_row(text, n, path, **options) for n, text in enumerate(lines, start=1) if text.strip()]
 
 
 def read_row(

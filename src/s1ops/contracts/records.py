@@ -16,7 +16,7 @@ import math
 import os
 import re
 from collections import Counter, defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -130,6 +130,32 @@ def _probability(value: object, what: str, line: int) -> float:
     if not 0.0 <= x <= 1.0:
         raise RecordError(line, f"{what} must be in [0, 1], got {x!r}")
     return x
+
+
+def label_problem(primitive: str, label: object, options: Collection[Any]) -> str | None:
+    """Why `label` cannot label a `primitive` record answering over `options`, or `None`.
+
+    `options` holds a choice's option names or a score's integer levels; a noul has none. The one label
+    rule: the parser applies it to a record, `check_labels` to a states row before anything is sent.
+    """
+    if label is None:
+        return None
+    shown = short_repr(label)
+    if primitive == "noul":
+        return None if isinstance(label, bool) else f"noul label must be a JSON boolean, got {shown}"
+    if primitive == "choice":
+        if not isinstance(label, str):
+            return f"choice label must be a string, got {shown}"
+        return None if label in options else f"choice label {shown} is not one of the options {list(options)}"
+    if isinstance(label, bool) or not isinstance(label, int):
+        return f"score label must be an integer level, got {shown}"
+    return None if label in options else f"score label {shown} is not one of the levels {sorted(options)}"
+
+
+def _check_label(primitive: str, label: object, options: Collection[Any], line: int) -> None:
+    problem = label_problem(primitive, label, options)
+    if problem is not None:
+        raise RecordError(line, problem)
 
 
 def _string(value: object, what: str, line: int) -> str:
@@ -293,8 +319,7 @@ def _parse_record(
     if primitive == "noul":
         p_raw = _probability(row["p"], "p", line)
         p = _probability(calib["p"], "calib.p", line) if calib and "p" in calib else p_raw
-        if label is not None and not isinstance(label, bool):
-            raise RecordError(line, f"noul label must be a JSON boolean, got {label!r}")
+        _check_label(primitive, label, (), line)
         return Record(label=label, classes=(False, True), probs=(1.0 - p, p), **common)
 
     _probability(row["confidence"], "confidence", line)
@@ -307,10 +332,7 @@ def _parse_record(
         choice = _string(row["choice"], "choice", line)
         if choice not in dist_raw:
             raise RecordError(line, f"choice {choice!r} is not one of the probability keys {sorted(dist_raw)}")
-        if label is not None and not isinstance(label, str):
-            raise RecordError(line, f"choice label must be a string, got {label!r}")
-        if label is not None and label not in dist_raw:
-            raise RecordError(line, f"choice label {label!r} is not one of the options {list(dist_raw)}")
+        _check_label(primitive, label, dist_raw, line)
         classes: tuple = tuple(dist_raw)
         probs = tuple(dist[c] / total for c in classes)
     else:
@@ -322,10 +344,7 @@ def _parse_record(
         except ValueError as e:
             raise RecordError(line, str(e)) from None
         _number(row["score"], "score", line)
-        if label is not None and (isinstance(label, bool) or not isinstance(label, int)):
-            raise RecordError(line, f"score label must be an integer level, got {label!r}")
-        if label is not None and label not in levels:
-            raise RecordError(line, f"score label {label} is not one of the levels {sorted(levels)}")
+        _check_label(primitive, label, levels, line)
         classes = tuple(sorted(levels))
         probs = tuple(levels[c] / total for c in classes)
     return Record(label=label, classes=classes, probs=probs, **common)

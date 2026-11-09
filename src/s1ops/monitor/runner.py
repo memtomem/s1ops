@@ -15,7 +15,7 @@ Key guarantees:
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -30,6 +30,7 @@ from s1ops.contracts.questions import (
     ScoreQuestion,
     question_id,
 )
+from s1ops.contracts.records import ANSWER_KEYS, label_problem, read_row
 from s1ops.ledger.journal import BudgetExceeded, Ledger, LedgerUnusable, Reservation, token_bound
 from s1ops.lint.loader import parse_question
 from s1ops.lint.rules import RULES
@@ -37,6 +38,9 @@ from s1ops.lint.rules import RULES
 
 @dataclass(frozen=True)
 class BackendResponse:
+    """What a backend returns for one question. `run_batch` keeps only `answer`'s `ANSWER_KEYS` for the
+    question's primitive, and an answer it could not read back as a record is an `invalid_response`."""
+
     model_served: str
     answer: dict[str, Any]
     cost_usd: float
@@ -218,6 +222,30 @@ def check_states(states: Sequence[Any]) -> None:
         seen[key] = i
 
 
+def _label_options(question: QuestionModel) -> Collection[Any]:
+    """The options a label of this question names: what the shipped backends require a response's keys to be."""
+    if isinstance(question, ChoiceQuestion):
+        return list(question.criteria)
+    if isinstance(question, ScoreQuestion):
+        return range(len(question.criteria))
+    return ()
+
+
+def check_labels(states: Sequence[Mapping[str, Any]], work_questions: Sequence[ProbeTask | tuple[str, str, QuestionModel]]) -> None:
+    """Reject a `label` the records it goes onto could not hold, before anything is reserved.
+
+    Run after `check_states`. One `label` goes onto the record of every question in `LABELED_ROLES`, so it
+    has to suit each of them. Refused whether the call would have answered or not: the reader ignores a
+    label on a no-answer record, but a run should not start on a file that is wrong.
+    """
+    for i, row in enumerate(states, start=1):
+        for name, role, q, *_ in work_questions:
+            if role in LABELED_ROLES:
+                problem = label_problem(q.type, row.get("label"), _label_options(q))
+                if problem is not None:
+                    raise ValueError(f"row {i}: question {name!r}: {problem}")
+
+
 def check_reservation(worst_usd_per_token: float, reserve_overhead_tokens: float) -> None:
     """Reject reservation inputs that would collapse every reservation to the $1e-6 floor."""
     for name, value, low in (
@@ -238,11 +266,33 @@ def _settle_failure(ledger: Ledger, reservation: Reservation, error: BackendErro
         ledger.settle(reservation, outcome="unknown")
 
 
+def _readable(record: Mapping[str, Any]) -> bool:
+    """Whether a reader would take `record` as `s1 probe` writes it. Over the dumped text, since the parser
+    does not look at `latency_ms` or other fields it does not read, and `NaN` only shows there."""
+    try:
+        read_row(json.dumps(record, sort_keys=True), 1, None)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    return True
+
+
+def _answered_record(envelope: Mapping[str, Any], resp: BackendResponse, primitive: str, tail: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The record of an answer, or `None` when no reader would take it. Only the answer keys are copied, so
+    nothing a backend returns can set `state`, an identity field or a `label`."""
+    if not isinstance(resp.answer, Mapping):
+        return None
+    answer = {key: value for key, value in resp.answer.items() if key in ANSWER_KEYS[primitive]}
+    record = {**envelope, "model_served": resp.model_served, "latency_ms": resp.latency_ms, **answer, **tail}
+    return record if _readable(record) else None
+
+
 def _backoff_s(attempt: int, initial: float, maximum: float) -> float:
     return min(maximum, initial * 2**attempt)
 
 
 _KNOWN_RULES = frozenset(RULES)
+LABELED_ROLES = ("primary", "noul")
+"""The probe roles a states row's `label` is copied to; a twin or inverse answers another wording."""
 
 
 class ProbeTask(NamedTuple):
@@ -341,6 +391,11 @@ def run_batch(
     keeps what it already paid for. A measured cost above its reservation raises `LedgerUnusable` after
     that record is passed on.
 
+    Every record is one `read_records` takes: a `label` is checked before anything is reserved
+    (`check_labels`), and a response that would not read back is settled as the `invalid_response` a
+    shipped backend raises, not retried, and recorded with no answer. A `cost_usd` that is neither valid
+    nor `None` still raises from `Ledger.settle`.
+
     Never writes raw `state` into returned `s1-record/1` dicts or ledger metadata.
     """
     if not isinstance(model_requested, str) or not model_requested:
@@ -348,6 +403,7 @@ def run_batch(
     work_questions = probe_tasks(questions, probe_mode=probe_mode)
 
     check_states(states)
+    check_labels(states, work_questions)
     check_questions(work_questions, backend)
     if reserve_overhead_tokens is None:
         reserve_overhead_tokens = getattr(backend, "reserve_overhead_tokens", 0.0)
@@ -365,6 +421,25 @@ def run_batch(
             q_wire = json.dumps(q_model.wire_dict())
             est_tokens = token_bound(state_text) + token_bound(q_wire) + reserve_overhead_tokens
             worst_usd = max(1e-6, round(est_tokens * worst_usd_per_token, 8))
+            envelope: dict[str, Any] = {
+                "schema": "s1-record/1",
+                "dataset": dataset,
+                "item_id": item_id,
+                "state_sha256": state_sha,
+                "question_id": qid,
+                "primitive": q_model.type,
+                "model_requested": model_requested,
+            }
+            if item.get("split") is not None:
+                envelope["split"] = item["split"]
+            tail: dict[str, Any] = {}
+            if "label" in item and role in LABELED_ROLES:
+                tail["label"] = item["label"]
+            if probe_mode and role in ("noul", "twin", "inverse"):
+                tail["probe_role"] = role
+                tail["probe_question"] = base_name
+                if inverse_source is not None:
+                    tail["probe_inverse"] = inverse_source
 
             attempt = 0
             refused: BudgetExceeded | None = None
@@ -395,6 +470,11 @@ def run_batch(
                     except BackendError as e:
                         error = e
                     if error is None:
+                        # Before settling: `Ledger.settle` itself refuses a `model_served` JSON cannot hold.
+                        answered = _answered_record(envelope, resp, q_model.type, tail)
+                        if answered is None:
+                            error = BackendError("invalid_response", sent=True, usage_usd=resp.cost_usd)
+                    if error is None:
                         cost_usd, model_served = resp.cost_usd, resp.model_served
                     # From here on a failure is the settlement's own; settling again could charge twice.
                     settling = True
@@ -422,31 +502,12 @@ def run_batch(
                 sleep(wait)
                 attempt += 1
 
-            rec: dict[str, Any] = {
-                "schema": "s1-record/1",
-                "dataset": dataset,
-                "item_id": item_id,
-                "state_sha256": state_sha,
-                "question_id": qid,
-                "primitive": q_model.type,
-                "model_requested": model_requested,
-            }
-            if item.get("split") is not None:
-                rec["split"] = item["split"]
             if error is None:
-                rec["model_served"] = resp.model_served
-                rec["latency_ms"] = resp.latency_ms
-                rec.update(resp.answer)
+                rec = answered
             else:
-                rec["model_served"] = None
-                rec["error_code"] = error.error_code
-            if "label" in item and role in ("primary", "noul"):
-                rec["label"] = item["label"]
-            if probe_mode and role in ("noul", "twin", "inverse"):
-                rec["probe_role"] = role
-                rec["probe_question"] = base_name
-                if inverse_source is not None:
-                    rec["probe_inverse"] = inverse_source
+                rec = {**envelope, "model_served": None, "error_code": error.error_code, **tail}
+                if not _readable(rec):
+                    rec["error_code"] = "invalid_response"
             records_out.append(rec)
             if on_record is not None:
                 on_record(rec)

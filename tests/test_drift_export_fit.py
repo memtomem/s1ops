@@ -13,7 +13,7 @@ import pytest
 
 import s1ops
 from s1ops.cli import main as cli_main
-from s1ops.contracts.records import parse_record, read_records, reparse
+from s1ops.contracts.records import RecordError, parse_record, read_records, reparse
 from s1ops.demo import generate_workspace
 from s1ops.improve.calibrate import FitApplyError, FitError, apply_fits, load_fits
 
@@ -323,14 +323,28 @@ def test_a_class_mismatch_exits_1_naming_the_file_and_its_original_line(ws, tmp_
     assert err.count("\n") == 1
 
 
-def test_an_unreadable_row_is_refused_as_the_applied_file_would_be(ws, tmp_path: Path, capsys) -> None:
+def test_an_overflowing_input_line_is_refused_by_its_physical_number(ws, tmp_path: Path, capsys) -> None:
     rows = _stripped(_rows(ws["records_canary"]))
     path = tmp_path / "over.jsonl"
     lines = [json.dumps(r) for r in rows]
     lines[2] = lines[2][:-1] + ', "extra": 1e400}'
     path.write_text("\n\n".join(lines) + "\n")
     assert cli_main(["export", "phoenix", str(path), "-o", str(tmp_path / "o"), "--fit", ws["fits"]]) == 1
-    assert capsys.readouterr().err.startswith(f"s1: {path}: line 5: not valid JSON: non-finite number Infinity")
+    assert capsys.readouterr().err == f"s1: {path}: line 5: number '1e400' is beyond the float range\n"
+
+
+def test_an_unreadable_applied_line_is_refused_naming_its_source(ws) -> None:
+    """Only a row the SDK built can get here, since the reader refuses the literal: `lines` holds what
+    `json.dumps` wrote, and reading them back names the record's own file and line, not the output."""
+    good, source = read_records(ws["records_canary"])[:2]
+    built = replace(source, raw={**source.raw, "extra": float("inf")})
+    applied = apply_fits([good, built], load_fits(ws["fits"]), pass_through_unfitted=True)
+    assert "Infinity" in applied.lines[1]
+    with pytest.raises(RecordError) as caught:
+        applied.records
+    assert str(caught.value) == (
+        f"{ws['records_canary']}: line 2: not valid JSON: non-finite number Infinity is not valid JSON"
+    )
 
 
 @pytest.mark.parametrize("argv, message", [

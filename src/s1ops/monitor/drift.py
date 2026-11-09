@@ -255,9 +255,24 @@ def _quantiles(scores: Sequence[float]) -> dict[str, float]:
     }
 
 
+def _latency_ms(value: int | float) -> float:
+    try:
+        return float(value)
+    except OverflowError:  # a JSON integer past the float range: counted, not dropped, so its statistics go null
+        return math.inf if value > 0 else -math.inf
+
+
+def _rounded_ms(value: float) -> float | None:
+    value = float(value)
+    return round(value, 2) if math.isfinite(value) else None
+
+
 def _latency_summary(records: Sequence[Record]) -> dict[str, float | None]:
+    """p50, p95 and mean of the records' numeric `latency_ms`. Each is null when there is no number to
+    summarize or the statistic is not finite, which finite values can reach: `latency_ms` is not validated,
+    so a sum or an interpolation can overflow."""
     vals = [
-        float(r.raw["latency_ms"])
+        _latency_ms(r.raw["latency_ms"])
         for r in records
         if isinstance(r.raw.get("latency_ms"), (int, float))
         and not isinstance(r.raw.get("latency_ms"), bool)
@@ -265,12 +280,10 @@ def _latency_summary(records: Sequence[Record]) -> dict[str, float | None]:
     if not vals:
         return {"p50_ms": None, "p95_ms": None, "mean_ms": None}
     arr = np.asarray(vals, dtype=float)
-    p50, p95 = np.quantile(arr, [0.50, 0.95])
-    return {
-        "p50_ms": round(float(p50), 2),
-        "p95_ms": round(float(p95), 2),
-        "mean_ms": round(float(arr.mean()), 2),
-    }
+    with np.errstate(over="ignore", invalid="ignore"):
+        p50, p95 = np.quantile(arr, [0.50, 0.95])
+        mean = arr.mean()
+    return {"p50_ms": _rounded_ms(p50), "p95_ms": _rounded_ms(p95), "mean_ms": _rounded_ms(mean)}
 
 
 def _escalation_rate(

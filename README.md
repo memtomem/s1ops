@@ -268,8 +268,8 @@ s1 trainset export current.jsonl --split train --checkpoint tickets-r1 -o traini
 # 3. Build train.jsonl with the recipe below, train outside s1ops, then serve the checkpoint under that name and probe the
 #    held-out items, with the cal and eval rows of the states file in files of their own. Probe the current model on the
 #    same eval rows for step 4's drift.
-grep '"split": "cal"' states_local.jsonl > states_cal.jsonl
-grep '"split": "eval"' states_local.jsonl > states_eval.jsonl
+python3 -c 'import json, sys; sys.stdout.writelines(r for r in sys.stdin if r.strip() and json.loads(r).get("split") == sys.argv[1])' cal < states_local.jsonl > states_cal.jsonl
+python3 -c 'import json, sys; sys.stdout.writelines(r for r in sys.stdin if r.strip() and json.loads(r).get("split") == sys.argv[1])' eval < states_local.jsonl > states_eval.jsonl
 s1 probe questions.json --no-expand-probes --model current-1 --states states_eval.jsonl -o current_eval.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_cal.jsonl -o candidate_cal.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_eval.jsonl -o candidate_eval.jsonl --ledger ledger.jsonl

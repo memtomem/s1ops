@@ -252,6 +252,10 @@ s1ops starts no training. It writes down what a checkpoint will train on and ref
 ```bash
 # These run as written on the offline mock, which answers the same whatever the name, so its results judge nothing. Against a
 # real server, add to every probe: --backend systemone --base-url URL --usd-per-input-token RATE (see Live probes).
+#
+# questions.json holds the one question these labels answer, here {"tickets": {"type": "noul", "instructions": "..."}}. One
+# `label` goes onto every question in the file, so `s1 probe` refuses a label that does not suit them all, which the demo's
+# questions.json, mixing noul, choice and score, would be.
 
 # 1. Give each states row a `split` (train, cal, eval); `s1 probe` copies it into its records, as it does `label`:
 #    {"dataset": "tickets", "item_id": "t1", "state": "...", "split": "train", "label": true}
@@ -262,8 +266,10 @@ s1 probe questions.json --no-expand-probes --model current-1 --states states_loc
 s1 trainset export current.jsonl --split train --checkpoint tickets-r1 -o training_manifest.json
 
 # 3. Build train.jsonl with the recipe below, train outside s1ops, then serve the checkpoint under that name and probe the
-#    held-out items, with the cal and eval rows
-#    of the states file in files of their own. Probe the current model on the same eval rows for step 4's drift.
+#    held-out items, with the cal and eval rows of the states file in files of their own. Probe the current model on the
+#    same eval rows for step 4's drift.
+python3 -c 'import json, sys; sys.stdout.writelines(r for r in sys.stdin if r.strip() and json.loads(r).get("split") == sys.argv[1])' cal < states_local.jsonl > states_cal.jsonl
+python3 -c 'import json, sys; sys.stdout.writelines(r for r in sys.stdin if r.strip() and json.loads(r).get("split") == sys.argv[1])' eval < states_local.jsonl > states_eval.jsonl
 s1 probe questions.json --no-expand-probes --model current-1 --states states_eval.jsonl -o current_eval.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_cal.jsonl -o candidate_cal.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_eval.jsonl -o candidate_eval.jsonl --ledger ledger.jsonl

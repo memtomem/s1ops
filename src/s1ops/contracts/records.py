@@ -101,6 +101,17 @@ def _reject_constant(name: str) -> float:
     raise ValueError(f"non-finite number {name} is not valid JSON")
 
 
+class _OutOfRange(Exception):
+    pass
+
+
+def _finite_float(text: str) -> float:
+    value = float(text)
+    if math.isinf(value):  # a JSON number literal never parses to NaN
+        raise _OutOfRange(text)
+    return value
+
+
 def _number(value: object, what: str, line: int) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RecordError(line, f"{what} must be a number, got {value!r}")
@@ -366,7 +377,10 @@ def _read_line(
     if UNDECODABLE.search(text):
         raise RecordError(n, "not valid UTF-8")
     try:
-        row = json.loads(text, parse_constant=_reject_constant)
+        row = json.loads(text, parse_constant=_reject_constant, parse_float=_finite_float)
+    except _OutOfRange as e:
+        # Not "not valid JSON": the grammar allows it, but a writer would turn it into `Infinity`.
+        raise RecordError(n, f"number {short_repr(e.args[0])} is beyond the float range") from None
     except ValueError as e:
         raise RecordError(n, f"not valid JSON: {e}") from None
     except RecursionError:

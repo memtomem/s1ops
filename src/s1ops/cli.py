@@ -78,6 +78,7 @@ from s1ops.monitor.drift import audit_drift
 from s1ops.monitor.backends import HttpSystemOneBackend, OpenAIDecisionsBackend
 from s1ops.monitor.runner import (
     DeterministicMockBackend,
+    check_labels,
     check_questions,
     check_reservation,
     check_states,
@@ -1036,6 +1037,7 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     states = _load_jsonl_dicts(Path(args.states))
     try:
         check_states(states)
+        check_labels(states, tasks)
     except ValueError as e:
         raise CliError(f"{args.states}: {e}") from None
     if args.model is None and args.backend == "mock":

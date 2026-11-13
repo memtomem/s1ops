@@ -28,10 +28,10 @@ from pathlib import Path
 from typing import Any
 
 from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, ScoreQuestion, question_id
-from s1ops.contracts.records import parse_record, read_records, select
+from s1ops.contracts.records import Group, parse_record, read_records, select
 from s1ops.contracts.schemas import PolicyEntry, save_policies
-from s1ops.eval.metrics import top_label
-from s1ops.improve.calibrate import apply_to_record, fit_for, fit_group, save_fits, sha256_file
+from s1ops.eval.metrics import routed_confidence, top_label
+from s1ops.improve.calibrate import Fit, apply_to_record, fit_for, fit_group, save_fits, sha256_file
 from s1ops.improve.policy import select_threshold
 from s1ops.runtime.routing import routed_metrics
 
@@ -453,6 +453,28 @@ def _categorical_rows(
     return rows
 
 
+def _categorical_policies(groups: list[Group], fits: list[Fit]) -> list[PolicyEntry]:
+    """Calibrated `error_budget` policies at budget 0.10, tuned on what they route, as `s1 policy
+    tune --use-calib` does (a tie at the top escalates, so it is left out)."""
+    policies = []
+    for grp in groups:
+        conf, correct, _ = routed_confidence(grp.primitive, grp.P, grp.y)
+        policy = PolicyEntry(
+            question_id=grp.question_id,
+            model_served=grp.model_served,
+            primitive=grp.primitive,
+            mode="error_budget",
+            split="eval",
+            n=grp.n,
+            threshold=select_threshold(conf, correct, budget=0.10),
+            error_budget=0.10,
+            calibrated=True,
+            fit_sha256=fit_for(fits, grp.key).fit_sha256,
+        )
+        policies.append(replace(policy, metrics_on_split=routed_metrics(policy, grp)))
+    return policies
+
+
 def _categorical_workspace(out: Path, seed: int, qid_choice: str, options: list[str], qid_score: str) -> dict[str, str]:
     """Choice and score folds, fitted, applied and tuned through written files, as the README's
     `s1 fit` / `s1 apply` / `s1 policy tune --use-calib` run them. A separate rng leaves every
@@ -482,22 +504,7 @@ def _categorical_workspace(out: Path, seed: int, qid_choice: str, options: list[
     )
     _write_jsonl(rec_path, [apply_to_record(fit_for(fits, r.key), r) for r in read_records(rec_path, require_answer=True)])
 
-    policies = []
-    for grp in select(read_records(rec_path, use_calib=True), allow_model_mismatch=True).groups:
-        conf, correct = top_label(grp.P, grp.y)
-        policy = PolicyEntry(
-            question_id=grp.question_id,
-            model_served=grp.model_served,
-            primitive=grp.primitive,
-            mode="error_budget",
-            split="eval",
-            n=grp.n,
-            threshold=select_threshold(conf, correct, budget=0.10),
-            error_budget=0.10,
-            calibrated=True,
-            fit_sha256=fit_for(fits, grp.key).fit_sha256,
-        )
-        policies.append(replace(policy, metrics_on_split=routed_metrics(policy, grp)))
+    policies = _categorical_policies(select(read_records(rec_path, use_calib=True), allow_model_mismatch=True).groups, fits)
     policy_path = out / "policy_categorical.json"
     save_policies(policies, policy_path)
     return {

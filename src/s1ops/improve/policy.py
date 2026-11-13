@@ -200,16 +200,23 @@ def threshold_curve(
     c_delegate: float = 0.004,
     c_error: float = 0.10,
     delegate_accuracy: float = 0.98,
+    always_escalated: int = 0,
 ) -> list[dict]:
-    """Compute coverage, empirical error rate, Clopper-Pearson upper bound, and $/1k cost across tie groups."""
+    """Compute coverage, empirical error rate, Clopper-Pearson upper bound, and $/1k cost across tie groups.
+
+    `always_escalated` counts items outside `confidence` that are delegated at every threshold (a
+    choice or score tie at the top): they add to `n`, so to coverage's denominator and to the
+    delegated items, never to `accepted` or `errors`."""
     for name, value in (("c_s1", c_s1), ("c_delegate", c_delegate), ("c_error", c_error)):
         _check_cost(name, value)
     _check_rate("delegate_accuracy", delegate_accuracy)
+    if isinstance(always_escalated, bool) or not isinstance(always_escalated, int) or always_escalated < 0:
+        raise ValueError(f"always_escalated must be a non-negative integer, got {always_escalated!r}")
     confidence = np.asarray(confidence, dtype=float)
     correct = np.asarray(correct, dtype=bool)
-    n = len(confidence)
-    if n == 0:
+    if len(confidence) == 0:
         return []
+    n = len(confidence) + always_escalated
     order = np.argsort(-confidence, kind="stable")
     ordered, errors = confidence[order], np.cumsum(~correct[order])
     ends = np.r_[np.flatnonzero(ordered[1:] != ordered[:-1]), len(order) - 1]

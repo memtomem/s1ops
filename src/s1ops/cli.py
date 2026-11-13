@@ -29,7 +29,7 @@ from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
 from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
-from s1ops.eval.metrics import top_label
+from s1ops.eval.metrics import noul_routed_label, top_label
 from s1ops.improve.calibrate import (
     AppliedFits,
     Fit,
@@ -463,16 +463,26 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     false_pass = args.max_false_pass
     if false_pass is not None and args.max_escalation is not None:
         raise CliError("--max-escalation sizes the F1 band, which --max-false-pass replaces; pass one of them")
+    by_threshold = args.noul_routing == "threshold"
+    if by_threshold and args.max_escalation is not None:
+        raise CliError("--max-escalation sizes the F1 band, which --noul-routing threshold replaces; pass one of them")
+    if by_threshold and false_pass is not None:
+        raise CliError("--noul-routing threshold and --max-false-pass each replace the F1 band; pass one of them")
     max_escalation = 0.35 if args.max_escalation is None else args.max_escalation
     tuned_rows = _tuned_rows(records) if args.use_calib else {}
     if false_pass is not None and selected and not any(grp.primitive == "noul" for grp in selected):
         raise CliError("--max-false-pass applies to noul groups, and none is selected")
+    if by_threshold and selected and not any(grp.primitive == "noul" for grp in selected):
+        raise CliError("--noul-routing applies to noul groups, and none is selected")
     policies: list[PolicyEntry] = []
     for grp in selected:
         if false_pass is not None and grp.primitive == "noul":
             policies.append(_false_pass_policy(args, grp, src_sha, tuned_rows))
             continue
-        conf, correct = top_label(grp.P, grp.y)
+        # A threshold that routes is tuned on the routing rule's own answers. Under the band it does
+        # not route, and keeps `top_label`'s, so a band policy's file stays as it was.
+        routes = by_threshold and grp.primitive == "noul"
+        conf, correct = noul_routed_label(grp.P, grp.y) if routes else top_label(grp.P, grp.y)
         tau = select_threshold(
             conf,
             correct,
@@ -483,7 +493,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
 
         band_lo = None
         band_hi = None
-        if grp.primitive == "noul":
+        if grp.primitive == "noul" and not by_threshold:
             dev_recs = [
                 DevRecord(
                     id=item_id,
@@ -1290,17 +1300,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_pt.add_argument("-o", "--output", required=True, help="policy.json to write")
     p_pt.add_argument("--question", default=None, help=_H_QUESTION)
     p_pt.add_argument("--model", default=None, help=_H_MODEL)
-    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it. A noul F1 band, when one is chosen, routes instead and is not bound by this: metrics_on_split.accepted_error says what it does (choice and score groups only under --max-false-pass)")
+    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it. A noul group is routed by the F1 band instead, which this does not bound (metrics_on_split.accepted_error says what it does), unless --noul-routing threshold (choice and score groups only under --max-false-pass)")
     p_pt.add_argument("--use-cp-upper", action="store_true", help="judge the budget (or --max-false-pass) against the Clopper-Pearson upper bound instead of the point estimate")
     p_pt.add_argument("--cp-alpha", type=float, default=0.05, help="significance level of the Clopper-Pearson bound")
     p_pt.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
     p_pt.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
-    p_pt.add_argument("--max-escalation", type=float, default=None, help="largest fraction of items the noul escalation band may send to System 2 (default: 0.35)")
+    p_pt.add_argument("--max-escalation", type=float, default=None, help="largest fraction of items the noul escalation band may send to System 2 (default: 0.35). At 0 the band is empty, one cutoff that accepts every item, not the threshold")
     p_pt.add_argument(
         "--max-false-pass",
         type=float,
         default=None,
         help="for noul groups, in place of the F1 band: the smallest cutoff at which at most this share of label-false items pass (p >= cutoff), written as a band with band_lo == band_hi",
+    )
+    p_pt.add_argument(
+        "--noul-routing",
+        choices=("band", "threshold"),
+        default=None,
+        help="what routes a noul group: band (the default) is the F1 escalation band under --max-escalation; threshold writes mode error_budget, accepting when max(p, 1 - p) reaches the --error-budget threshold, so the budget bounds accepted_error on the split",
     )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)

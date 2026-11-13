@@ -23,6 +23,15 @@ def top_label(P: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return P[np.arange(len(y)), pred], (pred == y).astype(float)
 
 
+def noul_routed_label(P: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """For a noul group (`P` rows `(1 - p, p)`): `max(1 - p, p)`, the confidence an `error_budget`
+    policy compares with its threshold, and whether the routing rule's answer equals the label.
+
+    The rule answers `p >= 0.5`, so at `p == 0.5` it answers true where `top_label` breaks the tie
+    to the first class, false; a threshold tuned on `top_label` can then exceed its budget."""
+    return P.max(axis=1), (P[:, 1] >= 0.5) == (y == 1)
+
+
 def reliability_points(primitive: str, P: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """`(score, target)` pairs that ECE bins: `(p, label)` for Noul, top label otherwise."""
     if primitive == "noul":

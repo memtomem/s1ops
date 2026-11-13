@@ -441,7 +441,8 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     if args.policy_cmd == "curve":
         curves: list[dict[str, Any]] = []
         for grp in selected:
-            conf, correct = top_label(grp.P, grp.y)
+            # A noul point counts what a noul `error_budget` policy at its threshold routes.
+            conf, correct = noul_routed_label(grp.P, grp.y) if grp.primitive == "noul" else top_label(grp.P, grp.y)
             curves.append(
                 {
                     "question_id": grp.question_id,
@@ -1320,7 +1321,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
-    p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve", **_FMT)
+    p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve: each point counts what an error_budget policy at its threshold accepts (for noul, what `policy tune --noul-routing threshold` writes, not the F1 band)", **_FMT)
     p_pc.add_argument("records", help=_H_RECORDS)
     p_pc.add_argument("--question", default=None, help=_H_QUESTION)
     p_pc.add_argument("--model", default=None, help=_H_MODEL)

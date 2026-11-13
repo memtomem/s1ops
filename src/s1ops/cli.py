@@ -29,7 +29,7 @@ from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
 from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
-from s1ops.eval.metrics import noul_routed_label, top_label
+from s1ops.eval.metrics import routed_confidence, top_label
 from s1ops.improve.calibrate import (
     AppliedFits,
     Fit,
@@ -441,8 +441,8 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     if args.policy_cmd == "curve":
         curves: list[dict[str, Any]] = []
         for grp in selected:
-            # A noul point counts what a noul `error_budget` policy at its threshold routes.
-            conf, correct = noul_routed_label(grp.P, grp.y) if grp.primitive == "noul" else top_label(grp.P, grp.y)
+            # A point counts what an `error_budget` policy at its threshold routes.
+            conf, correct, escalated = routed_confidence(grp.primitive, grp.P, grp.y)
             curves.append(
                 {
                     "question_id": grp.question_id,
@@ -453,6 +453,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
                         correct,
                         c_s1=args.cost_s1,
                         c_delegate=args.cost_sys2,
+                        always_escalated=escalated,
                     ),
                 }
             )
@@ -480,10 +481,13 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         if false_pass is not None and grp.primitive == "noul":
             policies.append(_false_pass_policy(args, grp, src_sha, tuned_rows))
             continue
-        # A threshold that routes is tuned on the routing rule's own answers. Under the band it does
-        # not route, and keeps `top_label`'s, so a band policy's file stays as it was.
-        routes = by_threshold and grp.primitive == "noul"
-        conf, correct = noul_routed_label(grp.P, grp.y) if routes else top_label(grp.P, grp.y)
+        # A threshold that routes is tuned on what it routes (a choice or score tie at the top is
+        # escalated, so left out). Under the noul band it does not route, and keeps `top_label`'s,
+        # so a band policy's file stays as it was.
+        if grp.primitive == "noul" and not by_threshold:
+            conf, correct = top_label(grp.P, grp.y)
+        else:
+            conf, correct, _ = routed_confidence(grp.primitive, grp.P, grp.y)
         tau = select_threshold(
             conf,
             correct,
@@ -1321,7 +1325,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
-    p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve: each point counts what an error_budget policy at its threshold accepts (for noul, what `policy tune --noul-routing threshold` writes, not the F1 band)", **_FMT)
+    p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve: each point counts what an error_budget policy at its threshold accepts (for noul, what `policy tune --noul-routing threshold` writes, not the F1 band; a choice or score tie at the top is always escalated)", **_FMT)
     p_pc.add_argument("records", help=_H_RECORDS)
     p_pc.add_argument("--question", default=None, help=_H_QUESTION)
     p_pc.add_argument("--model", default=None, help=_H_MODEL)

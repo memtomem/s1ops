@@ -32,6 +32,29 @@ def noul_routed_label(P: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndar
     return P.max(axis=1), (P[:, 1] >= 0.5) == (y == 1)
 
 
+def top_tied(P: np.ndarray) -> np.ndarray:
+    """Rows whose largest probability occurs more than once, compared exactly, as the routing rule
+    compares a choice or score answer (`probs.count(top) > 1`): it escalates such a row at every
+    threshold. Not for noul, whose rule answers true at `p == 0.5` rather than escalating."""
+    return (P == P.max(axis=1, keepdims=True)).sum(axis=1) > 1
+
+
+def routed_confidence(primitive: str, P: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
+    """What an `error_budget` policy routes, as `select_threshold` and `threshold_curve` take it:
+    the confidence and correctness of every row the policy can accept, and how many rows it
+    escalates at every threshold.
+
+    Noul: every row, counted as the rule answers (`noul_routed_label`). Choice and score: the rows
+    with a unique top probability (`top_label`); a tie at the top escalates, so it counts in
+    neither an accepted error's numerator nor its denominator, only in `n`."""
+    if primitive == "noul":
+        conf, correct = noul_routed_label(P, y)
+        return conf, correct, 0
+    tied = top_tied(P)
+    conf, correct = top_label(P[~tied], y[~tied])
+    return conf, correct, int(tied.sum())
+
+
 def reliability_points(primitive: str, P: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """`(score, target)` pairs that ECE bins: `(p, label)` for Noul, top label otherwise."""
     if primitive == "noul":

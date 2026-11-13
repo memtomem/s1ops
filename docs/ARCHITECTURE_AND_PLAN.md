@@ -38,7 +38,7 @@
 
 ### 1.4 `PolicyEntry` (`s1-policy/1`, `src/s1ops/contracts/schemas.py`)
 
-- **Mode A — `error_budget`**: 목표 오류 예산 `error_budget` (예: `0.10`) 및 선택적 Clopper-Pearson 유한표본 상한(`--use-cp-upper`) 하에서 동점 그룹(tie-group) 단위로 컴파일된 단일 임계값 `threshold` (`None` = 전량 위임).
+- **Mode A — `error_budget`**: 목표 오류 예산 `error_budget` (예: `0.10`) 및 선택적 Clopper-Pearson 유한표본 상한(`--use-cp-upper`) 하에서 동점 그룹(tie-group) 단위로 컴파일된 단일 임계값 `threshold` (`None` = 전량 위임). `noul` 그룹은 기본적으로 Mode B의 F1 band로 라우팅되어 이 예산의 구속을 받지 않으며, `--noul-routing threshold`일 때만 이 모드로 기록됩니다($\max(p, 1-p) \ge$ `threshold`면 수용). 이때 $p = 0.5$인 항목은 라우팅 규칙대로 참으로 셉니다.
 - **Mode B — `escalation_band`**: 이진 `noul` 게이트에서 $p < \text{band\_lo}$ (자동 거절/음성 확정), $p \ge \text{band\_hi}$ (자동 수용/양성 확정), $\text{band\_lo} \le p < \text{band\_hi}$ (System 2 LLM 또는 인간 검수 큐로 에스컬레이션).
 - **Mode B′ — false-pass 상한 (`--max-false-pass RATE`)**: `BLOCK`에서만 통과시키고 `ALLOW`·`ESCALATE`를 똑같이 다루는 소비자(decision-plane)용 `noul` 선택. 라벨이 거짓인 항목 중 $p \ge c$인 비율(또는 `--use-cp-upper`면 Clopper-Pearson 상한)이 `RATE` 이하가 되는 관측값(또는 `1.0`) 중 가장 작은 $c$를 골라 `band_lo = band_hi = c`로 씁니다. 에스컬레이션이 없고, 런타임·스키마는 그대로입니다. 만족하는 $c$가 없으면 exit 1이며 다른 모드로 대체하지 않습니다.
 - **`policy_sha256`**: 핵심 정책 필드의 정규화 JSON SHA-256 앞 16자리 지문입니다. 관제 스팬(`s1.policy_sha256`)에 실려 런타임 라우터(`decision-plane`)가 버전을 대조할 수 있게 합니다. 평가 시점의 대조는 opt-in으로, 호출자가 기대 지문을 넘길 때(`DecisionGate.evaluate_noul(expected_policy_sha256=...)`, `s1 gate --expected-sha256`)만 합니다. 로드 시점에는 `load_policies`가 각 행에 저장된 지문이 `null`이 아니면 재계산한 지문과 비교해 다르면 `PolicyFingerprintError`로 거부합니다. 지문이 없거나 `null`인 행은 재계산만 하므로, 손으로 고친 정책은 그 행의 `policy_sha256`을 지우면 받아들여집니다.

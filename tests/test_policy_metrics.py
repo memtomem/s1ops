@@ -135,6 +135,8 @@ def _counted_from_rows(policy: PolicyEntry, path: str) -> tuple[int, int]:
         pytest.param("records", ("--error-budget", "0.1"), id="noul-band-raw"),
         pytest.param("records", ("--error-budget", "0.1", "--use-calib"), id="noul-band-calibrated"),
         pytest.param("records", ("--error-budget", "0.1", "--max-escalation", "0"), id="noul-empty-band-raw"),
+        pytest.param("records", ("--error-budget", "0.1", "--noul-routing", "threshold"), id="noul-threshold-raw"),
+        pytest.param("records", ("--error-budget", "0.1", "--noul-routing", "threshold", "--use-calib"), id="noul-threshold-calibrated"),
         pytest.param("records_categorical", ("--error-budget", "0.1"), id="choice-and-score-raw"),
         pytest.param("records_categorical", ("--error-budget", "0.1", "--use-calib"), id="choice-and-score-calibrated"),
     ],

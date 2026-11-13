@@ -14,7 +14,6 @@ import math
 import os
 import stat
 import sys
-from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -23,7 +22,7 @@ from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
 from s1ops.contracts._validation import UNDECODABLE
-from s1ops.contracts.records import Group, GroupKey, Record, Selection, has_calib, read_records, read_records_hashed, select, short_repr
+from s1ops.contracts.records import Group, GroupKey, Record, Selection, read_records, read_records_hashed, select
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -52,6 +51,7 @@ from s1ops.improve.labelaudit import (
 )
 from s1ops.improve.policy import (
     Band,
+    CalibInputError,
     DevRecord,
     Prices,
     choose,
@@ -60,6 +60,8 @@ from s1ops.improve.policy import (
     select_threshold,
     sweep,
     threshold_curve,
+    tuned_fit_sha256,
+    tuned_rows,
 )
 from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
 from s1ops.improve.trainset import Trained, TrainedItemError, build_manifest, check_not_trained, load_manifest, load_trained, save_manifest
@@ -194,36 +196,11 @@ def _refuse_trained(args: argparse.Namespace, groups: list[Group], trained: Trai
         check_not_trained(grp.key, grp.items, trained, args.records)
 
 
-def _tuned_rows(records: list[Record]) -> dict[GroupKey, list[Record]]:
-    """The records `select(records, allow_model_mismatch=True)` tunes on, by group: answered and
-    labeled (`select` refuses a repeated item within a group)."""
-    rows: dict[GroupKey, list[Record]] = defaultdict(list)
-    for r in records:
-        if r.model_served is not None and r.label is not None:
-            rows[r.key].append(r)
-    return rows
-
-
 def _tuned_fit_sha256(grp: Group, rows: list[Record]) -> str | None:
-    """The `fit_sha256` that every record tuned into `grp` was calibrated through, or `None` for
-    records from before `s1 apply` wrote it. A record without the calibrated distribution would be
-    tuned on its raw one (`parse_record` falls back), so it is refused rather than counted."""
-    name = f"{grp.question_id} ({grp.model_served})"
-    for r in rows:
-        if not has_calib(r.raw, grp.primitive):
-            raise CliError(
-                f"{name}: line {r.line} has no calibrated probabilities; `--use-calib` tunes on the "
-                "`calib` that `s1 apply` writes, so apply the fit to every record first"
-            )
-    for r in rows:
-        h = r.raw["calib"].get("fit_sha256")
-        if h is not None and not isinstance(h, str):
-            raise CliError(f"{name}: line {r.line}: calib.fit_sha256 must be a string, got {short_repr(h)}")
-    hashes = {r.raw["calib"].get("fit_sha256") for r in rows}
-    if len(hashes) > 1:
-        shown = ", ".join(sorted(repr(h) for h in hashes))
-        raise CliError(f"{name}: records were calibrated through different fits ({shown}); apply one fit file")
-    return hashes.pop() if hashes else None
+    try:
+        return tuned_fit_sha256(grp, rows)
+    except CalibInputError as e:
+        raise CliError(str(e)) from None
 
 
 def _no_groups(args: argparse.Namespace, sel: Selection, records_path: str) -> CliError:
@@ -438,9 +415,12 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     sel = select(records, allow_model_mismatch=True)
     selected = _selected(args, sel)
     _refuse_trained(args, selected, trained)
+    tuned = tuned_rows(records) if args.use_calib else {}
     if args.policy_cmd == "curve":
         curves: list[dict[str, Any]] = []
         for grp in selected:
+            if args.use_calib:
+                _tuned_fit_sha256(grp, tuned[grp.key])
             # A point counts what an `error_budget` policy at its threshold routes.
             conf, correct, escalated = routed_confidence(grp.primitive, grp.P, grp.y)
             curves.append(
@@ -471,7 +451,6 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     if by_threshold and false_pass is not None:
         raise CliError("--noul-routing threshold and --max-false-pass each replace the F1 band; pass one of them")
     max_escalation = 0.35 if args.max_escalation is None else args.max_escalation
-    tuned_rows = _tuned_rows(records) if args.use_calib else {}
     if false_pass is not None and selected and not any(grp.primitive == "noul" for grp in selected):
         raise CliError("--max-false-pass applies to noul groups, and none is selected")
     if by_threshold and selected and not any(grp.primitive == "noul" for grp in selected):
@@ -479,7 +458,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     policies: list[PolicyEntry] = []
     for grp in selected:
         if false_pass is not None and grp.primitive == "noul":
-            policies.append(_false_pass_policy(args, grp, src_sha, tuned_rows))
+            policies.append(_false_pass_policy(args, grp, src_sha, tuned))
             continue
         # A threshold that routes is tuned on what it routes (a choice or score tie at the top is
         # escalated, so left out). Under the noul band it does not route, and keeps `top_label`'s,
@@ -533,7 +512,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
             band_lo=band_lo,
             band_hi=band_hi,
             calibrated=args.use_calib,
-            fit_sha256=_tuned_fit_sha256(grp, tuned_rows[grp.key]) if args.use_calib else None,
+            fit_sha256=_tuned_fit_sha256(grp, tuned[grp.key]) if args.use_calib else None,
             source_sha256=src_sha,
         )
         metrics = routed_metrics(policy, grp, use_cp_upper=args.use_cp_upper, cp_alpha=args.cp_alpha)
@@ -556,7 +535,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     return 0
 
 
-def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned_rows: dict) -> PolicyEntry:
+def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned: dict[GroupKey, list[Record]]) -> PolicyEntry:
     """A noul policy that passes (does not block) `p >= cutoff`, the smallest cutoff at which at
     most `--max-false-pass` of the group's label-false items pass. Written as a band with
     `band_lo == band_hi`, so it never escalates and the gate routes it unchanged."""
@@ -584,7 +563,7 @@ def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned
         band_lo=cut.cutoff,
         band_hi=cut.cutoff,
         calibrated=args.use_calib,
-        fit_sha256=_tuned_fit_sha256(grp, tuned_rows[grp.key]) if args.use_calib else None,
+        fit_sha256=_tuned_fit_sha256(grp, tuned[grp.key]) if args.use_calib else None,
         source_sha256=src_sha,
         metrics_on_split={
             "selection": "max_false_pass",

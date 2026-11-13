@@ -9,15 +9,21 @@ Supports two complementary policy modes:
 3. False-Pass Cap (`select_false_pass_cutoff`, `FalsePassCut`):
    For a `noul` consumer that acts only on FALSE: the smallest cutoff at which at most a given share of
    label-false items reach `p >= cutoff`, written as a band with `lo == hi`.
+
+Tuning on calibrated probabilities (`tuned_rows`, `tuned_fit_sha256`, `CalibInputError`): the checks
+`s1 policy tune --use-calib`, `s1 policy curve --use-calib` and the web simulator run on a group.
 """
 
 import math
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from enum import Enum
 
 import numpy as np
 from scipy.stats import beta as sp_beta
+
+from s1ops.contracts.records import Group, GroupKey, Record, has_calib, short_repr
 
 
 def _check_cost(name: str, value: float) -> None:
@@ -436,3 +442,40 @@ def choose(
         feasible = [r for r in feasible if r.metric(metric) >= min_metric]
         return min(feasible, key=lambda r: (r.cost_usd, -r.metric(metric)), default=None)
     return max(feasible, key=lambda r: (r.metric(metric), -r.escalated, -r.cost_usd), default=None)
+
+
+class CalibInputError(ValueError):
+    """Records a calibrated threshold cannot be tuned or simulated on: a tuned record without the
+    calibrated distribution, or a group calibrated through more than one fit."""
+
+
+def tuned_rows(records: Iterable[Record]) -> dict[GroupKey, list[Record]]:
+    """The records `select(records, allow_model_mismatch=True)` tunes on, by group: answered and
+    labeled (`select` refuses a repeated item within a group)."""
+    rows: dict[GroupKey, list[Record]] = defaultdict(list)
+    for r in records:
+        if r.model_served is not None and r.label is not None:
+            rows[r.key].append(r)
+    return rows
+
+
+def tuned_fit_sha256(grp: Group, rows: Sequence[Record]) -> str | None:
+    """The `fit_sha256` that every record tuned into `grp` was calibrated through, or `None` for
+    records from before `s1 apply` wrote it. A record without the calibrated distribution would be
+    tuned on its raw one (`parse_record` falls back), so it is refused rather than counted."""
+    name = f"{grp.question_id} ({grp.model_served})"
+    for r in rows:
+        if not has_calib(r.raw, grp.primitive):
+            raise CalibInputError(
+                f"{name}: line {r.line} has no calibrated probabilities; a calibrated policy is tuned on "
+                "the `calib` that `s1 apply` writes, so apply the fit to every record first"
+            )
+    for r in rows:
+        h = r.raw["calib"].get("fit_sha256")
+        if h is not None and not isinstance(h, str):
+            raise CalibInputError(f"{name}: line {r.line}: calib.fit_sha256 must be a string, got {short_repr(h)}")
+    hashes = {r.raw["calib"].get("fit_sha256") for r in rows}
+    if len(hashes) > 1:
+        shown = ", ".join(sorted(repr(h) for h in hashes))
+        raise CalibInputError(f"{name}: records were calibrated through different fits ({shown}); apply one fit file")
+    return hashes.pop() if hashes else None

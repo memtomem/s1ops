@@ -32,6 +32,7 @@ from s1ops.improve.calibrate import Fit, fit_for, fitted_items, load_fits, trans
 from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
 from s1ops.improve.policy import (
     Band,
+    CalibInputError,
     DevRecord,
     Prices,
     choose,
@@ -41,6 +42,8 @@ from s1ops.improve.policy import (
     select_threshold,
     sweep,
     threshold_curve,
+    tuned_fit_sha256,
+    tuned_rows,
 )
 from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
 from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
@@ -335,6 +338,13 @@ def create_app(
         # With no filter, open on a noul group, the only kind the band simulation applies to.
         filtered = question_id is not None or model_served is not None or primitive is not None
         chosen_grp = matching[0] if filtered else next((g for g in matching if g.primitive == "noul"), matching[0])
+        if use_calib:
+            # What `s1 policy tune --use-calib` refuses: a record tuned on its raw distribution, or a
+            # group calibrated through more than one fit.
+            try:
+                tuned_fit_sha256(chosen_grp, tuned_rows(records)[chosen_grp.key])
+            except CalibInputError as e:
+                raise HTTPException(status_code=400, detail=f"{rec_file.name}: {e}") from None
 
         # The threshold counts what an `error_budget` policy routes, as `s1 policy tune` tunes it
         # (`--noul-routing threshold` for noul; a choice or score tie at the top escalates).

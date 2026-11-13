@@ -27,7 +27,7 @@ from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import CompareInputError, compare_records
 from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
-from s1ops.eval.metrics import top_label
+from s1ops.eval.metrics import noul_routed_label, top_label
 from s1ops.improve.calibrate import Fit, fit_for, fitted_items, load_fits, transform
 from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
 from s1ops.improve.policy import (
@@ -336,7 +336,10 @@ def create_app(
         filtered = question_id is not None or model_served is not None or primitive is not None
         chosen_grp = matching[0] if filtered else next((g for g in matching if g.primitive == "noul"), matching[0])
 
-        conf, correct = top_label(chosen_grp.P, chosen_grp.y)
+        # A noul threshold counts what a noul `error_budget` policy routes, as `s1 policy tune
+        # --noul-routing threshold` tunes it.
+        noul = chosen_grp.primitive == "noul"
+        conf, correct = noul_routed_label(chosen_grp.P, chosen_grp.y) if noul else top_label(chosen_grp.P, chosen_grp.y)
         tau = select_threshold(conf, correct, budget=error_budget)
         curve = threshold_curve(
             conf,

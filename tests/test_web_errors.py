@@ -25,8 +25,26 @@ _TEXT_FIELDS = (
 )
 _SAFE_INTERPOLATIONS = {
     "res.status",  # numeric HTTP status, only ever reaches the page via showError's esc()
-    "err.message",  # the overview header, assigned with textContent rather than innerHTML
 }
+
+
+def _statement_before(script: str, pos: int) -> str:
+    """The statement an interpolation at `pos` belongs to, up to it."""
+    start = max(script.rfind(";", 0, pos), script.rfind("{\n", 0, pos), script.rfind("}\n", 0, pos))
+    return script[start + 1:pos]
+
+
+def _leaks(script: str) -> list[str]:
+    """Interpolations naming a server text field without esc(). One in a `.textContent =`
+    assignment is text, never markup, so it is exempt there and nowhere else."""
+    leaks = []
+    for m in re.finditer(r"\$\{([^{}]*)\}", script):
+        e = m.group(1)
+        if "esc(" in e or e.strip() in _SAFE_INTERPOLATIONS or ".textContent =" in _statement_before(script, m.start()):
+            continue
+        if any(re.search(rf"\.{f}\b", e) for f in _TEXT_FIELDS):
+            leaks.append(e)
+    return leaks
 
 
 @pytest.fixture
@@ -125,12 +143,16 @@ def test_web_escapes_hostile_identifiers(ws) -> None:
     html = (STATIC_DIR / "index.html").read_text()
     script = html[html.index("<script>"):]
     assert "function esc(" in script
-    unescaped = [
-        e for e in re.findall(r"\$\{([^{}]*)\}", script)
-        if "esc(" not in e and e.strip() not in _SAFE_INTERPOLATIONS
-    ]
-    leaks = [e for e in unescaped if any(re.search(rf"\.{f}\b", e) for f in _TEXT_FIELDS)]
-    assert leaks == []
+    assert _leaks(script) == []
+
+
+def test_the_scan_exempts_an_error_message_only_where_it_is_text() -> None:
+    html = (STATIC_DIR / "index.html").read_text()
+    script = html[html.index("<script>"):]
+    old = 'getElementById("overview-meta").textContent = `Workspace error: ${err.message}`'
+    assert script.count(old) == 1
+    as_markup = script.replace(old, 'getElementById("overview-meta").innerHTML = `Workspace error: ${err.message}`')
+    assert _leaks(as_markup) == ["err.message"]
 
 
 def test_index_html_has_no_external_refs() -> None:

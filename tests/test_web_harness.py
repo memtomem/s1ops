@@ -251,3 +251,56 @@ def _mutated(old: str, new: str) -> str:
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:
     html = "".join(_render(LOADERS[case], _hostile_routes(payloads[case]), functions=_mutated(old, new)))
     assert "<img" in html
+
+
+# --- hostile error messages --------------------------------------------------------------------
+
+# Each tab's loader and the container its errors replace. A 400's detail names workspace files and
+# identifiers, and the escape scan lets `err.message` through as safe, so only this checks it.
+CONTAINERS = {
+    "loadAudit": "calib-container",
+    "loadPolicy": "policy-container",
+    "loadLint": "lint-container",
+    "loadSlicesAndLabels": "slices-container",
+    "loadCompare": "compare-container",
+    "loadDrift": "drift-container",
+}
+
+
+def test_the_error_containers_are_the_pages_own() -> None:
+    assert CONTAINERS == dict(re.findall(r'^    run\((\w+), "([^"]+)"\);$', _script(), re.M))
+    assert set(CONTAINERS) == set(LOADERS.values())
+
+
+def _render_error(loader: str, functions: str | None = None) -> list[list[str]]:
+    """Run `run(loader, container)` with `fetchJson` failing with a hostile message, as it does for a
+    400 whose detail holds a workspace identifier; return `[id, html]` for every element written."""
+    js = f"""
+let policySeq = 0;
+let GROUPS = [];
+const els = {{}};
+const inputs = {json.dumps(_INPUTS)};
+const el = id => (els[id] ??= {{value: inputs[id] ?? "", textContent: "", innerHTML: "", style: {{}}}});
+const document = {{getElementById: el, querySelectorAll: () => []}};
+const fetchJson = async () => {{ throw new Error({json.dumps(HOSTILE)}); }};
+{functions if functions is not None else _all_functions()}
+run({loader}, {json.dumps(CONTAINERS[loader])}).then(() => process.stdout.write(JSON.stringify(
+  Object.entries(els).filter(([, e]) => e.innerHTML).map(([id, e]) => [id, e.innerHTML]))));
+"""
+    return _node(js)
+
+
+@needs_node
+@pytest.mark.parametrize("loader", sorted(CONTAINERS))
+def test_every_tab_shows_a_hostile_error_message_as_text(loader) -> None:
+    written = _render_error(loader)
+    assert [id_ for id_, _ in written] == [CONTAINERS[loader]]
+    html = written[0][1]
+    assert "<img" not in html
+    assert ESCAPED in html
+
+
+@needs_node
+def test_the_error_check_catches_a_dropped_esc() -> None:
+    functions = _mutated("ERROR</span> ${esc(err.message)}</div>", "ERROR</span> ${err.message}</div>")
+    assert "<img" in _render_error("loadAudit", functions=functions)[0][1]

@@ -129,14 +129,15 @@ def test_the_line_counts_failed_records(probe, monkeypatch) -> None:
     assert sum(row["model_served"] is None for row in probe.records()) == 3
 
 
-def test_no_states_with_a_stale_output_says_zero_records_and_leaves_it_empty(probe) -> None:
+def test_no_states_is_refused_before_the_backend_is_made_and_keeps_a_stale_output(probe) -> None:
     probe.run_dir.mkdir()
     probe.out.write_text("previous\n", encoding="utf-8")
     probe.close_with(RuntimeError)
     rc, out, err = probe(n=0)
     assert rc == 1 and out == ""
-    assert err == [f"s1: closing the backend failed (RuntimeError) after the run finished; 0 records kept in {probe.out}, 0 of them failed"]
-    assert probe.out.read_text(encoding="utf-8") == ""
+    assert err == [f"s1: {probe.tmp / 's.jsonl'}: holds no state rows, so the probe would send nothing"]
+    assert probe.calls == 0
+    assert probe.out.read_text(encoding="utf-8") == "previous\n"
 
 
 def test_debug_reraises_the_close_error_of_a_finished_run(probe, monkeypatch) -> None:

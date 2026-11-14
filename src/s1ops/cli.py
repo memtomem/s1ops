@@ -1049,6 +1049,10 @@ def _cmd_probe(args: argparse.Namespace) -> int:
     check_reservation(args.worst_usd_per_token, args.reserve_overhead_tokens or 0.0)
 
     states = _load_jsonl_dicts(Path(args.states))
+    if not states:
+        # Before the backend, the ledger or the output is touched: a run that sends nothing would
+        # leave an empty output that the next command refuses, one step away from the cause.
+        raise CliError(f"{args.states}: holds no state rows, so the probe would send nothing")
     try:
         check_states(states)
         check_labels(states, tasks)

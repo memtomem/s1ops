@@ -53,15 +53,16 @@ def _rows(path: Path | str) -> list[dict]:
 class Review:
     """A sheet built by the CLI from `rows`, and the key it was built with."""
 
-    def __init__(self, tmp_path: Path, rows: list[dict], capsys) -> None:
+    def __init__(self, tmp_path: Path, rows: list[dict], capsys, question: str = QID) -> None:
+        tmp_path.mkdir(exist_ok=True)
         self.dir = tmp_path
         self.records = _write(tmp_path / "records.jsonl", rows)
-        items = sorted({r["item_id"] for r in rows})
+        items = sorted({r["item_id"] for r in rows if r.get("model_served") is not None})
         states = _write(tmp_path / "states.jsonl", [{"dataset": "d", "item_id": i, "state": f"{SECRET} {i}"} for i in items])
         self.sheet, self.key_path = tmp_path / "sheet.md", tmp_path / "key.json"
         argv = ["labelaudit", "sheet", self.records, "--states", states, "-o", str(self.sheet), "-k", str(self.key_path), "--top", "4", "--controls", "4"]
         if len({r["question_id"] for r in rows}) > 1:
-            argv += ["--question", QID]
+            argv += ["--question", question]
         assert cli_main(argv) == 0
         capsys.readouterr()
         self.key = json.loads(self.key_path.read_text())
@@ -203,6 +204,109 @@ def test_records_of_another_question_are_refused(review: Review, tmp_path: Path,
     other = _write(tmp_path / "other.jsonl", [{**r, "question_id": OTHER_QID} for r in _rows(review.records)])
     assert review.patch(review.answer(), tmp_path / "patched.jsonl", records=other) == 1
     assert capsys.readouterr().err == f"s1: {other}: no answered, labeled record is for question {QID}, the one the sheet asked\n"
+
+
+# ---- the sheet and the key are of one review (review of #155) ----
+
+
+def test_another_questions_sheet_is_refused(tmp_path: Path, capsys) -> None:
+    """Two sheets number their items alike and offer the same options: without the check, the
+    answers to one question became the labels of the other."""
+    rows = [*_noul_rows(), *({**r, "question_id": OTHER_QID} for r in _noul_rows())]
+    first = Review(tmp_path / "q1", rows, capsys)
+    second = Review(tmp_path / "q2", rows, capsys, question=OTHER_QID)
+    out = tmp_path / "patched.jsonl"
+    overturned = second.answer({i["item_id"]: str(i["label"] != "True") for i in second.key["items"]})
+    assert first.patch(overturned, out) == 1
+    assert capsys.readouterr().err == f"s1: {overturned}: the sheet asks question {OTHER_QID}, and the key is for {QID}\n"
+    assert not out.exists()
+
+
+def test_a_sheet_with_items_its_key_does_not_have_is_refused(review: Review, tmp_path: Path, capsys) -> None:
+    done = review.answer()
+    done.write_text(done.read_text() + "\n## 9\n\n> one more\n\nAnswer: True\n\n## 10\n\n> and another\n\nAnswer: False\n")
+    out = tmp_path / "patched.jsonl"
+    assert review.patch(done, out) == 1
+    assert capsys.readouterr().err == f"s1: {done}: item 9 is answered on the sheet and the key has no such item (2 in all); they are not of one review\n"
+    assert not out.exists()
+
+
+def test_a_sheet_that_does_not_name_its_question_is_refused(review: Review, tmp_path: Path, capsys) -> None:
+    done = review.answer()
+    done.write_text(done.read_text().replace("Question ID:", "About:"))
+    assert review.patch(done, tmp_path / "patched.jsonl") == 1
+    assert capsys.readouterr().err == f"s1: {done}: no `Question ID:` block above the first item, so the sheet cannot be matched to the key\n"
+
+
+def test_a_question_id_inside_an_item_is_not_the_sheets(review: Review, tmp_path: Path, capsys) -> None:
+    done = review.answer()
+    text = done.read_text().replace("Question ID:", "About:")
+    done.write_text(text.replace("Answer: ", f"Question ID:\n\n> {QID}\n\nAnswer: ", 1))
+    assert review.patch(done, tmp_path / "patched.jsonl") == 1
+    assert "no `Question ID:` block above the first item" in capsys.readouterr().err
+
+
+def test_a_sheet_printed_before_the_english_one_is_matched_too(review: Review, tmp_path: Path, capsys) -> None:
+    done = review.answer()
+    done.write_text(done.read_text().replace("Question ID:", "질문 ID:").replace("Answer: ", "답: "))
+    assert review.patch(done, tmp_path / "patched.jsonl") == 0
+
+
+def test_two_key_items_for_one_item_are_refused(review: Review, tmp_path: Path, capsys) -> None:
+    done = review.answer()
+    first, second = review.key["items"][0], review.key["items"][1]
+    second.update(item_id=first["item_id"], label=first["label"])
+    review.key_path.write_text(json.dumps(review.key))
+    assert review.patch(done, tmp_path / "patched.jsonl") == 1
+    assert capsys.readouterr().err == f"s1: {review.key_path}: items {first['n']} and {second['n']} are both ('d', '{first['item_id']}'); a sheet shows each item once\n"
+
+
+# ---- a probe that failed still carries the item's label (review of #155) ----
+
+
+def _failed(item: str, label) -> dict:
+    return {"schema": "s1-record/1", "dataset": "d", "item_id": item, "question_id": QID, "primitive": "noul",
+            "model_requested": "m3", "model_served": None, "error_code": "timeout", "label": label}  # fmt: skip
+
+
+def test_a_failed_probes_row_takes_the_corrected_label_too(tmp_path: Path, capsys) -> None:
+    review = Review(tmp_path, [*_noul_rows(), *(_failed(f"i{i}", label=i % 2 == 0) for i in range(N))], capsys)
+    (a,) = review.reviewed(1)
+    old = next(i["label"] for i in review.key["items"] if i["item_id"] == a) == "True"
+    out = tmp_path / "patched.jsonl"
+    assert review.patch(review.answer({a: str(not old)}), out) == 0
+    assert json.loads(capsys.readouterr().out)["records_patched"] == 3
+    assert {(r["model_served"], r["label"]) for r in _rows(out) if r["item_id"] == a} == {("m1", not old), ("m2", not old), (None, not old)}
+    changed = [new for before, new in zip(_rows(review.records), _rows(out)) if before != new]
+    assert {r["item_id"] for r in changed} == {a} and len(changed) == 3
+    # ...and applying it again finds all three done.
+    again = tmp_path / "again.jsonl"
+    assert review.patch(review.dir / "done.md", again, records=str(out)) == 0
+    assert json.loads(capsys.readouterr().out)["records_already"] == 3
+
+
+@pytest.mark.parametrize(("label", "message"), [("yes", "noul label must be a JSON boolean, got 'yes'"), (None, None)])
+def test_a_failed_probes_label_is_checked_before_it_is_compared(tmp_path: Path, capsys, label, message) -> None:
+    review = Review(tmp_path, _noul_rows(), capsys)
+    (a,) = review.reviewed(1)
+    with_failed = _write(tmp_path / "with_failed.jsonl", [*_rows(review.records), _failed(a, label)])
+    out = tmp_path / "patched.jsonl"
+    code = review.patch(review.answer(), out, records=with_failed)
+    if message is None:  # no label on the failed row: nothing to correct, and it is copied
+        assert code == 0 and _rows(out)[-1] == _failed(a, None)
+    else:
+        assert code == 1
+        assert capsys.readouterr().err == f"s1: {with_failed}: line {2 * N + 1}: {message}\n"
+        assert not out.exists()
+
+
+def test_a_failed_probes_row_with_another_label_is_refused(tmp_path: Path, capsys) -> None:
+    review = Review(tmp_path, _noul_rows(), capsys)
+    (a,) = review.reviewed(1)
+    old = next(i["label"] for i in review.key["items"] if i["item_id"] == a) == "True"
+    with_failed = _write(tmp_path / "with_failed.jsonl", [*_rows(review.records), _failed(a, not old)])
+    assert review.patch(review.answer(), tmp_path / "patched.jsonl", records=with_failed) == 1
+    assert capsys.readouterr().err.startswith(f"s1: {with_failed}: line {2 * N + 1}: item ('d', '{a}') is labeled {not old!r}")
 
 
 def test_an_unfinished_sheet_names_the_sheet(review: Review, tmp_path: Path, capsys) -> None:

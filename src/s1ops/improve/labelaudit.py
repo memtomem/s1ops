@@ -14,7 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from s1ops.contracts._validation import pydantic_errors
 from s1ops.contracts.questions import ChoiceQuestion, NoulQuestion, QuestionModel, ScoreQuestion, parse_wire_question
 from s1ops.contracts.questions import question_id as question_id_of
-from s1ops.contracts.records import Record, parse_record, probability_total, reparse
+from s1ops.contracts.records import Record, RecordError, label_problem, parse_record, probability_total, reparse, without_state
 from s1ops.improve.calibrate import Fit, fit_for, refusal, transform
 from s1ops.improve.slices import wilson
 
@@ -501,6 +501,180 @@ def score_sheet(form: str, key: Mapping) -> dict:
         arm["reviewer_disagrees_with_label"] += a != item["label"]
         arm["reviewer_agrees_with_model"] += a == item["predicted"]
     return out
+
+
+# `질문 ID:` is what sheets printed by s1ops 0.6.0 and earlier say.
+_SHEET_QUESTION = re.compile(r"^(?:Question ID:|질문 ID:)[ \t]*\n[ \t]*\n((?:>.*(?:\n|\Z))+)", re.M)
+_FIRST_ITEM = re.compile(r"^## \d+[ \t]*$", re.M)
+
+
+def sheet_question_id(form: str) -> str | None:
+    """The question a sheet says it asks: the quoted block under `Question ID:`, above the first
+    item. `None` when the sheet has no such block."""
+    first = _FIRST_ITEM.search(form)
+    found = _SHEET_QUESTION.search(form[: first.start()] if first else form)
+    if found is None:
+        return None
+    lines = found.group(1).rstrip("\n").split("\n")
+    return "\n".join(line[2:] if line.startswith("> ") else line[1:] for line in lines)
+
+
+class LabelPatchError(ValueError):
+    """A finished review that cannot be applied to these records. `source` says which input is at
+    fault: the `key`, the `sheet` or the `records`."""
+
+    def __init__(self, message: str, source: str = "records") -> None:
+        super().__init__(message)
+        self.source = source
+
+
+@dataclass(frozen=True)
+class Correction:
+    """One reviewed item whose reviewer answered otherwise than its label."""
+
+    dataset: str | None
+    item_id: str
+    question_id: str
+    arm: str
+    label_from: bool | int | str
+    label_to: bool | int | str
+
+    def as_dict(self) -> dict:
+        return {"dataset": self.dataset, "item_id": self.item_id, "question_id": self.question_id, "arm": self.arm, "from": self.label_from, "to": self.label_to}
+
+
+@dataclass(frozen=True)
+class LabelPatch:
+    rows: list[dict]
+    """Every input row in order, without `state`; a corrected item's rows carry the reviewer's answer."""
+    reviewed: int
+    corrections: tuple[Correction, ...]
+    records_patched: int
+    records_already: int
+    """Rows of a corrected item that carried the reviewer's answer already: the patch was applied before."""
+
+
+class _PatchKeyItem(_KeyItem):
+    item_id: str = Field(min_length=1)
+    dataset: str | None
+    question_id: str = Field(min_length=1)
+
+
+class _PatchKey(_Key):
+    """The parts of the secret key `patch_labels` reads, beyond what scoring does."""
+
+    question_id: str = Field(min_length=1)
+    items: list[_PatchKeyItem]
+
+
+def patch_labels(records: Sequence[Record], form: str, key: Mapping) -> LabelPatch:
+    """Apply a finished blind review to the labels of the records its sheet was built from.
+
+    Where the reviewer's answer differs from the label the key holds, every labeled row of that
+    item and question takes the answer, whichever model answered it, and a row whose probe failed
+    as well: a label is the item's. The
+    answer is one of the sheet's options, which are the question's classes written out, so it
+    becomes the class it names (a noul boolean, a choice option, a score level).
+
+    The records must be the sheet's: every reviewed item is in them, and a row of a corrected item
+    carries either the label the reviewer was shown to disagree with or, when the patch was applied
+    before, the answer. Anything else is refused (`LabelPatchError`) rather than overwritten.
+    Rows are copied as `s1 apply` copies them, without a top-level `state`."""
+    try:
+        check_key(key)
+        doc = _PatchKey.model_validate(key)
+    except ValidationError as e:
+        raise LabelPatchError("; ".join(_key_errors(e)), "key") from None
+    except ValueError as e:
+        raise LabelPatchError(str(e), "key") from None
+    try:
+        answers = parse_answers(form, doc.options)
+    except ValueError as e:
+        raise LabelPatchError(str(e), "sheet") from None
+    # The sheet and the key must be of one review: two sheets number their items alike, so the
+    # answers of one would otherwise be applied through the key of the other.
+    on_sheet = sheet_question_id(form)
+    if on_sheet is None:
+        raise LabelPatchError("no `Question ID:` block above the first item, so the sheet cannot be matched to the key", "sheet")
+    if on_sheet != "\n".join(doc.question_id.splitlines() or [""]):
+        raise LabelPatchError(f"the sheet asks question {on_sheet}, and the key is for {doc.question_id}", "sheet")
+    extra = sorted(set(answers) - {str(item.n) for item in doc.items}, key=int)
+    if extra:
+        raise LabelPatchError(
+            f"item {extra[0]} is answered on the sheet and the key has no such item ({len(extra)} in all); they are not of one review",
+            "sheet",
+        )
+    records = [reparse(r) for r in records]
+    asked = [r for r in records if r.question_id == doc.question_id and r.model_served is not None and r.label is not None]
+    if not asked:
+        raise LabelPatchError(f"no answered, labeled record is for question {doc.question_id}, the one the sheet asked")
+    try:
+        check_sheet_records(asked)
+        sheet_options(asked, doc.options)
+    except ValueError as e:
+        raise LabelPatchError(str(e)) from None
+    primitive, classes = asked[0].primitive, asked[0].classes
+    named = {str(c): c for c in classes}
+
+    reviewed: dict[tuple[Identity, str], _PatchKeyItem] = {}
+    for item in doc.items:
+        if item.question_id != doc.question_id:
+            raise LabelPatchError(f"item {item.n} is for question {item.question_id}, the key for {doc.question_id}", "key")
+        if str(item.n) not in answers:
+            raise LabelPatchError(f"item {item.n}: no answer", "sheet")
+        if item.label not in named:
+            raise LabelPatchError(f"item {item.n}: label {item.label!r} is not one of the options {doc.options}", "key")
+        at = ((item.dataset, item.item_id), item.question_id)
+        if at in reviewed:
+            raise LabelPatchError(f"items {reviewed[at].n} and {item.n} are both {at[0]!r}; a sheet shows each item once", "key")
+        reviewed[at] = item
+
+    seen: set[tuple[Identity, str]] = set()
+    corrections: dict[tuple[Identity, str], Correction] = {}
+    rows: list[dict] = []
+    patched = already = 0
+    for r in records:
+        row = without_state(r.raw)
+        at = (r.item, r.question_id)
+        item = reviewed.get(at)
+        # A probe that failed still wrote the item's label, which the parser does not read.
+        label = r.label if r.model_served is not None else r.raw.get("label")
+        if item is not None and label is not None:
+            if r.model_served is not None:
+                seen.add(at)
+            else:
+                problem = label_problem(primitive, label, classes)
+                if problem is not None:
+                    raise RecordError(r.line, problem, r.path)
+            answer = answers[str(item.n)]
+            old, new = named[item.label], named[answer]
+            if str(label) not in (item.label, answer):
+                raise RecordError(
+                    r.line,
+                    f"item {r.item} is labeled {label!r}, and the review was of the label {old!r} (item {item.n} of the key); "
+                    "these are not the records the sheet was built from",
+                    r.path,
+                )
+            if answer != item.label:
+                if str(label) == answer:
+                    already += 1
+                else:
+                    problem = label_problem(primitive, new, classes)
+                    if problem is not None:  # the options are the classes, so only a hand-made key gets here
+                        raise LabelPatchError(f"item {item.n}: {problem}", "key")
+                    row["label"] = new
+                    patched += 1
+                corrections.setdefault(at, Correction(item.dataset, item.item_id, item.question_id, item.arm, old, new))
+        rows.append(row)
+    missing = [item for at, item in reviewed.items() if at not in seen]
+    if missing:
+        first = missing[0]
+        raise LabelPatchError(
+            f"{len(missing)} of the {len(reviewed)} reviewed items have no labeled record, first {(first.dataset, first.item_id)!r} "
+            f"(item {first.n} of the key); these are not the records the sheet was built from"
+        )
+    ordered = sorted(corrections.values(), key=lambda c: (c.dataset is not None, c.dataset or "", c.item_id))
+    return LabelPatch(rows, len(reviewed), tuple(ordered), patched, already)
 
 
 def precision_at_k(hits: int, k: int) -> tuple[float, tuple[float, float]]:

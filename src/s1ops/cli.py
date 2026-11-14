@@ -48,6 +48,8 @@ from s1ops.improve.labelaudit import (
     estimate,
     rank_with_skips,
     score_sheet,
+    LabelPatchError,
+    patch_labels,
 )
 from s1ops.improve.policy import (
     Band,
@@ -778,6 +780,9 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
         )
         return 0
 
+    if args.la_cmd == "patch":
+        return _labelaudit_patch(args)
+
     records = _filtered_records(args)
     # `--fit` given means calibrate, even when the file holds no fits: every record is then refused.
     fits = load_fits(args.fit) if getattr(args, "fit", None) else None
@@ -852,6 +857,43 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
             indent=2,
         )
     )
+    return 0
+
+
+def _labelaudit_patch(args: argparse.Namespace) -> int:
+    _require_file(args.key, "secret key", "s1 labelaudit sheet")
+    output = Path(args.output)
+    if output.exists():
+        for other in (args.records, args.sheet, args.key):
+            if output.samefile(other):
+                raise CliError(f"--output {output} is the same file as {other}")
+    form_text = _read_text(Path(args.sheet))
+    key_doc = _read_json(Path(args.key))
+    records = read_records(args.records)
+    try:
+        patch = patch_labels(records, form_text, key_doc)
+    except LabelPatchError as e:
+        if os.environ.get("S1_DEBUG"):
+            raise
+        where = {"key": args.key, "sheet": args.sheet}.get(e.source, args.records)
+        raise CliError(f"{where}: {e}") from None
+    # Encoded before the file is opened, so a refusal leaves the old file in place. Rows as `s1 apply` writes them.
+    data = "".join(json.dumps(row, sort_keys=True) + "\n" for row in patch.rows).encode("utf-8")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(data)
+    summary: dict[str, Any] = {
+        "output": str(output),
+        "question_id": key_doc["question_id"],
+        "reviewed": patch.reviewed,
+        "corrected": len(patch.corrections),
+        "records_patched": patch.records_patched,
+        "records_already": patch.records_already,
+        "corrections": [c.as_dict() for c in patch.corrections],
+    }
+    state_dropped = sum(1 for r in records if "state" in r.raw)
+    if state_dropped:
+        summary["state_dropped"] = state_dropped
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
@@ -1633,6 +1675,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_lae = sub_la.add_parser("estimate", help="Score completed blind sheet against secret key", **_FMT)
     p_lae.add_argument("sheet", help="review sheet completed by the reviewer")
     p_lae.add_argument("--key", required=True, help="secret key JSON from `s1 labelaudit sheet`")
+    p_lap = sub_la.add_parser(
+        "patch",
+        help="Apply a finished blind review to the records' labels: where the reviewer answered otherwise than the label, the item's labeled records take the answer",
+        **_FMT,
+    )
+    p_lap.add_argument("records", help=f"the records the sheet was built from: {_H_RECORDS}")
+    p_lap.add_argument("--sheet", required=True, help="review sheet completed by the reviewer")
+    p_lap.add_argument("--key", required=True, help="secret key JSON from `s1 labelaudit sheet`")
+    p_lap.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help="records JSONL to write, every input row with corrected labels; item `state` is never written (safe-v1). Fits and policies made from the old labels are not changed: fit and tune again",
+    )
     p_la.set_defaults(func=_cmd_labelaudit)
 
     # compare

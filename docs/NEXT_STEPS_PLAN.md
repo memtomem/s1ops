@@ -167,7 +167,8 @@
 - [x] 체크포인트 이름 규칙과 승격 순서를 README에 문서화, `s1 probe`가 states 행의 `split`을 레코드에 복사
 - [x] `s1 trainset record`: 끝난 학습 실행을 `s1-trainrun/1`로 기록. manifest·데이터 파일·가중치 SHA-256, 평탄한 trainer 설정·요약 지표·스텝 지표, 부모 실행 id. 데이터 행의 `(dataset, item_id)`가 manifest에 없으면 exit 2(누출 거부가 모르는 학습 항목), manifest 항목에 행이 없으면 exit 1. trainer 로그 파싱은 하지 않음(소유자 결정 2026-11-14: 범용 형식 + 학습기별 변환기는 사용처에)
 - [x] `--training-run`: `compare`·`policy tune`/`curve`의 출력에 `trainrun_id` 표시, `export langfuse`에 기록 첨부(`training_runs`, 관측마다 `metadata.trainrun_id`). 모델은 이름으로 대응(`model_served` = 기록의 `checkpoint`). 옵션이 없으면 출력은 그대로. `policy tune`은 기록이 이름 붙인 모델의 정책에만 `policy.json`에도 `trainrun_id`를 씀(소유자 결정 2026-11-15; `policy_sha256`에는 넣지 않음. 0.11.1 이하 리더는 이 필드가 있는 파일을 거부하므로, 그런 리더용 정책은 옵션 없이 튜닝). `export langfuse --policy`는 정책이 가리키는 실행과 다른 기록을 거부. trainer 설정·요약 지표의 이름 `state`는 거부
-- [ ] 리뷰 라벨 교정 반영(`labelaudit patch` / `pull`)
+- [x] 리뷰 라벨 교정 반영: `s1 labelaudit patch RECORDS --sheet --key -o OUT`. 완성된 블라인드 시트에서 리뷰어 답이 라벨과 다른 항목의 라벨을 답으로 교체(그 항목·질문의 모든 라벨 있는 레코드, 모델 무관), 새 레코드 파일로만 씀. 시트를 만든 레코드가 아니면 exit 1, 재적용은 변화 없음. fits·policy·states 파일의 라벨은 건드리지 않음
+- [ ] `labelaudit pull`(Langfuse Annotation Queue에서 가져오기)은 미착수: s1ops는 Langfuse에 네트워크 호출을 하지 않으므로(`s1 export`도 파일만 씀) 첫 네트워크 클라이언트가 됨. 큐 항목이 교정된 라벨을 담는 형식도 정해야 함(소유자 결정 필요)
 - [x] 승격 순서 wrapper: `s1 promote --current --cal --eval --training-manifest ... -o DIR`. 이미 probe한 레코드만 읽고 백엔드는 부르지 않음. compare·drift(쓰기 전) → fit → apply → policy tune을 각 명령의 파서 기본값으로 실행, manifest를 받는 모든 단계에 전달. `s1-promotion/1` 보고서(`promotion.json`). 후보 파일은 한 모델만, 그 모델의 manifest 필수. 거부는 단계 이름과 원래 종료 코드를 유지. `replaceable`이 false여도 exit 0(판정은 보고서로)
 - [ ] 워크벤치 읽기 전용 체크포인트 뷰(GET만)
 

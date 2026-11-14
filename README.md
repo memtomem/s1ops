@@ -13,17 +13,17 @@
 
 ## Why System 1 Models Need Dedicated LLMOps
 
-Traditional LLMOps platforms (**Langfuse**, **Arize Phoenix**, **LangSmith**) are architected for **System 2 generative workflows** (free-text completions, prompt templates, multi-turn RAG chains, token streaming latency). When applied to **System 1 decision models**, seven critical gaps emerge:
+LLMOps platforms such as **Langfuse**, **Arize Phoenix** and **LangSmith** are built around **System 2 generative workflows** (free-text completions, prompt templates, multi-turn RAG chains, token streaming latency). For **System 1 decision models**, `s1ops` covers decision-model operations across seven dimensions:
 
-| Dimension | System 2 LLMOps (Langfuse / Phoenix) | `s1ops` (System 1 LLMOps) |
+| Dimension | Text-oriented LLMOps tooling (typical focus) | `s1ops` (System 1 LLMOps) |
 | --- | --- | --- |
 | **Primary Output** | Unstructured text (`string`) | Calibrated probability vector (`noul`: `p` in `[0, 1]`; `choice`: a distribution over K options; `score`: ordinal `0..L-1`) |
-| **Aggregation Unit** | Trace / Prompt Name | Strict **`(question_id, model_served, primitive)`** group — never pools across wordings or models (drift's per-question report pools models on purpose, so a model change shows) |
-| **Calibration & Small-n Bias** | None (only scalar scores) | **Equal-width/mass ECE**, **Monte Carlo Calibrated Noise Floor (`p95`)**, **Tie-Mass rounding detector**, **Temp/Platt/Isotonic** post-hoc fit |
-| **Decision Thresholds & Routing** | Hardcoded `0.5` in app code | **Tie-safe Error-Budget Threshold (`select_threshold` + Clopper-Pearson)**, **System 1 → System 2 Escalation Band (`[lo, hi)`)**, & **`DecisionGate` Runtime Evaluator** |
-| **Prompt / Question QA** | Free-form prompt playground | **Static Linter (`JL000`–`JL060`)** + **Probe Coherence** (Noul vs Yes/No Choice twin gap & inverse sum `abs(p + p_inv - 1)`) |
-| **Distribution & Model Drift** | Token/latency or generic embedding drift | **Label-Free Probability PSI & Jensen-Shannon Divergence**, **Silent `model_served` Upgrade Alert**, & **Escalation Band Rate Shift** |
-| **Data Privacy Default** | Logs full prompt/response bodies by default | **`safe-v1` Zero-State Default**: never writes raw item `state` into records, probe ledgers, or exported spans/scores |
+| **Aggregation Unit** | Trace, session or prompt version | Strict **`(question_id, model_served, primitive)`** group — never pools across wordings or models (drift's per-question report pools models on purpose, so a model change shows) |
+| **Calibration & Small-n Bias** | Scores attached to traces; calibration fitting and small-sample noise floors are outside the usual workflow | **Equal-width/mass ECE**, **Monte Carlo Calibrated Noise Floor (`p95`)**, **Tie-Mass rounding detector**, **Temp/Platt/Isotonic** post-hoc fit |
+| **Decision Thresholds & Routing** | Left to application code, often a fixed cutoff | **Tie-safe Error-Budget Threshold (`select_threshold` + Clopper-Pearson)**, **System 1 → System 2 Escalation Band (`[lo, hi)`)**, & **`DecisionGate` Runtime Evaluator** |
+| **Prompt / Question QA** | Prompt playgrounds and versioning | **Static Linter (`JL000`–`JL060`)** + **Probe Coherence** (Noul vs Yes/No Choice twin gap & inverse sum `abs(p + p_inv - 1)`) |
+| **Distribution & Model Drift** | Latency, token, cost and embedding-level monitoring | **Label-Free Probability PSI & Jensen-Shannon Divergence**, **Silent `model_served` Upgrade Alert**, & **Escalation Band Rate Shift** |
+| **Data Privacy Default** | Prompt and response inspection for debugging | **`safe-v1` Zero-State Default**: never writes raw item `state` into records, probe ledgers, or exported spans/scores |
 
 `s1ops` bridges both worlds: you run rigorous System 1 calibration, linting, drift monitoring, and policy compilation locally (`s1` CLI + `s1 web`), execute sub-millisecond runtime gating via `s1.DecisionGate`, and export **`safe-v1` body-free scores, annotation queues, and OpenInference spans** as local files for **Langfuse** and **Arize Phoenix**; `s1 export` uploads nothing.
 

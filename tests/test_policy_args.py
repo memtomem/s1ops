@@ -86,6 +86,36 @@ def test_tune_refuses_max_escalation_outside_the_unit_interval(ws, tmp_path: Pat
     assert not (tmp_path / "p.json").exists()
 
 
+@pytest.mark.parametrize("value", ["-0.1", "1.5", "2", "nan", "inf"])
+@pytest.mark.parametrize("records", ["records", "records_categorical"])
+def test_tune_refuses_an_error_budget_outside_the_unit_interval(ws, tmp_path: Path, capsys, value: str, records: str) -> None:
+    # It used to reach select_threshold, whose line named neither the flag nor the value.
+    args = ["policy", "tune", ws[records], "-o", str(tmp_path / "p.json"), "--use-calib", "--error-budget", value]
+    assert cli_main(args) == 1
+    assert _error(capsys) == f"s1: --error-budget must be a number in [0, 1], got {float(value)!r}"
+    assert not (tmp_path / "p.json").exists()
+
+
+@pytest.mark.parametrize("value", ["0", "1"])
+def test_tune_accepts_the_error_budget_bounds(ws, tmp_path: Path, capsys, value: str) -> None:
+    assert cli_main(["policy", "tune", ws["records_categorical"], "-o", str(tmp_path / "p.json"), "--use-calib", "--error-budget", value]) == 0
+    capsys.readouterr()
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--question", "q-nope"],  # before, no matching group won
+        ["--max-false-pass", "0.5"],  # a noul-only file uses no budget under --max-false-pass; still refused
+    ],
+)
+def test_the_error_budget_is_checked_whether_or_not_a_group_uses_it(ws, tmp_path: Path, capsys, extra: list[str]) -> None:
+    args = ["policy", "tune", ws["records"], "-o", str(tmp_path / "p.json"), "--use-calib", "--error-budget", "2", *extra]
+    assert cli_main(args) == 1
+    assert _error(capsys) == "s1: --error-budget must be a number in [0, 1], got 2.0"
+    assert not (tmp_path / "p.json").exists()
+
+
 @pytest.mark.parametrize("value", ["0", "1", "nan"])
 def test_tune_refuses_cp_alpha_only_with_the_upper_bound(ws, tmp_path: Path, capsys, value: str) -> None:
     base = ["policy", "tune", ws["records"], "-o", str(tmp_path / "p.json"), "--use-calib", "--cp-alpha", value]

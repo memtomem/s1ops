@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from s1ops.cli import main as cli_main
+from s1ops.contracts.records import RecordError
 from s1ops.monitor import drift
 from s1ops.monitor.drift import (
     PSI_ALPHA_CRITICAL,
@@ -259,15 +260,14 @@ def test_p_is_deterministic_order_free_and_per_question(tmp_path: Path) -> None:
     assert by_q["q"]["psi_p_value"] == first
 
 
-@pytest.mark.parametrize("resamples", [0, 1000])
-def test_a_question_id_with_a_lone_surrogate_still_drifts(tmp_path: Path, resamples) -> None:
-    """The parser accepts a JSON-escaped lone surrogate; seeding the question's generator must too."""
+def test_a_question_id_with_a_lone_surrogate_is_refused_when_read(tmp_path: Path) -> None:
+    """The reader refuses it, so the question's generator is only ever seeded from encodable text."""
     line = '{"schema":"s1-record/1","item_id":"i1","question_id":"q\\ud800","primitive":"noul","model_requested":"m","model_served":"m","p":0.3}\n'
     r, c = tmp_path / "r.jsonl", tmp_path / "c.jsonl"
     r.write_text(line, encoding="utf-8")
     c.write_text(line, encoding="utf-8")
-    q = audit_drift(r, c, psi_resamples=resamples)["questions"][0]
-    assert q["question_id"] == "q\ud800" and q["status"] == "OK"
+    with pytest.raises(RecordError, match="line 1: a string holds a lone surrogate"):
+        audit_drift(r, c)
 
 
 def test_ordinary_question_ids_keep_their_seed() -> None:

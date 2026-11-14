@@ -164,9 +164,8 @@ def psi(
 
 
 def _psi_seed(question_id: str) -> list[int]:
-    """One generator per question, so adding or removing a question never changes another's p.
-    `surrogatepass`: the record parser accepts a JSON-escaped lone surrogate in an id."""
-    return [PSI_SEED, int(hashlib.sha256(question_id.encode("utf-8", "surrogatepass")).hexdigest()[:16], 16)]
+    """One generator per question, so adding or removing a question never changes another's p."""
+    return [PSI_SEED, int(hashlib.sha256(question_id.encode("utf-8")).hexdigest()[:16], 16)]
 
 
 def psi_test(

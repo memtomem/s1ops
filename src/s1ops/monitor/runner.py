@@ -30,7 +30,7 @@ from s1ops.contracts.questions import (
     ScoreQuestion,
     question_id,
 )
-from s1ops.contracts.records import ANSWER_KEYS, label_problem, read_row
+from s1ops.contracts.records import ANSWER_KEYS, label_problem, read_row, surrogate_problem
 from s1ops.ledger.journal import BudgetExceeded, Ledger, LedgerUnusable, Reservation, token_bound
 from s1ops.lint.loader import parse_question
 from s1ops.lint.rules import RULES
@@ -216,6 +216,11 @@ def check_states(states: Sequence[Any]) -> None:
         split = row.get("split")
         if split is not None and (not isinstance(split, str) or not split):
             raise ValueError(f"row {i}: 'split' must be a non-empty string, got {type(split).__name__}")
+        # These three are copied into every record of the row, and a reader refuses a lone surrogate.
+        for field in ("item_id", "dataset", "split"):
+            problem = surrogate_problem(f"'{field}'", row[field]) if isinstance(row.get(field), str) else None
+            if problem is not None:
+                raise ValueError(f"row {i}: {problem}")
         key = (row.get("dataset", "default"), str(item_id))
         if key in seen:
             raise ValueError(f"row {i} is the same item as row {seen[key]}: (dataset, item_id) = {key!r}")
@@ -331,9 +336,16 @@ def probe_tasks(
     (yes/no `ChoiceQuestion`) and `inverse`: the extension's `inverse` when one is supplied,
     otherwise "Is it false that: <instructions>" with the true/false criteria swapped (only for
     string instructions). Everything else is `primary`.
+
+    Raises `ValueError` for a name or a wording that holds a lone surrogate: a probe's name is copied
+    into its records, which no reader would then take, and `question_id` cannot hash such a wording.
+    Here, so that every question is refused before anything is reserved, not when its turn comes.
     """
     out: list[ProbeTask] = []
     for name, raw in questions.items():
+        problem = surrogate_problem("the name", name) if isinstance(name, str) else None
+        if problem is not None:
+            raise ValueError(f"question {name!r}: {problem}")
         q, supplied = _read_question(name, raw)
         if probe_mode and isinstance(q, NoulQuestion) and (supplied is not None or isinstance(q.instructions, str)):
             out.append(ProbeTask(name, "noul", q))
@@ -348,6 +360,11 @@ def probe_tasks(
                 out.append(ProbeTask(name, "inverse", _generated_inverse(q), "generated"))
         else:
             out.append(ProbeTask(name, "primary", q))
+    for task in out:
+        try:
+            question_id(task.question)
+        except UnicodeEncodeError as e:
+            raise ValueError(f"question {task.name!r} ({task.role}): {surrogate_problem('the wording', e.object)}") from None
     return out
 
 
@@ -400,6 +417,9 @@ def run_batch(
     """
     if not isinstance(model_requested, str) or not model_requested:
         raise ValueError(f"model_requested must be a non-empty string, got {model_requested!r}")
+    problem = surrogate_problem("model_requested", model_requested)
+    if problem is not None:
+        raise ValueError(problem)
     work_questions = probe_tasks(questions, probe_mode=probe_mode)
 
     check_states(states)

@@ -256,7 +256,7 @@ def _mutated(old: str, new: str) -> str:
         # The calibration view's kits: a table cell (metric names are mapping keys), the chart's
         # title, and the warnings (empty in the demo).
         pytest.param("audit-noul", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="table-cell"),
-        pytest.param("audit-noul", "role=\"img\"><title>${esc(spec.title)}</title>", "role=\"img\"><title>${spec.title}</title>", id="chart-title"),
+        pytest.param("audit-noul", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="chart-title"),
         pytest.param("audit-filled", "WARN</span> ${esc(w)}</div>", "WARN</span> ${w}</div>", id="audit-warning"),
     ],
 )

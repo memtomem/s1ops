@@ -388,3 +388,18 @@ def test_the_payload_check_catches_a_kept_payload(payloads) -> None:
     functions = _mutated("      delete viewData[view];\n", "")
     out = _shell_run(CACHE_STEPS, payloads["noul"], functions=functions)
     assert out["pendingChart"] is True and out["failedChart"] is True
+
+
+@needs_node
+def test_each_chart_names_the_table_holding_its_values(payloads) -> None:
+    html = _calib(payloads["categorical"])
+    ids = []
+    for card in _cards(html):
+        target = re.search(r'<svg class="chart"[^>]* aria-details="([^"]+)"', card).group(1)
+        # The element with that id is the card's bin table, and nothing else carries it.
+        assert re.search(rf'<div class="tk" data-table="calib:bins:[^"]*" id="{target}">', card)
+        assert html.count(f'"{target}"') == 2
+        ids.append(target)
+    assert len(ids) == len(set(ids)) == 2
+    # No mark takes focus: the table is the keyboard path.
+    assert "tabindex" not in html

@@ -885,8 +885,11 @@
     }
 
     // An SVG chart: its viewBox, and a title and description (its accessible name and summary).
+    // Its marks take no focus: `details`, the DOM id of the table holding the same values, is the
+    // keyboard and screen-reader path (aria-details), so every chart needs one.
     function svgFrame(spec, body) {
-      return `<svg class="chart" viewBox="0 0 ${Number(spec.w)} ${Number(spec.h)}" role="img"><title>${esc(spec.title)}</title><desc>${esc(spec.desc)}</desc>${body}</svg>`;
+      const details = spec.details ? ` aria-details="${esc(spec.details)}"` : "";
+      return `<svg class="chart" viewBox="0 0 ${Number(spec.w)} ${Number(spec.h)}" role="img"${details}><title>${esc(spec.title)}</title><desc>${esc(spec.desc)}</desc>${body}</svg>`;
     }
 
     // Hairline gridlines at the ticks, the two axis lines, tick labels and the axis names.
@@ -1052,8 +1055,9 @@
       const st = tableState(tstate, spec.id);
       const id = esc(spec.id);
       const shown = viewRows(spec, rows, st).length;
+      const domId = spec.domId ? ` id="${esc(spec.domId)}"` : "";
       return `
-        <div class="tk" data-table="${id}">
+        <div class="tk" data-table="${id}"${domId}>
           <div class="tk-toolbar">
             <span class="tk-title">${esc(spec.caption)}</span>
             <input type="search" class="tk-filter" data-table="${id}" aria-label="Filter rows: ${esc(spec.caption)}" placeholder="Filter rows" value="${esc(st.q)}" />
@@ -1066,14 +1070,15 @@
     }
 
     // One CSV field (RFC 4180): quoted when it holds a comma, quote or line break. A string starting
-    // with = + - or @ gets a leading ' so a spreadsheet does not run it as a formula; numbers are
+    // with = + - @, a tab or a carriage return (OWASP's list) gets a leading ' so a spreadsheet does
+    // not run it as a formula; numbers are
     // written as JavaScript prints them (shortest exact), so a negative number is never prefixed.
     function csvCell(v) {
       if (v === null || v === undefined) return "";
       if (typeof v === "number") return Number.isFinite(v) ? String(v) : "";
       if (typeof v === "boolean") return String(v);
       let s = typeof v === "string" ? v : JSON.stringify(v);
-      if (/^[=+\-@]/.test(s)) s = "'" + s;
+      if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
       return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     }
 
@@ -1329,7 +1334,7 @@
     // Observed rate against mean score per bin, on the y = x line of perfect calibration, each bin
     // with its Wilson 95% interval; under it, one lane per side with each bin's count as a bar over
     // the bin's score range.
-    function reliabilityChartHtml(g, series, strategy) {
+    function reliabilityChartHtml(g, series, strategy, details) {
       const W = 460, ml = 52, mr = 14, mt = 12, ph = 270, gap = 64, lane = 24;
       const lanesTop = mt + ph + gap;
       const H = lanesTop + lane * series.length + 6;
@@ -1359,7 +1364,7 @@
       });
       const what = strategy === "width" ? "10 equal-width bins" : "10 equal-mass bins";
       // Plain text: svgFrame escapes the title and description.
-      return svgFrame({w: W, h: H, title: "Reliability of " + [g.question_id, g.model_served, g.primitive].join(" · "),
+      return svgFrame({w: W, h: H, details, title: "Reliability of " + [g.question_id, g.model_served, g.primitive].join(" · "),
         desc: `Observed rate against mean predicted probability in ${what}, ${series.map(s => s.name).join(" and ")}, with each bin's 95% Wilson interval and record count.`}, body);
     }
 
@@ -1460,10 +1465,11 @@
       const groups = d.groups || [];
       if (!groups.length) return `<div class="card">No labeled records found in workspace.</div>`;
       const strategy = opts && opts.cbins === "width" ? "width" : "mass";
-      return groups.map(g => auditCardHtml(g, strategy, tstate)).join("");
+      return groups.map((g, i) => auditCardHtml(g, strategy, tstate, i)).join("");
     }
 
-    function auditCardHtml(g, strategy, tstate) {
+    // `index` makes the DOM ids of the card unique within the view.
+    function auditCardHtml(g, strategy, tstate, index) {
         const bef = g.before;
         const aft = g.after || null;
         const floor = g.ece_floor && g.ece_floor.mass ? g.ece_floor.mass : {mean: 0, p95: 0};
@@ -1471,6 +1477,7 @@
         const aboveFloor = bef.ece_mass > floor.p95;
         const series = reliabilitySeries(g, strategy);
         const tables = auditTables(g, strategy);
+        const binsDomId = "calib-bins-table-" + Number(index || 0);
         const legend = svgLegend([
           ...series.map(s => ({name: s.name, cls: s.cls, shape: s.shape, dashed: s.dashed})),
           {name: "y = x (perfectly calibrated)", cls: "ref"},
@@ -1486,8 +1493,8 @@
             </h3>
             ${warnings}
             <div class="grid-2 calib-top">
-              <div>${chartFigure({legend, svg: reliabilityChartHtml(g, series, strategy),
-                caption: `${binNote} Whiskers: each bin's 95% Wilson interval, counted from its labels. Hover a point or bar for its numbers.`})}</div>
+              <div>${chartFigure({legend, svg: reliabilityChartHtml(g, series, strategy, binsDomId),
+                caption: `${binNote} Whiskers: each bin's 95% Wilson interval, counted from its labels. Hover a point or bar for its numbers; the same values are in the Reliability bins table below.`})}</div>
               <div>
                 <div class="grid-3 kpi-stack">
                   <div>
@@ -1515,7 +1522,7 @@
               ${tableHtml(tables.metrics.spec, tables.metrics.rows, tstate)}
               <div class="calib-note">Bootstrap: ${fmtNum(boot.reps, 0)} resamples of the group's records (seed ${fmtNum(boot.seed, 0)}); Δ is the paired difference on the same resamples. The ECE badges use equal-mass bins whichever bins the diagram shows.</div>
             </div>
-            <div class="panel-block">${tableHtml(tables.bins.spec, tables.bins.rows, tstate)}</div>
+            <div class="panel-block">${tableHtml({...tables.bins.spec, domId: binsDomId}, tables.bins.rows, tstate)}</div>
           </div>
         `;
     }

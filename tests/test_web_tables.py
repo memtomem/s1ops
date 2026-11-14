@@ -83,6 +83,9 @@ def test_the_filter_matches_what_the_viewer_reads() -> None:
         ("+1", "'+1"),
         ("-x", "'-x"),
         ("@SUM(A1)", "'@SUM(A1)"),
+        ("\tx", "'\tx"),
+        ("\r=1", "\"'\r=1\""),  # a carriage return also makes the field quoted
+        ("a=b", "a=b"),  # only the first character counts
         ("@a,b", "\"'@a,b\""),
         ("a,b", '"a,b"'),
         ('say "hi"', '"say ""hi"""'),

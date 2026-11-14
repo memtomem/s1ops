@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from s1ops.cli import main as cli_main
-from s1ops.improve.trainrun import TrainingDataError, TrainRunError, load_trainrun
+from s1ops.improve.trainrun import TrainingDataError, TrainRunError, _trainrun_id, build_trainrun, load_trainrun, save_trainrun
 from s1ops.improve.trainset import TrainedItemError, load_manifest
 
 QID = "q-aaaaaaaaaaaaaaaa"
@@ -297,3 +297,145 @@ def test_a_manifest_from_a_fifo_is_read_and_hashed_once(tmp_path: Path, run: dic
     finally:
         done.set()
     assert json.loads((tmp_path / "r.json").read_text())["manifest"]["sha256"] == hashlib.sha256(data).hexdigest()
+
+
+# ---- a record is read as strictly as it is written (review of #149) ----
+
+
+def _valid_doc(tmp_path: Path, run: dict) -> dict:
+    out = tmp_path / "valid-run.json"
+    assert _full(run, out) == 0
+    return json.loads(out.read_text(encoding="utf-8"))
+
+
+def _rehashed(doc: dict) -> dict:
+    """`doc` with the id its contents hash to, as an edit that also recomputes the id would leave it."""
+    return {**doc, "trainrun_id": _trainrun_id(doc)}
+
+
+def _set(doc: dict, path: str, value) -> dict:
+    out = json.loads(json.dumps(doc))
+    at = out
+    *parents, last = path.split(".")
+    for key in parents:
+        at = at[key]
+    at[last] = value
+    return out
+
+
+def _without(doc: dict, key: str) -> dict:
+    return {k: v for k, v in doc.items() if k != key}
+
+
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda d: {**d, "state": SECRET}, "state: Extra inputs are not permitted"),
+        (lambda d: _set(d, "checkpoint", "two words"), "checkpoint 'two words' is not a model name"),
+        (lambda d: _without(d, "manifest"), "manifest: Field required"),
+        (lambda d: _without(d, "steps"), "steps: Field required"),
+        (lambda d: _set(d, "manifest.sha256", "nope"), "manifest.sha256: String should match pattern"),
+        (lambda d: _set(d, "data.rows", 2.5), "data.rows: Input should be a valid integer"),
+        (lambda d: _set(d, "data.items", 99), "data.items 99 exceeds data.rows 4"),
+        (lambda d: _set(d, "weights_sha256", {}), "weights_sha256: Dictionary should have at least 1 item"),
+        (lambda d: _set(d, "trainer.lora", {"rank": 16}), "trainer: trainer setting 'lora' is a dict"),
+        (lambda d: _set(d, "steps", [{"loss": 0.5}]), "steps.0: step must be a non-negative integer"),
+        (lambda d: _set(d, "parent", {"trainrun_id": "tr-" + "0" * 16, "checkpoint": "two words"}), "parent.checkpoint 'two words' is not a model name"),
+        (lambda d: _set(d, "parent", {"trainrun_id": "tr-" + "0" * 16, "checkpoint": CHECKPOINT}), "is for the same checkpoint"),
+        (lambda d: _set(d, "trainrun_id", "tr-0"), "trainrun_id: String should match pattern"),
+    ],
+)
+def test_a_record_whose_id_matches_is_still_checked_field_by_field(tmp_path: Path, run: dict, edit, message) -> None:
+    doc = edit(_valid_doc(tmp_path, run))
+    if "tr-0" != doc.get("trainrun_id"):
+        doc = _rehashed(doc)
+    path = tmp_path / "edited.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(TrainRunError) as e:
+        load_trainrun(path)
+    assert str(e.value).startswith(f"{path}: ") and message in str(e.value)
+    assert SECRET not in str(e.value)
+
+
+@pytest.mark.parametrize("field", ["checkpoint", "created_at", "split"])
+def test_a_lone_surrogate_in_a_record_is_a_one_line_refusal(tmp_path: Path, run: dict, capsys, field) -> None:
+    doc = _set(_valid_doc(tmp_path, run), field, "x\ud800")
+    parent = tmp_path / "surrogate.json"
+    parent.write_text(json.dumps(doc), encoding="utf-8")  # ensure_ascii keeps it a \ud800 escape
+    child = _manifest(tmp_path, ["n0"], checkpoint=CHILD, name="child.json")
+    data = _data(tmp_path, [("d", "n0")], "child.jsonl")
+    capsys.readouterr()
+    assert _record(child, data, run["weights"], tmp_path / "c.json", "--parent-run", str(parent)) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"s1: {parent}: ") and err.count("\n") == 1
+    assert not (tmp_path / "c.json").exists()
+
+
+def test_an_overflowing_number_in_a_record_is_refused(tmp_path: Path, run: dict) -> None:
+    text = json.dumps(_valid_doc(tmp_path, run)).replace('"temperature": 2.41', '"temperature": 1e400')
+    assert "1e400" in text
+    path = tmp_path / "inf.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(TrainRunError, match="summary: summary metric 'temperature' must be finite"):
+        load_trainrun(path)
+
+
+def _build(tmp_path: Path, run: dict, **kw):
+    manifest = load_manifest(run["manifest"])
+    args = {"manifest_sha256": "ab" * 32, "data": run["data"], "weights": run["weights"], **kw}
+    return build_trainrun(manifest, **args)
+
+
+@pytest.mark.parametrize(
+    ("kw", "message"),
+    [
+        ({"summary": {"loss": float("nan")}}, "summary: summary metric 'loss' must be finite"),
+        ({"summary": {"loss": float("inf")}}, "summary: summary metric 'loss' must be finite"),
+        ({"trainer": {"lora": {"rank": 16}}}, "trainer: trainer setting 'lora' is a dict"),
+        ({"trainer": {"note": "x\ud800"}}, "lone surrogate (U+D800)"),
+        ({"trainer": {1: 2}}, "trainer.1.[key]: Input should be a valid string"),
+        ({"trainer": [1]}, "trainer: Input should be a valid dictionary"),
+        ({"steps": [{"loss": 0.5}]}, "steps.0: step must be a non-negative integer"),
+        ({"steps": [{"step": 1}, {"step": 1}]}, "steps.1: step 1 does not follow step 1"),
+        ({"steps": ["x"]}, "steps.0: Input should be a valid dictionary"),
+        ({"manifest_sha256": "nope"}, "manifest.sha256: String should match pattern"),
+        ({"manifest_sha256": None}, "manifest.sha256: Input should be a valid string"),
+    ],
+)
+def test_the_library_refuses_what_the_reader_would(tmp_path: Path, run: dict, kw, message) -> None:
+    with pytest.raises(TrainRunError) as e:
+        _build(tmp_path, run, **kw)
+    assert message in str(e.value)
+
+
+def test_a_weights_name_that_is_not_utf8_is_refused_by_code_point(tmp_path: Path, run: dict) -> None:
+    odd = os.fsdecode(os.fsencode(tmp_path) + b"/head-\xff.pt")  # surrogateescape: the byte becomes U+DCFF
+    try:
+        Path(odd).write_bytes(b"w")
+    except OSError:
+        pytest.skip("this filesystem refuses a file name that is not UTF-8")
+    with pytest.raises(TrainRunError, match=r"a weights file name holds a lone surrogate \(U\+DCFF\)"):
+        _build(tmp_path, run, weights=[odd])
+
+
+def test_whatever_the_library_builds_it_reads_back(tmp_path: Path, run: dict) -> None:
+    built = _build(tmp_path, run, trainer={"lr": 2e-4, "seed": None, "bf16": True}, summary={"t": 2.41}, steps=[{"step": 0, "loss": 0.7}])
+    path = tmp_path / "sdk.json"
+    save_trainrun(built, path)
+    loaded = load_trainrun(path)
+    assert (loaded.trainrun_id, loaded.checkpoint) == (built.trainrun_id, CHECKPOINT)
+    assert loaded.doc == built.doc
+
+
+def test_an_integer_past_the_float_range_is_not_a_setting(tmp_path: Path, run: dict, capsys) -> None:
+    trainer = tmp_path / "big.json"
+    trainer.write_text('{"seed": 1' + "0" * 400 + "}")
+    assert _record(run["manifest"], run["data"], run["weights"], tmp_path / "r.json", "--trainer", str(trainer)) == 1
+    err = capsys.readouterr().err
+    assert str(trainer) in err and "trainer setting 'seed' must be finite" in err
+
+
+def test_an_empty_id_is_called_empty(tmp_path: Path, run: dict, capsys) -> None:
+    data = _jsonl(tmp_path / "empty-id.jsonl", [{"item_id": ""}])
+    assert _record(run["manifest"], data, run["weights"], tmp_path / "r.json") == 1
+    assert "item_id must be a non-empty string, got an empty string" in capsys.readouterr().err

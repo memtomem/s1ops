@@ -343,7 +343,7 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
 | --- | --- |
 | `0` | Success |
 | `1` | Usage error, missing or malformed input, no matching groups, `lint check --strict` findings, policy fingerprint mismatch, ledger error, `s1 demo` target not new or empty |
-| `2` | In-sample refusal: `s1 apply`, or `s1 drift` or `s1 export` with `--fit`, on an item the fit used (override with `--allow-in-sample`), or `--training-manifest` on an item the checkpoint trained on |
+| `2` | In-sample refusal: `s1 apply`, or `s1 drift` or `s1 export` with `--fit`, on an item the fit used (override with `--allow-in-sample`), or `--training-manifest` on an item the checkpoint trained on, or `s1 trainset record` on a data item its manifest does not list |
 | `3` | `model_served` mismatch against the fit or policy (`s1 apply` without `--pass-through-unfitted`, `s1 gate`) |
 | `4` | `s1 drift --fail-on-critical` found a `CRITICAL` question |
 

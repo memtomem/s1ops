@@ -33,9 +33,16 @@ def read_json_file(path: str | Path, error: type[ValueError] = ValueError) -> ob
     with the path: invalid UTF-8, invalid JSON, or a non-finite constant (`NaN`, `Infinity`),
     which Python's `json` accepts but JSON does not, an integer past Python's digit limit, or
     nesting too deep for the decoder. An unreadable file raises its `OSError`."""
+    with open(path, "rb") as f:
+        data = f.read()
+    return read_json_bytes(data, path, error)
+
+
+def read_json_bytes(data: bytes, path: str | Path, error: type[ValueError] = ValueError) -> object:
+    """`read_json_file` over bytes already read from `path`, for a caller that also hashes them:
+    a FIFO has only the one read."""
     try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f, parse_constant=_non_finite)
+        return json.loads(data.decode("utf-8"), parse_constant=_non_finite)
     except UnicodeDecodeError as e:
         raise error(f"{path}: not valid UTF-8: {e}") from None
     except _NonFinite as e:

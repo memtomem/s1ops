@@ -445,8 +445,8 @@ def choose(
 
 
 class CalibInputError(ValueError):
-    """Records a calibrated threshold cannot be tuned or simulated on: a tuned record without the
-    calibrated distribution, or a group calibrated through more than one fit."""
+    """Records a calibrated threshold cannot be tuned or simulated on, or slices computed on: a
+    record without the calibrated distribution, or a group calibrated through more than one fit."""
 
 
 def tuned_rows(records: Iterable[Record]) -> dict[GroupKey, list[Record]]:
@@ -467,8 +467,8 @@ def tuned_fit_sha256(grp: Group, rows: Sequence[Record]) -> str | None:
     for r in rows:
         if not has_calib(r.raw, grp.primitive):
             raise CalibInputError(
-                f"{name}: line {r.line} has no calibrated probabilities; a calibrated policy is tuned on "
-                "the `calib` that `s1 apply` writes, so apply the fit to every record first"
+                f"{name}: line {r.line} has no calibrated probabilities (the `calib` that `s1 apply` "
+                "writes); apply the fit to every record first"
             )
     for r in rows:
         h = r.raw["calib"].get("fit_sha256")

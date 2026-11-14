@@ -196,11 +196,12 @@ def _refuse_trained(args: argparse.Namespace, groups: list[Group], trained: Trai
         check_not_trained(grp.key, grp.items, trained, args.records)
 
 
-def _tuned_fit_sha256(grp: Group, rows: list[Record]) -> str | None:
+def _tuned_fit_sha256(path: str, grp: Group, rows: list[Record]) -> str | None:
+    """`tuned_fit_sha256`, with a refusal naming the records file it was found in."""
     try:
         return tuned_fit_sha256(grp, rows)
     except CalibInputError as e:
-        raise CliError(str(e)) from None
+        raise CliError(f"{path}: {e}") from None
 
 
 def _no_groups(args: argparse.Namespace, sel: Selection, records_path: str) -> CliError:
@@ -432,7 +433,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
         curves: list[dict[str, Any]] = []
         for grp in selected:
             if args.use_calib:
-                _tuned_fit_sha256(grp, tuned[grp.key])
+                _tuned_fit_sha256(args.records, grp, tuned[grp.key])
             # A point counts what an `error_budget` policy at its threshold routes.
             conf, correct, escalated = routed_confidence(grp.primitive, grp.P, grp.y)
             curves.append(
@@ -524,7 +525,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
             band_lo=band_lo,
             band_hi=band_hi,
             calibrated=args.use_calib,
-            fit_sha256=_tuned_fit_sha256(grp, tuned[grp.key]) if args.use_calib else None,
+            fit_sha256=_tuned_fit_sha256(args.records, grp, tuned[grp.key]) if args.use_calib else None,
             source_sha256=src_sha,
         )
         metrics = routed_metrics(policy, grp, use_cp_upper=args.use_cp_upper, cp_alpha=args.cp_alpha)
@@ -575,7 +576,7 @@ def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned
         band_lo=cut.cutoff,
         band_hi=cut.cutoff,
         calibrated=args.use_calib,
-        fit_sha256=_tuned_fit_sha256(grp, tuned[grp.key]) if args.use_calib else None,
+        fit_sha256=_tuned_fit_sha256(args.records, grp, tuned[grp.key]) if args.use_calib else None,
         source_sha256=src_sha,
         metrics_on_split={
             "selection": "max_false_pass",
@@ -620,10 +621,7 @@ def _cmd_slice(args: argparse.Namespace) -> int:
         by_key = {g.key: g for g in sel.groups}
         tuned = tuned_rows(records)
         for g in groups:
-            try:
-                tuned_fit_sha256(by_key[g.key], tuned[g.key])
-            except CalibInputError as e:
-                raise CliError(f"{args.records}: {e}") from None
+            _tuned_fit_sha256(args.records, by_key[g.key], tuned[g.key])
 
     if args.slice_cmd == "answerable":
         out = [{**g.header(), "slices": [s.as_dict() for s in slice_report(g.items, min_n=args.min_n)]} for g in groups]

@@ -48,9 +48,15 @@ def _run(capsys, argv: list[str]) -> tuple[int, str, str]:
 
 
 def _tune_error(capsys, records: Path, tmp_path: Path, *extra: str) -> str:
+    """Tune's refusal line, which names the records file (#140)."""
     rc, out, err = _run(capsys, ["policy", "tune", str(records), "-o", str(tmp_path / "p.json"), "--use-calib", *extra])
-    assert (rc, out) == (1, "") and err.startswith("s1: ") and err.count("\n") == 1
+    assert (rc, out) == (1, "") and err.startswith(f"s1: {records}: ") and err.count("\n") == 1
     return err
+
+
+def _web_detail(err: str, records: Path) -> str:
+    """The web's 400 for the refusal in tune's line `err`: the file's name, not its path."""
+    return f"{records.name}: " + err.removeprefix(f"s1: {records}: ").rstrip("\n")
 
 
 @pytest.mark.parametrize("case", sorted(CASES))
@@ -66,11 +72,11 @@ def test_curve_refuses_what_tune_refuses(tmp_path, capsys, case) -> None:
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_simulator_refuses_what_tune_refuses(tmp_path, capsys, case) -> None:
     records = _write(tmp_path / "records.jsonl", CASES[case])
-    expected = _tune_error(capsys, records, tmp_path).removeprefix("s1: ").rstrip("\n")
+    expected = _web_detail(_tune_error(capsys, records, tmp_path), records)
     client = TestClient(create_app(records_path=records))
     r = client.get("/api/simulate-policy", params={"use_calib": True})
     assert r.status_code == 400
-    assert r.json()["detail"] == f"records.jsonl: {expected}"
+    assert r.json()["detail"] == expected
     # Unset is auto, which picks calibrated for a group where any record carries calib: still refused.
     assert client.get("/api/simulate-policy").status_code == 400
     assert client.get("/api/simulate-policy", params={"use_calib": False}).status_code == 200
@@ -135,4 +141,17 @@ def test_a_choice_group_is_checked_too(tmp_path, capsys) -> None:
     assert "line 5 has no calibrated probabilities" in expected
     assert _run(capsys, ["policy", "curve", str(records), "--use-calib"]) == (1, "", expected)
     r = TestClient(create_app(records_path=records)).get("/api/simulate-policy")
-    assert (r.status_code, r.json()["detail"]) == (400, "records.jsonl: " + expected.removeprefix("s1: ").rstrip("\n"))
+    assert (r.status_code, r.json()["detail"]) == (400, _web_detail(expected, records))
+
+
+@pytest.mark.parametrize("extra", [(), ("--max-false-pass", "0.1"), ("--noul-routing", "threshold")])
+def test_every_tune_path_names_the_records_file(tmp_path, capsys, extra) -> None:
+    """Each way tune compiles a noul policy checks the group and names the file (#140); the message
+    speaks of the calibrated distribution, not of a policy, since slices share it."""
+    # Half the labels false, so --max-false-pass finds its cutoff and reaches the check.
+    rows = [{**row, "label": n % 2 == 0} for n, row in enumerate(CASES["missing-calib"])]
+    records = _write(tmp_path / "r.jsonl", rows)
+    assert _tune_error(capsys, records, tmp_path, *extra) == (
+        f"s1: {records}: {QID} (m): line 9 has no calibrated probabilities (the `calib` that `s1 apply` writes); "
+        "apply the fit to every record first\n"
+    )

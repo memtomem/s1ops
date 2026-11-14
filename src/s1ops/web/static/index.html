@@ -20,6 +20,11 @@
       --warn: #a15c07;
       --err: #b42318;
       --focus: #0b6aa2;
+      /* Chart series: the dataviz categorical slots 1 and 2, never the status colors above. */
+      --series-1: #2a78d6;
+      --series-2: #eb6834;
+      --grid: #e8ecf2;
+      --axis: #a3adbd;
       --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
       --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
       --nav-width: 232px;
@@ -39,6 +44,10 @@
         --warn: #fbbf24;
         --err: #f87171;
         --focus: #7dd3fc;
+        --series-1: #3987e5;
+        --series-2: #d95926;
+        --grid: #1f2a3d;
+        --axis: #44536e;
       }
     }
     :root[data-theme="dark"] {
@@ -55,6 +64,10 @@
       --warn: #fbbf24;
       --err: #f87171;
       --focus: #7dd3fc;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --grid: #1f2a3d;
+      --axis: #44536e;
     }
     * { box-sizing: border-box; }
     body {
@@ -320,6 +333,81 @@
     }
     .overview-grid .card { margin-bottom: 0; }
     a.view-link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+    .sr-only {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+    }
+    /* Chart kit: marks take the series tokens, chrome the grid and axis tokens. */
+    figure.viz { margin: 0; }
+    figure.viz svg.chart { display: block; width: 100%; max-width: 520px; height: auto; }
+    .viz .grid { stroke: var(--grid); stroke-width: 1; }
+    .viz .axis { stroke: var(--axis); stroke-width: 1; }
+    .viz text { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
+    .viz text.axis-name { font-size: 11px; }
+    .viz .ref { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; fill: none; }
+    .viz .line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+    .viz .line.dashed { stroke-dasharray: 6 4; }
+    .viz .whisker { stroke-width: 1.5; fill: none; opacity: 0.75; }
+    .viz .dot { stroke: var(--panel); stroke-width: 2; }
+    .viz .bar { opacity: 0.55; }
+    .viz .hit { fill: transparent; stroke: none; pointer-events: all; }
+    .viz .ser-1 { stroke: var(--series-1); }
+    .viz .ser-2 { stroke: var(--series-2); }
+    .viz .dot.ser-1, .viz .bar.ser-1, .legend .ser-1.fill { fill: var(--series-1); }
+    .viz .dot.ser-2, .viz .bar.ser-2, .legend .ser-2.fill { fill: var(--series-2); }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin: 0 0 6px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; }
+    .legend svg { overflow: visible; }
+    .legend .key { fill: none; stroke-width: 2; }
+    .legend .key.dashed { stroke-dasharray: 5 3; }
+    .legend .key.ref { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+    .legend .ser-1 { stroke: var(--series-1); }
+    .legend .ser-2 { stroke: var(--series-2); }
+    #chart-tip {
+      position: fixed;
+      z-index: 10;
+      pointer-events: none;
+      max-width: 320px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      background: var(--text);
+      color: var(--bg);
+      font-family: var(--mono);
+      font-size: 11px;
+      white-space: pre-line;
+    }
+    /* Table kit. */
+    .tk { margin-top: 8px; }
+    .tk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .tk-toolbar .tk-title { font-size: 13px; font-weight: 600; margin-right: auto; }
+    input.tk-filter {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 5px 8px;
+      font-size: 12px;
+      min-width: 0;
+      width: 160px;
+    }
+    button.tk-sort {
+      background: none;
+      border: none;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    button.tk-sort:hover { color: var(--text); }
+    .tk-body { overflow-x: auto; }
+    td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .tk th { white-space: nowrap; }
+    .warn-row { margin: 0 0 6px; font-size: 13px; }
+    .panel-block { margin-top: 12px; }
+    .calib-note { font-size: 12px; color: var(--muted); }
+    .calib-top { align-items: start; }
+    .kpi-stack { grid-template-columns: minmax(0, 1fr); gap: 18px; }
     @media (max-width: 860px) {
       header { flex-wrap: wrap; padding: 10px 16px; }
       .layout { grid-template-columns: minmax(0, 1fr); }
@@ -373,6 +461,25 @@
     </section>
 
     <section id="tab-calib" class="tab-pane" role="tabpanel" aria-labelledby="nav-calib">
+      <div class="controls">
+        <div class="control-group">
+          <label for="inp-nboot">Bootstrap resamples (n_boot, for every CI)</label>
+          <select id="inp-nboot" data-act="calib-nboot">
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+            <option value="1000">1000</option>
+            <option value="2000">2000</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="inp-cbins">Reliability bins (diagram and bin table)</label>
+          <select id="inp-cbins" data-act="calib-cbins">
+            <option value="mass" selected>Equal mass (10 quantile bins)</option>
+            <option value="width">Equal width (10 bins of 0.1)</option>
+          </select>
+        </div>
+      </div>
       <div id="calib-container">Loading calibration audit...</div>
     </section>
 
@@ -428,6 +535,7 @@
   </main>
     </div>
   </div>
+  <div id="chart-tip" role="tooltip" hidden></div>
 
 
   <script>
@@ -554,7 +662,17 @@
     }
 
     function defaultState() {
-      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs2: 0.004, budget: 0.10};
+      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass"};
+    }
+
+    // The calibration view's bootstrap sizes: its picker's options, all inside /api/audit's 20..2000.
+    function nbootChoices() {
+      return [100, 200, 500, 1000, 2000];
+    }
+
+    // With no group chosen, more labeled groups than this are listed instead of bootstrapping each.
+    function auditListLimit() {
+      return 6;
     }
 
     // A number from the hash: finite and clamped to [min, max], else the default.
@@ -589,13 +707,17 @@
       st.hi = Math.max(lo, hi);
       st.cs2 = hashNumber(params.get("cs2"), st.cs2, 0, 1e6);
       st.budget = hashNumber(params.get("budget"), st.budget, 0, 1);
+      // One of the picker's sizes, else the default (never a size the picker cannot show).
+      const nboot = Number(params.get("nboot"));
+      if (nbootChoices().includes(nboot)) st.nboot = nboot;
+      if (params.get("cbins") === "width") st.cbins = "width";
       return st;
     }
 
     function formatHash(st) {
       const d = defaultState();
       const params = new URLSearchParams();
-      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs2", "budget"].forEach(k => {
+      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs2", "budget", "nboot", "cbins"].forEach(k => {
         if (st[k] !== d[k]) params.set(k, String(st[k]));
       });
       const query = params.toString();
@@ -619,6 +741,24 @@
     // back to another group.
     function groupReady(resolved) {
       return resolved.status === "none" || resolved.status === "ok";
+    }
+
+    // What the calibration view does: "audit" (request /api/audit), "list" (no group chosen and
+    // more labeled groups than auditListLimit(): list them, request nothing), "wait" (no group
+    // chosen and the groups still loading) or "error" (no group chosen and the groups failed to
+    // load: a transient failure must not turn into bootstrapping every group).
+    function auditMode(resolved, groups, groupsState) {
+      if (resolved.status !== "none") return "audit";
+      if (groupsState === "loading") return "wait";
+      if (groupsState !== "ok") return "error";
+      return (groups || []).length > auditListLimit() ? "list" : "audit";
+    }
+
+    function auditModeHtml(mode, error) {
+      if (mode === "wait") {
+        return `<div class="card state-card"><strong>Waiting for the labeled groups.</strong> With more than ${auditListLimit()} groups this view lists them instead of bootstrapping every one.</div>`;
+      }
+      return `<div class="card state-card"><strong>The labeled groups could not be loaded</strong> (${esc(error)}), so this view does not know whether auditing every group is a small request. Refresh to retry, or choose a group.</div>`;
     }
 
     function groupParams(st, resolved) {
@@ -710,34 +850,265 @@
       };
     }
 
-    function renderReliabilitySvg(binsRaw, binsCal) {
-      const size = 280, pad = 34;
-      const plot = size - pad * 2;
-      const toX = p => pad + p * plot;
-      const toY = p => pad + (1 - p) * plot;
+    // --- chart kit ----------------------------------------------------------------------------
+    // Pure string builders. SVG is markup text for innerHTML (no namespace URI is needed or
+    // allowed); marks take CSS classes whose colors are the theme's tokens, never a literal color.
+    // Every string from the server reaching a builder is escaped by it.
 
-      let ptsRaw = [];
-      (binsRaw || []).forEach(b => {
-        if (b.n > 0) {
-          ptsRaw.push(`${toX(b.mean_score).toFixed(1)},${toY(b.observed).toFixed(1)}`);
-        }
-      });
-      let ptsCal = [];
-      (binsCal || []).forEach(b => {
-        if (b.n > 0) {
-          ptsCal.push(`${toX(b.mean_score).toFixed(1)},${toY(b.observed).toFixed(1)}`);
-        }
-      });
+    // A finite number, else NaN, so a mark at a non-number is left out rather than drawn at 0.
+    function finite(v) {
+      return typeof v === "number" && Number.isFinite(v) ? v : NaN;
+    }
 
+    // A pixel coordinate for an SVG attribute.
+    function px(v) {
+      return Number.isFinite(v) ? v.toFixed(1) : "0";
+    }
+
+    // The linear map of [d0, d1] onto [r0, r1].
+    function scaleLinear(d0, d1, r0, r1) {
+      const span = d1 - d0 || 1;
+      return v => r0 + (v - d0) / span * (r1 - r0);
+    }
+
+    // About `count` round values covering [lo, hi], stepped by 1, 2 or 5 times a power of ten.
+    function niceTicks(lo, hi, count) {
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(count >= 1)) return [];
+      if (hi <= lo) return [lo];
+      const raw = (hi - lo) / count;
+      const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+      const step = [1, 2, 5, 10].map(m => m * mag).find(s => s >= raw * (1 - 1e-9));
+      const first = Math.ceil(lo / step - 1e-9);
+      const ticks = [];
+      for (let i = first; i * step <= hi + step * 1e-9; i++) ticks.push(Number((i * step).toFixed(12)));
+      return ticks;
+    }
+
+    // An SVG chart: its viewBox, and a title and description (its accessible name and summary).
+    function svgFrame(spec, body) {
+      return `<svg class="chart" viewBox="0 0 ${Number(spec.w)} ${Number(spec.h)}" role="img"><title>${esc(spec.title)}</title><desc>${esc(spec.desc)}</desc>${body}</svg>`;
+    }
+
+    // Hairline gridlines at the ticks, the two axis lines, tick labels and the axis names.
+    function svgAxes(ax) {
+      const fmt = v => esc(fmtNum(v, ax.digits === undefined ? 1 : ax.digits));
+      const xs = ax.xTicks.map(t => `<line class="grid" x1="${px(ax.x(t))}" y1="${px(ax.top)}" x2="${px(ax.x(t))}" y2="${px(ax.bottom)}" /><text x="${px(ax.x(t))}" y="${px(ax.bottom + 14)}" text-anchor="middle">${fmt(t)}</text>`).join("");
+      const ys = ax.yTicks.map(t => `<line class="grid" x1="${px(ax.left)}" y1="${px(ax.y(t))}" x2="${px(ax.right)}" y2="${px(ax.y(t))}" /><text x="${px(ax.left - 6)}" y="${px(ax.y(t) + 3)}" text-anchor="end">${fmt(t)}</text>`).join("");
+      const midY = (ax.top + ax.bottom) / 2;
+      return `<g>${xs}${ys}<line class="axis" x1="${px(ax.left)}" y1="${px(ax.bottom)}" x2="${px(ax.right)}" y2="${px(ax.bottom)}" /><line class="axis" x1="${px(ax.left)}" y1="${px(ax.top)}" x2="${px(ax.left)}" y2="${px(ax.bottom)}" />` +
+        `<text class="axis-name" x="${px((ax.left + ax.right) / 2)}" y="${px(ax.bottom + 30)}" text-anchor="middle">${esc(ax.xName)}</text>` +
+        `<text class="axis-name" transform="translate(${px(ax.left - 34)} ${px(midY)}) rotate(-90)" text-anchor="middle">${esc(ax.yName)}</text></g>`;
+    }
+
+    // A 2px line through points ({x, y} in pixels); none for fewer than two.
+    function svgLine(points, cls, dashed) {
+      const pts = points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+      if (pts.length < 2) return "";
+      return `<polyline class="line ${esc(cls)}${dashed ? " dashed" : ""}" points="${pts.map(p => px(p.x) + "," + px(p.y)).join(" ")}" />`;
+    }
+
+    // Markers (circle or square, r 4, ringed in the surface color), each under a larger
+    // transparent hit target carrying its tooltip.
+    function svgDots(points, cls, shape) {
+      return points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => {
+        const mark = shape === "square"
+          ? `<rect class="dot ${esc(cls)}" x="${px(p.x - 4)}" y="${px(p.y - 4)}" width="8" height="8" />`
+          : `<circle class="dot ${esc(cls)}" cx="${px(p.x)}" cy="${px(p.y)}" r="4" />`;
+        return `${mark}<circle class="hit" cx="${px(p.x)}" cy="${px(p.y)}" r="10" data-tip="${esc(p.tip)}" />`;
+      }).join("");
+    }
+
+    // Vertical intervals ({x, y0, y1} in pixels) with short caps.
+    function svgWhiskers(items, cls) {
+      return items.filter(w => [w.x, w.y0, w.y1].every(Number.isFinite)).map(w =>
+        `<path class="whisker ${esc(cls)}" d="M${px(w.x)} ${px(w.y0)}V${px(w.y1)}M${px(w.x - 3)} ${px(w.y0)}H${px(w.x + 3)}M${px(w.x - 3)} ${px(w.y1)}H${px(w.x + 3)}" />`
+      ).join("");
+    }
+
+    // Bars ({x0, x1, y0 (baseline), y1, tip} in pixels), inset 1px a side so touching bars keep a
+    // 2px surface gap, and never under 2px wide (a bin whose scores are all one value).
+    function svgBars(items, cls) {
+      return items.filter(b => [b.x0, b.x1, b.y0, b.y1].every(Number.isFinite)).map(b => {
+        let x = Math.min(b.x0, b.x1) + 1, w = Math.abs(b.x1 - b.x0) - 2;
+        if (w < 2) {
+          x = (b.x0 + b.x1) / 2 - 1;
+          w = 2;
+        }
+        const top = Math.min(b.y0, b.y1), h = Math.abs(b.y0 - b.y1);
+        return `<rect class="bar ${esc(cls)}" x="${px(x)}" y="${px(top)}" width="${px(w)}" height="${px(Math.max(h, 1))}" data-tip="${esc(b.tip)}" />`;
+      }).join("");
+    }
+
+    // The legend: each entry's line key (solid, dashed or the reference style) and marker shape
+    // beside its name, so a series is never told by color alone.
+    function svgLegend(items) {
+      return `<div class="legend">${items.map(it => {
+        const line = `<line class="key ${esc(it.cls)}${it.dashed ? " dashed" : ""}" x1="0" y1="6" x2="26" y2="6" />`;
+        const mark = it.shape === "square" ? `<rect class="${esc(it.cls)} fill" x="9" y="2" width="8" height="8" />`
+          : it.shape === "circle" ? `<circle class="${esc(it.cls)} fill" cx="13" cy="6" r="4" />` : "";
+        return `<span class="legend-item"><svg viewBox="0 0 26 12" width="26" height="12" aria-hidden="true">${line}${mark}</svg>${esc(it.name)}</span>`;
+      }).join("")}</div>`;
+    }
+
+    // A chart with its legend and caption; `table`, when given, is its data in a closed disclosure.
+    function chartFigure(spec) {
+      const table = spec.table ? `<details><summary class="sub">Data table</summary>${spec.table}</details>` : "";
+      return `<figure class="viz">${spec.legend || ""}${spec.svg}<figcaption class="sub">${esc(spec.caption)}</figcaption>${table}</figure>`;
+    }
+
+    // --- table kit ------------------------------------------------------------------------------
+    // A spec is {id, caption, file, columns}; a column is {key, name, kind, digits, exportOnly} with
+    // kind "text" (escaped), "num" (fmtNum), "range" (a [lo, hi] pair) or "button" ({act, text,
+    // data: {attribute: key}}, never exported). The view state of a table (sort column, direction,
+    // filter text) is kept by the shell per table id; the renderers only read it.
+
+    // A number to `digits` places; anything that is not a finite number as "N/A".
+    function fmtNum(v, digits) {
+      return typeof v === "number" && Number.isFinite(v) ? v.toFixed(digits === undefined ? 3 : digits) : "N/A";
+    }
+
+    function tableState(tstate, id) {
+      const st = tstate && Object.prototype.hasOwnProperty.call(tstate, id) ? tstate[id] : null;
+      return {sort: st && typeof st.sort === "string" ? st.sort : "", dir: st && st.dir === "desc" ? "desc" : "asc", q: st && typeof st.q === "string" ? st.q : ""};
+    }
+
+    // A cell as the viewer reads it (and as the filter matches it).
+    function cellText(c, r) {
+      const v = r[c.key];
+      if (c.kind === "num") return fmtNum(v, c.digits);
+      if (c.kind === "range") return Array.isArray(v) ? "[" + fmtNum(v[0], c.digits) + ", " + fmtNum(v[1], c.digits) + "]" : "N/A";
+      return v === null || v === undefined ? "" : String(v);
+    }
+
+    function shownColumns(spec) {
+      return spec.columns.filter(c => !c.exportOnly);
+    }
+
+    function dataColumns(spec) {
+      return spec.columns.filter(c => c.kind !== "button");
+    }
+
+    // Rows any shown cell of which contains the filter text, ignoring case.
+    function filterRows(spec, rows, q) {
+      const needle = String(q || "").trim().toLowerCase();
+      if (!needle) return rows.slice();
+      const cols = shownColumns(spec).filter(c => c.kind !== "button");
+      return rows.filter(r => cols.some(c => cellText(c, r).toLowerCase().includes(needle)));
+    }
+
+    // Rows ordered by one column: numbers numerically (a range by its lower end), text in natural
+    // order; missing values last in either direction; ties keep their order.
+    function sortRows(spec, rows, sort, dir) {
+      const c = spec.columns.find(col => col.key === sort && col.kind !== "button");
+      if (!c) return rows.slice();
+      const sign = dir === "desc" ? -1 : 1;
+      const keyOf = r => {
+        const v = c.kind === "range" ? (Array.isArray(r[c.key]) ? r[c.key][0] : null) : r[c.key];
+        if (c.kind === "text") return v === null || v === undefined ? null : String(v);
+        return typeof v === "number" && Number.isFinite(v) ? v : null;
+      };
+      return rows.map((r, i) => [r, i, keyOf(r)]).sort((a, b) => {
+        if (a[2] === null || b[2] === null) return a[2] === b[2] ? a[1] - b[1] : (a[2] === null ? 1 : -1);
+        const cmp = c.kind === "text" ? a[2].localeCompare(b[2], undefined, {numeric: true}) : a[2] - b[2];
+        return cmp ? sign * cmp : a[1] - b[1];
+      }).map(e => e[0]);
+    }
+
+    // The rows a table shows and exports: filtered, then sorted.
+    function viewRows(spec, rows, st) {
+      return sortRows(spec, filterRows(spec, rows, st.q), st.sort, st.dir);
+    }
+
+    function tableCountText(shown, total) {
+      return shown === total ? `${total} rows` : `${shown} of ${total} rows`;
+    }
+
+    function cellHtml(c, r) {
+      if (c.kind === "button") {
+        const data = Object.entries(c.data || {}).map(([attr, key]) => `data-${esc(attr)}="${esc(r[key])}"`).join(" ");
+        return `<td><button type="button" class="tool" data-act="${esc(c.act)}" ${data}>${esc(c.text)}</button></td>`;
+      }
+      return `<td class="mono${c.kind === "text" ? "" : " num"}">${esc(cellText(c, r))}</td>`;
+    }
+
+    // The header (sort buttons, `aria-sort`) and body: what a sort or filter re-renders.
+    function tableBodyHtml(spec, rows, st) {
+      const cols = shownColumns(spec);
+      const shown = viewRows(spec, rows, st);
+      const head = cols.map(c => {
+        if (c.kind === "button") return `<th><span class="sr-only">${esc(c.name)}</span></th>`;
+        const on = st.sort === c.key;
+        const aria = on ? (st.dir === "desc" ? "descending" : "ascending") : "none";
+        const mark = on ? (st.dir === "desc" ? " ▼" : " ▲") : "";
+        return `<th aria-sort="${aria}"><button type="button" class="tk-sort" data-act="tk-sort" data-table="${esc(spec.id)}" data-col="${esc(c.key)}">${esc(c.name)}${mark}</button></th>`;
+      }).join("");
+      const body = shown.map(r => `<tr>${cols.map(c => cellHtml(c, r)).join("")}</tr>`).join("");
+      const empty = `<tr><td colspan="${cols.length}" class="sub">${rows.length ? "No rows match the filter." : "No rows."}</td></tr>`;
+      return `<table><thead><tr>${head}</tr></thead><tbody>${body || empty}</tbody></table>`;
+    }
+
+    // A table with its toolbar: title, filter box, row count and the two exports.
+    function tableHtml(spec, rows, tstate) {
+      const st = tableState(tstate, spec.id);
+      const id = esc(spec.id);
+      const shown = viewRows(spec, rows, st).length;
       return `
-        <svg width="${size}" height="${size}" role="img" aria-label="Reliability: observed rate against predicted probability, before and after the fit" style="background:var(--panel-alt);border:1px solid var(--border);border-radius:6px">
-          <line x1="${pad}" y1="${size-pad}" x2="${size-pad}" y2="${pad}" style="stroke:var(--muted)" stroke-dasharray="4 4" />
-          ${ptsRaw.length > 1 ? `<polyline fill="none" style="stroke:var(--err)" stroke-width="2" points="${ptsRaw.join(' ')}" />` : ''}
-          ${ptsCal.length > 1 ? `<polyline fill="none" style="stroke:var(--ok)" stroke-width="2.5" stroke-dasharray="6 3" points="${ptsCal.join(' ')}" />` : ''}
-          <text x="${pad}" y="18" style="fill:var(--muted)" font-size="11" font-family="monospace">Solid: before · Dashed: fitted</text>
-          <text x="${pad}" y="${size-10}" style="fill:var(--muted)" font-size="10" font-family="monospace">Predicted Probability →</text>
-        </svg>
-      `;
+        <div class="tk" data-table="${id}">
+          <div class="tk-toolbar">
+            <span class="tk-title">${esc(spec.caption)}</span>
+            <input type="search" class="tk-filter" data-table="${id}" aria-label="Filter rows: ${esc(spec.caption)}" placeholder="Filter rows" value="${esc(st.q)}" />
+            <span class="tk-count sub" aria-live="polite">${esc(tableCountText(shown, rows.length))}</span>
+            <button type="button" class="tool" data-act="tk-csv" data-table="${id}">CSV</button>
+            <button type="button" class="tool" data-act="tk-json" data-table="${id}">JSON</button>
+          </div>
+          <div class="tk-body">${tableBodyHtml(spec, rows, st)}</div>
+        </div>`;
+    }
+
+    // One CSV field (RFC 4180): quoted when it holds a comma, quote or line break. A string starting
+    // with = + - or @ gets a leading ' so a spreadsheet does not run it as a formula; numbers are
+    // written as JavaScript prints them (shortest exact), so a negative number is never prefixed.
+    function csvCell(v) {
+      if (v === null || v === undefined) return "";
+      if (typeof v === "number") return Number.isFinite(v) ? String(v) : "";
+      if (typeof v === "boolean") return String(v);
+      let s = typeof v === "string" ? v : JSON.stringify(v);
+      if (/^[=+\-@]/.test(s)) s = "'" + s;
+      return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }
+
+    // Every data column, shown or export-only; a range is two columns, `<key>_lo` and `<key>_hi`.
+    function toCsv(spec, rows) {
+      const cols = dataColumns(spec);
+      const header = cols.flatMap(c => c.kind === "range" ? [c.key + "_lo", c.key + "_hi"] : [c.key]);
+      const cells = r => cols.flatMap(c => {
+        const v = r[c.key];
+        if (c.kind !== "range") return [v];
+        return Array.isArray(v) ? [v[0], v[1]] : [null, null];
+      });
+      return [header, ...rows.map(cells)].map(line => line.map(csvCell).join(",")).join("\r\n") + "\r\n";
+    }
+
+    // The same rows and columns with their values as served (no prefix, no rounding).
+    function toJsonRows(spec, rows) {
+      const cols = dataColumns(spec);
+      return JSON.stringify(rows.map(r => Object.fromEntries(cols.map(c => [c.key, r[c.key] === undefined ? null : r[c.key]]))), null, 2) + "\n";
+    }
+
+    // A download name from workspace identifiers: letters, digits, dot, dash and underscore only.
+    function fileSafe(name) {
+      return String(name).replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 160) || "table";
+    }
+
+    function downloadText(name, text, type) {
+      const url = URL.createObjectURL(new Blob([text], {type}));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     }
 
     // What the fit did on these records: the bootstrap CI of ECE(after) - ECE(before), then
@@ -887,72 +1258,266 @@
       document.getElementById("overview-container").innerHTML = renderOverview(data);
     }
 
+    // The calibration view. With no group chosen and more than auditListLimit() labeled groups
+    // (ctx.mode "list"), it lists ctx.groups instead of requesting /api/audit, which bootstraps
+    // every group it returns. The payload is kept for re-rendering (bins, tables) only by the
+    // request still current, and is rendered with the options in force when it arrives.
     async function loadAudit(ctx = {}) {
-      const data = await fetchJson(apiUrl("/api/audit", ctx.params));
-      if (isStale(ctx)) return;
       const el = document.getElementById("calib-container");
-      if (!data.groups || data.groups.length === 0) {
-        el.innerHTML = `<div class="card">No labeled records found in workspace.</div>`;
+      if (ctx.mode === "list") {
+        const kept = {list: ctx.groups || []};
+        if (ctx.keep) ctx.keep(kept);
+        el.innerHTML = renderCalib(kept, ctx.opts ? ctx.opts() : {});
         return;
       }
-      el.innerHTML = data.groups.map(g => {
+      const data = await fetchJson(apiUrl("/api/audit", {...(ctx.params || {}), n_boot: ctx.nboot}));
+      if (isStale(ctx)) return;
+      if (ctx.keep) ctx.keep(data);
+      el.innerHTML = renderCalib(data, ctx.opts ? ctx.opts() : {});
+    }
+
+    // The bins one strategy draws, per side, each with its Wilson interval and success count
+    // (`display.reliability_ci`, aligned with the reliability table by position).
+    function reliabilitySeries(g, strategy) {
+      const ci = (g.display && g.display.reliability_ci) || {};
+      const side = (table, cis, spec) => {
+        const bins = table && Array.isArray(table[strategy]) ? table[strategy] : [];
+        const rows = cis && Array.isArray(cis[strategy]) ? cis[strategy] : [];
+        return {...spec, bins: bins.map((b, i) => ({
+          ...b,
+          successes: rows[i] ? rows[i].successes : null,
+          ci: rows[i] && Array.isArray(rows[i].ci) ? rows[i].ci : null,
+        }))};
+      };
+      const out = [side(g.reliability, ci.before, {name: "before fit", lane: "before", cls: "ser-1", shape: "circle", dashed: false})];
+      if (g.reliability_after) out.push(side(g.reliability_after, ci.after, {name: "after fit", lane: "after", cls: "ser-2", shape: "square", dashed: true}));
+      return out;
+    }
+
+    function binTip(s, b) {
+      const ci = b.ci ? `[${fmtNum(b.ci[0])}, ${fmtNum(b.ci[1])}]` : "N/A";
+      return `${s.name}, bin [${fmtNum(b.lo)}, ${fmtNum(b.hi)}]\nn = ${fmtNum(b.n, 0)}, successes = ${fmtNum(b.successes, 0)}\n` +
+        `mean score ${fmtNum(b.mean_score)}, observed ${fmtNum(b.observed)}\n95% Wilson CI ${ci}`;
+    }
+
+    // A side's count bars: one per bin over its score range, except that bins drawn over the same
+    // range (equal-mass bins of one tied score) are one bar of their summed count, its tooltip
+    // naming each, so no bin hides under another.
+    function countStrip(s, x) {
+      const out = [];
+      const at = {};
+      s.bins.forEach(b => {
+        const x0 = x(finite(b.lo)), x1 = x(finite(b.hi)), n = finite(b.n);
+        if (![x0, x1, n].every(Number.isFinite)) return;
+        const key = px(x0) + "," + px(x1);
+        if (key in at) {
+          const bar = out[at[key]];
+          bar.n += n;
+          bar.bins += 1;
+          bar.tip += "\n\n" + binTip(s, b);
+        } else {
+          at[key] = out.length;
+          out.push({x0, x1, n, bins: 1, tip: binTip(s, b)});
+        }
+      });
+      out.forEach(bar => {
+        if (bar.bins > 1) bar.tip = `${bar.bins} bins over one score range, ${fmtNum(bar.n, 0)} records:\n\n` + bar.tip;
+      });
+      return out;
+    }
+
+    // Observed rate against mean score per bin, on the y = x line of perfect calibration, each bin
+    // with its Wilson 95% interval; under it, one lane per side with each bin's count as a bar over
+    // the bin's score range.
+    function reliabilityChartHtml(g, series, strategy) {
+      const W = 460, ml = 52, mr = 14, mt = 12, ph = 270, gap = 64, lane = 24;
+      const lanesTop = mt + ph + gap;
+      const H = lanesTop + lane * series.length + 6;
+      const x = scaleLinear(0, 1, ml, W - mr), y = scaleLinear(0, 1, mt + ph, mt);
+      const noul = g.primitive === "noul";
+      const ticks = niceTicks(0, 1, 5);
+      let body = svgAxes({x, y, xTicks: ticks, yTicks: ticks, left: ml, right: W - mr, top: mt, bottom: mt + ph,
+        xName: noul ? "mean predicted p (true)" : "mean top-class probability",
+        yName: noul ? "observed share true" : "observed accuracy"});
+      body += `<line class="ref" x1="${px(x(0))}" y1="${px(y(0))}" x2="${px(x(1))}" y2="${px(y(1))}" />`;
+      series.forEach(s => {
+        const pts = s.bins.map(b => ({x: x(finite(b.mean_score)), y: y(finite(b.observed)), tip: binTip(s, b)}));
+        body += svgWhiskers(s.bins.filter(b => b.ci).map(b => ({x: x(finite(b.mean_score)), y0: y(finite(b.ci[0])), y1: y(finite(b.ci[1]))})), s.cls);
+        body += svgLine(pts, s.cls, s.dashed);
+      });
+      series.forEach(s => {
+        body += svgDots(s.bins.map(b => ({x: x(finite(b.mean_score)), y: y(finite(b.observed)), tip: binTip(s, b)})), s.cls, s.shape);
+      });
+      const strips = series.map(s => countStrip(s, x));
+      const maxN = Math.max(1, ...strips.flat().map(b => b.n));
+      body += `<text class="axis-name" x="${px(ml)}" y="${px(lanesTop - 8)}">records per bin (tallest ${fmtNum(maxN, 0)})</text>`;
+      series.forEach((s, i) => {
+        const base = lanesTop + lane * (i + 1) - 3;
+        body += `<line class="axis" x1="${px(ml)}" y1="${px(base)}" x2="${px(W - mr)}" y2="${px(base)}" />`;
+        body += `<text x="${px(ml - 6)}" y="${px(base - 4)}" text-anchor="end">${esc(s.lane)}</text>`;
+        body += svgBars(strips[i].map(b => ({x0: b.x0, x1: b.x1, y0: base, y1: base - (lane - 6) * b.n / maxN, tip: b.tip})), s.cls);
+      });
+      const what = strategy === "width" ? "10 equal-width bins" : "10 equal-mass bins";
+      // Plain text: svgFrame escapes the title and description.
+      return svgFrame({w: W, h: H, title: "Reliability of " + [g.question_id, g.model_served, g.primitive].join(" · "),
+        desc: `Observed rate against mean predicted probability in ${what}, ${series.map(s => s.name).join(" and ")}, with each bin's 95% Wilson interval and record count.`}, body);
+    }
+
+    // The group's tables for one strategy: its bins and its metrics, keyed by table id (the
+    // view, the table and the group key, so a sort or filter survives a refetch of the group).
+    function auditTables(g, strategy) {
+      const key = JSON.stringify([g.question_id, g.model_served, g.primitive]);
+      const groupCols = [
+        {key: "question_id", name: "question_id", kind: "text", exportOnly: true},
+        {key: "model_served", name: "model_served", kind: "text", exportOnly: true},
+        {key: "primitive", name: "primitive", kind: "text", exportOnly: true},
+      ];
+      const ident = {question_id: g.question_id, model_served: g.model_served, primitive: g.primitive};
+      const file = fileSafe([g.question_id, g.model_served, g.primitive].join("-"));
+      const bins = reliabilitySeries(g, strategy).flatMap(s => s.bins.map(b => ({
+        ...ident, strategy, series: s.lane, lo: b.lo, hi: b.hi, n: b.n, successes: b.successes,
+        mean_score: b.mean_score, observed: b.observed, gap: b.gap, ci: b.ci,
+      })));
+      const before = g.before || {}, after = g.after || null;
+      const pair = (section, k) => section && Array.isArray(section[k]) ? section[k] : null;
+      const metrics = Object.keys(before).map(k => ({
+        ...ident, metric: k, before: before[k], before_ci: pair(g.before_ci, k),
+        after: after ? after[k] : null, after_ci: pair(g.after_ci, k), delta_ci: pair(g.delta_ci, k),
+      }));
+      return {
+        bins: {
+          spec: {id: "calib:bins:" + key, caption: "Reliability bins", file: `calibration-bins-${strategy}-${file}`, columns: [
+            ...groupCols,
+            {key: "strategy", name: "strategy", kind: "text", exportOnly: true},
+            {key: "series", name: "Side", kind: "text"},
+            {key: "lo", name: "Lo", kind: "num", digits: 3},
+            {key: "hi", name: "Hi", kind: "num", digits: 3},
+            {key: "n", name: "n", kind: "num", digits: 0},
+            {key: "successes", name: "Successes", kind: "num", digits: 0},
+            {key: "mean_score", name: "Mean score", kind: "num", digits: 3},
+            {key: "observed", name: "Observed", kind: "num", digits: 3},
+            {key: "gap", name: "Gap", kind: "num", digits: 3},
+            {key: "ci", name: "95% Wilson CI", kind: "range", digits: 3},
+          ]},
+          rows: bins,
+        },
+        metrics: {
+          spec: {id: "calib:metrics:" + key, caption: "Metrics with bootstrap 95% CIs", file: `calibration-metrics-${file}`, columns: [
+            ...groupCols,
+            {key: "metric", name: "Metric", kind: "text"},
+            {key: "before", name: "Before", kind: "num", digits: 4},
+            {key: "before_ci", name: "Before 95% CI", kind: "range", digits: 4},
+            {key: "after", name: "After", kind: "num", digits: 4},
+            {key: "after_ci", name: "After 95% CI", kind: "range", digits: 4},
+            {key: "delta_ci", name: "Δ (after − before) 95% CI", kind: "range", digits: 4},
+          ]},
+          rows: metrics,
+        },
+      };
+    }
+
+    // The labeled groups, listed when there are too many to bootstrap at once.
+    function groupListTable(groups) {
+      return {
+        spec: {id: "calib:groups", caption: "Labeled groups", file: "calibration-groups", columns: [
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "model_served", name: "Model served", kind: "text"},
+          {key: "primitive", name: "Primitive", kind: "text"},
+          {key: "n", name: "Labeled records", kind: "num", digits: 0},
+          {key: "open", name: "Open", kind: "button", act: "open-group", text: "Audit this group",
+            data: {qid: "question_id", model: "model_served", prim: "primitive"}},
+        ]},
+        rows: groups.map(g => ({question_id: g.question_id, model_served: g.model_served, primitive: g.primitive, n: g.n})),
+      };
+    }
+
+    // Every table the calibration view shows for what it holds, by id (the shell's sort, filter
+    // and export look a table up here).
+    function calibTables(d, opts) {
+      if (d && d.list) {
+        const t = groupListTable(d.list);
+        return {[t.spec.id]: t};
+      }
+      const strategy = opts && opts.cbins === "width" ? "width" : "mass";
+      const out = {};
+      ((d && d.groups) || []).forEach(g => {
+        Object.values(auditTables(g, strategy)).forEach(t => { out[t.spec.id] = t; });
+      });
+      return out;
+    }
+
+    function renderCalib(d, opts) {
+      const tstate = (opts && opts.tstate) || {};
+      if (d.list) {
+        const t = groupListTable(d.list);
+        return `
+          <div class="card">
+            <h3>${d.list.length} labeled groups</h3>
+            <div class="sub">More than ${auditListLimit()} groups: the audit bootstraps every group it reports, so none is audited until you choose one, here or in the group filter.</div>
+            ${tableHtml(t.spec, t.rows, tstate)}
+          </div>`;
+      }
+      const groups = d.groups || [];
+      if (!groups.length) return `<div class="card">No labeled records found in workspace.</div>`;
+      const strategy = opts && opts.cbins === "width" ? "width" : "mass";
+      return groups.map(g => auditCardHtml(g, strategy, tstate)).join("");
+    }
+
+    function auditCardHtml(g, strategy, tstate) {
         const bef = g.before;
         const aft = g.after || null;
         const floor = g.ece_floor && g.ece_floor.mass ? g.ece_floor.mass : {mean: 0, p95: 0};
         const tie = g.tie_mass || {max_tie_share: 0, max_tie_value: 0};
-        const rawBins = g.reliability ? g.reliability.mass : [];
-        const calBins = g.reliability_after ? g.reliability_after.mass : [];
         const aboveFloor = bef.ece_mass > floor.p95;
+        const series = reliabilitySeries(g, strategy);
+        const tables = auditTables(g, strategy);
+        const legend = svgLegend([
+          ...series.map(s => ({name: s.name, cls: s.cls, shape: s.shape, dashed: s.dashed})),
+          {name: "y = x (perfectly calibrated)", cls: "ref"},
+        ]);
+        const boot = g.bootstrap || {};
+        const warnings = (g.warnings || []).map(w => `<div class="warn-row"><span class="badge badge-warn">WARN</span> ${esc(w)}</div>`).join("");
+        const binNote = strategy === "width" ? "Equal-width bins (empty bins are not drawn)." : "Equal-mass bins (each a tenth of the records; a bin's range is its lowest to highest score).";
         return `
           <div class="card">
             <h3>Group: <span class="badge badge-info">${esc(g.question_id)}</span> ·
               <span class="badge badge-info">${esc(g.model_served)}</span> ·
-              <span class="badge badge-ok">${esc(g.primitive)}</span> (n=${g.n})
+              <span class="badge badge-none">${esc(g.primitive)}</span> (n=${g.n})
             </h3>
-            <div class="grid-3">
+            ${warnings}
+            <div class="grid-2 calib-top">
+              <div>${chartFigure({legend, svg: reliabilityChartHtml(g, series, strategy),
+                caption: `${binNote} Whiskers: each bin's 95% Wilson interval, counted from its labels. Hover a point or bar for its numbers.`})}</div>
               <div>
-                <div class="sub">Raw ECE (mass) vs Noise Floor (p95)</div>
-                <div class="kpi">${bef.ece_mass.toFixed(4)} <span class="sub">/ floor ${floor.p95.toFixed(4)}</span></div>
-                <span class="badge ${ aboveFloor ? 'badge-warn' : 'badge-ok' }">
-                  ${ aboveFloor ? `Miscalibrated (${esc(g.direction || 'over-confident')})` : 'Within Binomial Noise Floor' }
-                </span>
-              </div>
-              <div>
-                <div class="sub">Calibrated ECE / Brier / LogLoss</div>
-                <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : 'N/A'} / LogLoss ${aft ? aft.log_loss.toFixed(4) : 'N/A'}</span></div>
-                <span class="sub">${g.fit ? `Fit: ${esc(g.fit.method)} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
-                ${fitVerdictHtml(g)}
-              </div>
-              <div>
-                <div class="sub">Tie-Mass / Rounding Detector</div>
-                <div class="kpi">${(tie.max_tie_share * 100).toFixed(1)}% <span class="sub">at p=${tie.max_tie_value.toFixed(3)}</span></div>
-                <span class="badge badge-info">Unique values: ${tie.unique_values}</span>
-              </div>
-            </div>
-            <div class="grid-2">
-              <div>${renderReliabilitySvg(rawBins, calBins)}</div>
-              <div>
-                <table>
-                  <thead>
-                    <tr><th>Bin</th><th>n</th><th>Mean Score</th><th>Observed Rate</th><th>Gap</th></tr>
-                  </thead>
-                  <tbody>
-                    ${rawBins.map(b => `
-                      <tr>
-                        <td class="mono">[${b.lo.toFixed(2)}, ${b.hi.toFixed(2)}]</td>
-                        <td class="mono">${b.n}</td>
-                        <td class="mono">${b.mean_score.toFixed(3)}</td>
-                        <td class="mono">${b.observed.toFixed(3)}</td>
-                        <td class="mono">${b.gap.toFixed(3)}</td>
-                      </tr>
-                    `).join('')}
-                  </tbody>
-                </table>
+                <div class="grid-3 kpi-stack">
+                  <div>
+                    <div class="sub">Raw ECE (mass) vs Noise Floor (p95)</div>
+                    <div class="kpi">${bef.ece_mass.toFixed(4)} <span class="sub">/ floor ${floor.p95.toFixed(4)}</span></div>
+                    <span class="badge ${ aboveFloor ? 'badge-warn' : 'badge-ok' }">
+                      ${ aboveFloor ? `Miscalibrated (${esc(g.direction || 'over-confident')})` : 'Within Binomial Noise Floor' }
+                    </span>
+                  </div>
+                  <div>
+                    <div class="sub">Calibrated ECE / Brier / LogLoss</div>
+                    <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : 'N/A'} / LogLoss ${aft ? aft.log_loss.toFixed(4) : 'N/A'}</span></div>
+                    <span class="sub">${g.fit ? `Fit: ${esc(g.fit.method)} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
+                    ${fitVerdictHtml(g)}
+                  </div>
+                  <div>
+                    <div class="sub">Tie-Mass / Rounding Detector</div>
+                    <div class="kpi">${(tie.max_tie_share * 100).toFixed(1)}% <span class="sub">at p=${tie.max_tie_value.toFixed(3)}</span></div>
+                    <span class="badge badge-info">Unique values: ${tie.unique_values}</span>
+                  </div>
+                </div>
               </div>
             </div>
+            <div class="panel-block">
+              ${tableHtml(tables.metrics.spec, tables.metrics.rows, tstate)}
+              <div class="calib-note">Bootstrap: ${fmtNum(boot.reps, 0)} resamples of the group's records (seed ${fmtNum(boot.seed, 0)}); Δ is the paired difference on the same resamples. The ECE badges use equal-mass bins whichever bins the diagram shows.</div>
+            </div>
+            <div class="panel-block">${tableHtml(tables.bins.spec, tables.bins.rows, tstate)}</div>
           </div>
         `;
-      }).join("");
     }
 
     // Each simulator request takes a number; a response (or error) for an older request is
@@ -1398,14 +1963,27 @@
     let loadedSig = {};
     let viewData = {};
     let generation = 0;
+    // Each table's sort and filter, by table id (per browser tab, not in the link).
+    let TSTATE = {};
 
     function viewSig(view, st) {
       const def = viewDefs()[view];
       const resolved = resolveGroup(st, GROUPS, groupsState);
       if (def.group && !groupReady(resolved)) return JSON.stringify(["blocked", resolved.status, generation]);
       const params = def.group ? groupParams(st, resolved) : {};
-      const extra = view === "policy" ? [st.dist, st.lo, st.hi, st.cs2, st.budget] : [];
+      let extra = [];
+      if (view === "policy") extra = [st.dist, st.lo, st.hi, st.cs2, st.budget];
+      // The list depends on the groups themselves, not only on how many there are.
+      if (view === "calib") {
+        const mode = auditMode(resolved, GROUPS, groupsState);
+        extra = [st.nboot, mode, mode === "list" ? GROUPS : null];
+      }
       return JSON.stringify([params, extra, generation]);
+    }
+
+    // What the renderers read besides the payload: the bins in force and the tables' state.
+    function viewOpts() {
+      return {cbins: STATE.cbins, tstate: TSTATE};
     }
 
     // Make `next` the state: "push" adds a history entry, "replace" rewrites the current one, and a
@@ -1425,6 +2003,8 @@
     }
 
     function render() {
+      // A tooltip never outlives the chart it described.
+      document.getElementById("chart-tip").hidden = true;
       activateView(STATE.view);
       syncFilterBar();
       runView(STATE.view);
@@ -1470,6 +2050,7 @@
 
     function runView(view) {
       const def = viewDefs()[view];
+      if (view === "calib") applyCalibInputs(STATE);
       const sig = viewSig(view, STATE);
       if (loadedSig[view] === sig) {
         rerenderView(view);
@@ -1477,21 +2058,36 @@
       }
       loadedSig[view] = sig;
       const seq = (viewSeq[view] = (viewSeq[view] || 0) + 1);
+      // What is kept belongs to the request it came from: a re-render until the new one answers
+      // would show the old parameters' results under the new controls. (A request a Refresh
+      // outdated may still keep its payload, but Refresh clears every signature, so the view's
+      // next run passes here and deletes it.)
+      delete viewData[view];
       const resolved = resolveGroup(STATE, GROUPS, groupsState);
       if (view === "policy") {
         policySeq += 1;  // the simulator's own guard drops any pending response
         applyPolicyInputs(STATE);  // a blocked simulator still shows the link's settings
       }
+      const el = document.getElementById(def.container);
       if (def.group && !groupReady(resolved)) {
-        const el = document.getElementById(def.container);
         el.removeAttribute("aria-busy");
         el.innerHTML = groupBlockedHtml(resolved);
+        return;
+      }
+      const mode = view === "calib" ? auditMode(resolved, GROUPS, groupsState) : "";
+      if (mode === "wait" || mode === "error") {
+        el.removeAttribute("aria-busy");
+        el.innerHTML = auditModeHtml(mode, groupsError);
         return;
       }
       const ctx = {
         params: def.group ? groupParams(STATE, resolved) : {},
         dq: () => STATE.dq,
         cq: () => STATE.cq,
+        mode,
+        groups: GROUPS,
+        nboot: STATE.nboot,
+        opts: viewOpts,
         keep: d => { viewData[view] = d; },
         isCurrent: () => viewSeq[view] === seq,
       };
@@ -1509,6 +2105,77 @@
       if (!d) return;
       if (view === "drift") document.getElementById("drift-container").innerHTML = renderDrift(d, STATE.dq);
       if (view === "compare") document.getElementById("compare-container").innerHTML = renderCompare(d, STATE.cq);
+      if (view === "calib") document.getElementById("calib-container").innerHTML = renderCalib(d, viewOpts());
+    }
+
+    function applyCalibInputs(st) {
+      document.getElementById("inp-nboot").value = String(st.nboot);
+      document.getElementById("inp-cbins").value = st.cbins;
+    }
+
+    // The tables the view in force shows, by id, from the payload it holds.
+    function currentTables() {
+      const d = viewData[STATE.view];
+      if (STATE.view === "calib" && d) return calibTables(d, viewOpts());
+      return {};
+    }
+
+    // The toolbar and table element of a table id, found by comparing ids (never by building a
+    // selector from one: ids hold workspace identifiers).
+    function tableBox(id) {
+      return Array.from(document.querySelectorAll(".tk")).find(e => e.dataset.table === id) || null;
+    }
+
+    // A sort or filter re-renders that table's header and body only, so the filter box keeps its
+    // focus and an input method's composition.
+    function refreshTable(id) {
+      const entry = currentTables()[id];
+      const box = tableBox(id);
+      if (!entry || !box) return;
+      const st = tableState(TSTATE, id);
+      box.querySelector(".tk-body").innerHTML = tableBodyHtml(entry.spec, entry.rows, st);
+      box.querySelector(".tk-count").textContent = tableCountText(viewRows(entry.spec, entry.rows, st).length, entry.rows.length);
+    }
+
+    function sortTable(id, col) {
+      const st = tableState(TSTATE, id);
+      TSTATE[id] = {...st, sort: col, dir: st.sort === col && st.dir === "asc" ? "desc" : "asc"};
+      refreshTable(id);
+      const box = tableBox(id);
+      const again = box && Array.from(box.querySelectorAll("button.tk-sort")).find(b => b.dataset.col === col);
+      if (again) again.focus();
+    }
+
+    function filterTable(id, q) {
+      TSTATE[id] = {...tableState(TSTATE, id), q};
+      refreshTable(id);
+    }
+
+    // The rows the table shows (filtered and sorted), every data column.
+    function exportTable(id, format) {
+      const entry = currentTables()[id];
+      if (!entry) return;
+      const rows = viewRows(entry.spec, entry.rows, tableState(TSTATE, id));
+      const name = fileSafe(entry.spec.file) + "." + format;
+      // A byte order mark, so a spreadsheet reads the identifiers as UTF-8.
+      if (format === "csv") downloadText(name, String.fromCharCode(0xfeff) + toCsv(entry.spec, rows), "text/csv;charset=utf-8");
+      else downloadText(name, toJsonRows(entry.spec, rows), "application/json");
+    }
+
+    // One tooltip for every chart: a mark's data-tip, written as text.
+    function moveTip(ev) {
+      const tip = document.getElementById("chart-tip");
+      const mark = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
+      if (!mark) {
+        tip.hidden = true;
+        return;
+      }
+      tip.textContent = mark.getAttribute("data-tip");
+      tip.hidden = false;
+      const left = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 6);
+      const top = ev.clientY - tip.offsetHeight - 12;
+      tip.style.left = Math.max(6, left) + "px";
+      tip.style.top = (top < 6 ? ev.clientY + 18 : top) + "px";
     }
 
     // The simulator's inputs from the state, before its loader reads them. The group picker is set
@@ -1560,8 +2227,10 @@
       commit({...STATE, qid, model: g ? g.model_served : "", prim: g ? g.primitive : "", dq: qid, cq: qid}, "push");
     }
 
+    // The button pressed is replaced by the view it opens, so focus goes to that view's tab.
     function openGroup(qid, model, prim) {
       commit({...STATE, view: "calib", qid, model, prim, dq: qid, cq: qid}, "push");
+      document.getElementById("nav-calib").focus();
     }
 
     function navKey(ev) {
@@ -1595,13 +2264,26 @@
     document.getElementById("btn-theme").addEventListener("click", () => applyTheme(nextTheme(document.documentElement.dataset.theme || "system")));
     document.addEventListener("click", ev => {
       const el = ev.target.closest("[data-act]");
-      if (el && el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
+      if (!el) return;
+      if (el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
+      if (el.dataset.act === "tk-sort") sortTable(el.dataset.table, el.dataset.col);
+      if (el.dataset.act === "tk-csv") exportTable(el.dataset.table, "csv");
+      if (el.dataset.act === "tk-json") exportTable(el.dataset.table, "json");
     });
     document.addEventListener("change", ev => {
       const el = ev.target.closest("[data-act]");
       if (el && el.dataset.act === "drift-question") commit({...STATE, dq: el.value}, "push");
       if (el && el.dataset.act === "compare-question") commit({...STATE, cq: el.value}, "push");
+      // Settings of the view, not places: they rewrite the current history entry, through the
+      // hash's own rule.
+      if (el && el.dataset.act === "calib-nboot") commit(parseHash(formatHash({...STATE, nboot: Number(el.value)})), "replace");
+      if (el && el.dataset.act === "calib-cbins") commit(parseHash(formatHash({...STATE, cbins: el.value})), "replace");
     });
+    // A table's filter box: one listener for every table.
+    document.addEventListener("input", ev => {
+      if (ev.target.classList && ev.target.classList.contains("tk-filter")) filterTable(ev.target.dataset.table, ev.target.value);
+    });
+    document.addEventListener("mousemove", moveTip);
     window.addEventListener("popstate", onHashChange);
     window.addEventListener("hashchange", onHashChange);
     STATE = parseHash(location.hash);

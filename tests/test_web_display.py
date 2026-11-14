@@ -134,7 +134,12 @@ def test_each_slider_has_one_input_listener_that_pushes_before_loading() -> None
     script = HTML[HTML.index("<script>"):HTML.index("</script>")]
     wiring = re.search(r'\["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"\]\.forEach\(id => \{.*?\n    \}\);', script, re.S).group(0)
     assert wiring.index("pushBand(id)") < wiring.index("run(loadPolicy")
-    assert script.count('addEventListener("input"') == 1
+    assert wiring.count('addEventListener("input"') == 1
+    # The page's one other input listener is the table kit's filter box, which never loads.
+    rest = script.replace(wiring, "")
+    assert rest.count('addEventListener("input"') == 1
+    tables = re.search(r'addEventListener\("input", ev => \{.*?\n    \}\);', rest, re.S).group(0)
+    assert 'contains("tk-filter")' in tables and "run(" not in tables
 
 
 # --- #125 policy wording ---------------------------------------------------------------------

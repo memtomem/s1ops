@@ -27,7 +27,7 @@ from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import CompareInputError, compare_records
 from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
-from s1ops.eval.metrics import routed_confidence
+from s1ops.eval.metrics import reliability_counts, reliability_points, routed_confidence
 from s1ops.improve.calibrate import Fit, fit_for, fitted_items, load_fits, transform
 from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
 from s1ops.improve.policy import (
@@ -45,7 +45,7 @@ from s1ops.improve.policy import (
     tuned_fit_sha256,
     tuned_rows,
 )
-from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
+from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report, wilson
 from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import DriftInputError, audit_drift, psi_test_info
@@ -111,6 +111,20 @@ def _occupied(path: Path) -> bool:
     except OSError:
         return True
     return True
+
+
+def _reliability_ci(primitive: str, P: Any, y: Any, bins: int) -> dict[str, list[dict[str, Any]]]:
+    """Per strategy, each non-empty bin's `n`, its successes (the 0/1 targets of
+    `reliability_points`: the label for noul, a correct argmax otherwise) and their 95% Wilson
+    interval, in the order of the audit's reliability table."""
+    score, target = reliability_points(primitive, P, y)
+    return {
+        strategy: [
+            {"n": n, "successes": k, "ci": list(wilson(k, n))}
+            for n, k in reliability_counts(score, target, bins, strategy)
+        ]
+        for strategy in ("width", "mass")
+    }
 
 
 _ONE_LEVEL = "every grade is 0; agreement needs grades on at least two levels"
@@ -302,6 +316,15 @@ def create_app(
                 seed=0,
                 after=after_P,
             )
+            # For the page only (`s1 audit` reports no `display`): each reliability bin's Wilson
+            # interval, aligned with `reliability` / `reliability_after`.
+            report["display"] = {
+                "reliability_ci": {
+                    side: _reliability_ci(grp.primitive, P, grp.y, report["bins"])
+                    for side, P in (("before", grp.P), ("after", after_P))
+                    if P is not None
+                }
+            }
             if fit is not None:
                 in_sample = fitted_items([fit])[fit.key]
                 report["fit"] = {

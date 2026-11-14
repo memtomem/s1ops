@@ -64,7 +64,15 @@ from s1ops.improve.policy import (
     tuned_rows,
 )
 from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
-from s1ops.improve.trainrun import build_trainrun, load_trainrun, read_scalars, read_steps, save_trainrun
+from s1ops.improve.trainrun import (
+    TrainRuns,
+    build_trainrun,
+    load_trainrun,
+    load_trainruns,
+    read_scalars,
+    read_steps,
+    save_trainrun,
+)
 from s1ops.improve.trainset import (
     Trained,
     TrainedItemError,
@@ -161,6 +169,7 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
     "summary": ("summary metrics file", None),
     "steps": ("step metrics file", None),
     "parent_run": ("parent training-run record", "s1 trainset record"),
+    "training_run": ("training-run record", "s1 trainset record"),
 }
 
 
@@ -211,6 +220,21 @@ def _trained(args: argparse.Namespace, records: list[Record]) -> Trained:
 def _refuse_trained(args: argparse.Namespace, groups: list[Group], trained: Trained) -> None:
     for grp in groups:
         check_not_trained(grp.key, grp.items, trained, args.records)
+
+
+def _trainruns(args: argparse.Namespace, records: list[Record]) -> TrainRuns:
+    """The `--training-run` records by checkpoint, bound to the whole input file as `_trained` is."""
+    paths = args.training_run or []
+    return load_trainruns(paths, [r.model_served for r in records], args.records) if paths else {}
+
+
+def _trainrun_shown(args: argparse.Namespace, runs: TrainRuns, model_served: str) -> dict[str, str | None]:
+    """The `trainrun_id` key a printed row gains under `--training-run`: the run that produced its
+    model, null when no record names it. Without the option the row is as it was."""
+    if not args.training_run:
+        return {}
+    run = runs.get(model_served)
+    return {"trainrun_id": None if run is None else run.trainrun_id}
 
 
 def _tuned_fit_sha256(path: str, grp: Group, rows: list[Record]) -> str | None:
@@ -447,6 +471,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     _check_policy_args(args)
     records, src_sha = read_records_hashed(args.records, use_calib=args.use_calib)
     trained = _trained(args, records)
+    runs = _trainruns(args, records)
     sel = select(records, allow_model_mismatch=True)
     selected = _selected(args, sel)
     _refuse_trained(args, selected, trained)
@@ -463,6 +488,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
                     "question_id": grp.question_id,
                     "model_served": grp.model_served,
                     "primitive": grp.primitive,
+                    **_trainrun_shown(args, runs, grp.model_served),
                     "curve": threshold_curve(
                         conf,
                         correct,
@@ -561,7 +587,8 @@ def _cmd_policy(args: argparse.Namespace) -> int:
             {
                 "output": str(args.output),
                 "n_policies": len(policies),
-                "policies": [p.to_dict() for p in policies],
+                # policy.json itself gains nothing: `s1-policy/1` has no such field.
+                "policies": [{**p.to_dict(), **_trainrun_shown(args, runs, p.model_served)} for p in policies],
             },
             indent=2,
             sort_keys=True,
@@ -819,7 +846,12 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
 
 
 def _cmd_compare(args: argparse.Namespace) -> int:
-    rep = compare_records(args.primary, args.shadow, training_manifests=args.training_manifest or ())
+    rep = compare_records(
+        args.primary,
+        args.shadow,
+        training_manifests=args.training_manifest or (),
+        training_runs=args.training_run or (),
+    )
     print(json.dumps(rep, indent=2, sort_keys=True))
     return 0
 
@@ -933,11 +965,13 @@ def _cmd_export(args: argparse.Namespace) -> int:
     fit_info = {"fit": applied.summary()} if applied else {}
 
     if args.export_cmd == "langfuse":
+        runs = _trainruns(args, records)
         payload = export_langfuse_file(
             args.output,
             records,
             run_name=args.run_name,
             policies=policies,
+            training_runs=list(runs.values()),
         )
         print(json.dumps({**payload["summary"], **fit_info}, indent=2, sort_keys=True))
         return 0
@@ -1299,6 +1333,10 @@ _H_ALLOW_IN_SAMPLE = "with --fit, calibrate items the fit was trained on rather 
 _H_TRAINING_MANIFEST = (
     "training manifest from `s1 trainset export`, repeatable: refuse (exit 2) a selected group whose model trained on any of its items"
 )
+_H_TRAINING_RUN = (
+    "training-run record from `s1 trainset record`, repeatable: the printed report gains the `trainrun_id` of the run "
+    "that produced each model it names (null when no record names it). A record whose checkpoint answered no input record exits 1"
+)
 _H_USE_CALIB = "use the calibrated probabilities written by `s1 apply` instead of the raw ones"
 _H_USE_CALIB_SLICE = (
     "predict from the calibrated probabilities written by `s1 apply` instead of the raw ones; every "
@@ -1397,6 +1435,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
+    p_pt.add_argument("--training-run", action="append", help=f"{_H_TRAINING_RUN}. policy.json is written as without it")
     p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve: each point counts what an error_budget policy at its threshold accepts (for noul, what `policy tune --noul-routing threshold` writes, not the F1 band; a choice or score tie at the top is always escalated)", **_FMT)
     p_pc.add_argument("records", help=_H_RECORDS)
     p_pc.add_argument("--question", default=None, help=_H_QUESTION)
@@ -1405,6 +1444,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pc.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
     p_pc.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pc.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
+    p_pc.add_argument("--training-run", action="append", help=_H_TRAINING_RUN)
     p_pol.set_defaults(func=_cmd_policy)
 
     # slice
@@ -1462,6 +1502,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--training-manifest",
         action="append",
         help="training manifest from `s1 trainset export`, repeatable: refuse (exit 2) a compared pair in which a side's model trained on the item",
+    )
+    p_cmp.add_argument(
+        "--training-run",
+        action="append",
+        help="training-run record from `s1 trainset record`, repeatable: each question's report gains `primary_trainrun_id` and "
+        "`shadow_trainrun_id`, the run that produced that side's model (null when no record names it). A record whose checkpoint answered no record in either file exits 1",
     )
     p_cmp.set_defaults(func=_cmd_compare)
 
@@ -1561,6 +1607,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_el.add_argument("--fit", default=None, help=f"{_H_FIT_IN_MEMORY}; the printed summary gains a `fit` block saying what was calibrated")
     p_el.add_argument("--allow-in-sample", action="store_true", help=_H_ALLOW_IN_SAMPLE)
     p_el.add_argument("--run-name", default="s1ops-eval", help="dataset run name")
+    p_el.add_argument(
+        "--training-run",
+        action="append",
+        help="training-run record from `s1 trainset record`, repeatable: the export gains `training_runs`, each record as written "
+        "(digests, counts, trainer settings and metrics), and `metadata.trainrun_id` on every observation its checkpoint answered. "
+        "A record whose checkpoint answered no input record exits 1",
+    )
     p_ep = sub_exp.add_parser("phoenix", help="Export safe-v1 OpenInference spans JSONL", **_FMT)
     p_ep.add_argument("records", help=_H_RECORDS)
     p_ep.add_argument("-o", "--output", required=True, help="OpenInference spans JSONL to write")

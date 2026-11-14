@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from s1ops.contracts.records import SCHEMAS, read_records, score_level, score_levels
+from s1ops.improve.trainrun import TrainRuns, load_trainruns
 from s1ops.improve.trainset import check_not_trained, load_trained
 
 SUM_TOLERANCE = 0.02
@@ -164,12 +165,17 @@ def compare_records(
     max_flip_rate: float = 0.03,
     max_accuracy_drop: float = 0.02,
     training_manifests: Sequence[str | Path] = (),
+    training_runs: Sequence[str | Path] = (),
 ) -> dict:
     """Compare two sets of records paired on `(dataset, item_id, question_id)`.
 
     `training_manifests` refuses a compared pair in which a side's model trained on the item
     (`TrainedItemError`). Only pairs are checked: a candidate's training item that the other file
-    lacks is not compared."""
+    lacks is not compared.
+
+    `training_runs` are `s1-trainrun/1` records: each question's report then says which run
+    produced each side's model (`primary_trainrun_id`, `shadow_trainrun_id`; `None` for a model
+    no record names). Without any, the report has neither key."""
     if isinstance(primary_records, (str, Path)):
         prim_rows = [r.raw for r in read_records(primary_records) if r.model_served is not None]
     else:
@@ -191,16 +197,15 @@ def compare_records(
     idx_a, idx_b = index(prim_rows), index(shad_rows)
     shared = sorted(idx_a.keys() & idx_b.keys(), key=lambda x: (x[0] or "", x[1], x[2]))
     _one_group_per_question([(idx_a[k], idx_b[k]) for k in shared])
+    name = {
+        side: str(source) if isinstance(source, (str, Path)) else f"{side} records"
+        for side, source in (("primary", primary_records), ("shadow", shadow_records))
+    }
+    served = [r["model_served"] for r in (*prim_rows, *shad_rows)]
+    either = f"{name['primary']} or {name['shadow']}"
+    runs: TrainRuns = load_trainruns(training_runs, served, either) if training_runs else {}
     if training_manifests:
-        name = {
-            side: str(source) if isinstance(source, (str, Path)) else f"{side} records"
-            for side, source in (("primary", primary_records), ("shadow", shadow_records))
-        }
-        trained = load_trained(
-            training_manifests,
-            [r["model_served"] for r in (*prim_rows, *shad_rows)],
-            f"{name['primary']} or {name['shadow']}",
-        )
+        trained = load_trained(training_manifests, served, either)
         for k in shared:
             for side, row in (("primary", idx_a[k]), ("shadow", idx_b[k])):
                 group = (row["question_id"], str(row["model_served"]), str(row.get("primitive")))
@@ -250,6 +255,11 @@ def compare_records(
                 "flipped_items": [asdict(d) for d in ds if d.flipped][:50],
             }
         )
+    if training_runs:
+        for rep in q_reports:
+            for side in ("primary", "shadow"):
+                run = runs.get(rep[f"{side}_model"])
+                rep[f"{side}_trainrun_id"] = None if run is None else run.trainrun_id
     adjusted = holm(raw_p) if raw_p else {}
     for rep in q_reports:
         if rep["mcnemar"] is not None:

@@ -166,7 +166,7 @@
 - [x] `--training-manifest`: `fit`·`audit`·`policy tune`/`curve`·`compare`에서 학습 항목이면 exit 2
 - [x] 체크포인트 이름 규칙과 승격 순서를 README에 문서화, `s1 probe`가 states 행의 `split`을 레코드에 복사
 - [x] `s1 trainset record`: 끝난 학습 실행을 `s1-trainrun/1`로 기록. manifest·데이터 파일·가중치 SHA-256, 평탄한 trainer 설정·요약 지표·스텝 지표, 부모 실행 id. 데이터 행의 `(dataset, item_id)`가 manifest에 없으면 exit 2(누출 거부가 모르는 학습 항목), manifest 항목에 행이 없으면 exit 1. trainer 로그 파싱은 하지 않음(소유자 결정 2026-11-14: 범용 형식 + 학습기별 변환기는 사용처에)
-- [ ] `compare`·`policy` 출력과 Langfuse 내보내기에 `trainrun_id` 표시
+- [x] `--training-run`: `compare`·`policy tune`/`curve`의 출력에 `trainrun_id` 표시, `export langfuse`에 기록 첨부(`training_runs`, 관측마다 `metadata.trainrun_id`). 모델은 이름으로 대응(`model_served` = 기록의 `checkpoint`). 옵션이 없으면 출력은 그대로. `policy.json`에는 쓰지 않음(`s1-policy/1`의 행은 모르는 키를 거부하므로, 필드를 더하면 이전 버전 리더가 파일을 거부함. 필요해지면 소유자 결정으로)
 - [ ] 리뷰 라벨 교정 반영(`labelaudit patch` / `pull`)
 - [ ] 승격 순서 wrapper
 - [ ] 워크벤치 읽기 전용 체크포인트 뷰(GET만)

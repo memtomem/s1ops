@@ -16,6 +16,7 @@ manifest would then claim the checkpoint trained on what it never saw.
 import hashlib
 import json
 import math
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -170,6 +171,10 @@ def _check_scalars(values: object, what: str, where: str) -> dict[str, Scalar]:
     out: dict[str, Scalar] = {}
     for key, value in values.items():
         name = _id_string(key, f"a {what} name", where)
+        if name == "state":
+            # As the ledger refuses the key in its metadata: reports and the Langfuse export copy
+            # these values out, and a row's `state` passed along by mistake would go with them.
+            raise TrainRunError(f"{where}: a {what} cannot be named 'state' (safe-v1: item text is never recorded)")
         if isinstance(value, str):
             problem = surrogate_problem(f"{what} {name!r}", value)
             if problem is not None:
@@ -308,7 +313,7 @@ def build_trainrun(
     *,
     manifest_sha256: str,
     data: str | Path,
-    weights: Sequence[str | Path],
+    weights: Iterable[str | Path],
     trainer: Mapping[str, Scalar] | None = None,
     summary: Mapping[str, Scalar] | None = None,
     steps: Sequence[Mapping[str, float | int]] = (),
@@ -320,8 +325,16 @@ def build_trainrun(
     file name and SHA-256, so names must differ. `parent` is the record of the run this checkpoint
     started from. `trainrun_id` hashes everything but `created_at`: the same inputs give the same id.
     """
+    # A lone path would be read character by character, and each character taken for a file; a
+    # mapping, such as a record's own `weights_sha256`, would be read as its keys.
+    if isinstance(weights, (str, bytes, os.PathLike, Mapping)) or not isinstance(weights, Iterable):
+        raise TrainRunError(f"weights must be a sequence of paths, got a {type(weights).__name__}")
+    weights = list(weights)
     if not weights:
         raise TrainRunError("a training run records at least one weights file")
+    for w in weights:
+        if not isinstance(w, (str, os.PathLike)):
+            raise TrainRunError(f"a weights file must be a path, got a {type(w).__name__}")
     if parent is not None and parent.checkpoint == manifest.checkpoint:
         raise TrainRunError(f"the parent run {parent.trainrun_id} is for the same checkpoint {manifest.checkpoint!r}")
     items, check = read_data_items(data)

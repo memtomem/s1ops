@@ -547,6 +547,7 @@ def test_the_documented_promotion_sequence_runs(tmp_path: Path, capsys) -> None:
     policy = str(tmp_path / "policy.json")
     assert cli_main(["policy", "tune", applied, "--use-calib", *flag, *shown, "-o", policy]) == 0
     assert [p["trainrun_id"] for p in json.loads(capsys.readouterr().out)["policies"]] == [trainrun_id]
+    assert [p["trainrun_id"] for p in json.loads(Path(policy).read_text())["policies"]] == [trainrun_id]
     exported = tmp_path / "langfuse_export.json"
     assert cli_main(["export", "langfuse", applied, "--policy", policy, *shown, "-o", str(exported)]) == 0
     assert [r["trainrun_id"] for r in json.loads(exported.read_text())["training_runs"]] == [trainrun_id]

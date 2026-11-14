@@ -170,6 +170,8 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
     "steps": ("step metrics file", None),
     "parent_run": ("parent training-run record", "s1 trainset record"),
     "training_run": ("training-run record", "s1 trainset record"),
+    "cal": ("candidate calibration records file", None),
+    "eval": ("candidate evaluation records file", None),
 }
 
 
@@ -387,6 +389,12 @@ def _cmd_audit(args: argparse.Namespace) -> int:
 
 
 def _cmd_fit(args: argparse.Namespace) -> int:
+    print(json.dumps(_fit(args), indent=2, sort_keys=True))
+    return 0
+
+
+def _fit(args: argparse.Namespace) -> dict[str, Any]:
+    """Fit and write `args.output`; the summary `s1 fit` prints."""
     records, src_sha = read_records_hashed(args.records)
     trained = _trained(args, records)
     sel = select(records, split=args.split, allow_model_mismatch=True)
@@ -406,32 +414,33 @@ def _cmd_fit(args: argparse.Namespace) -> int:
     if not fits:
         raise _no_groups(args, sel, args.records)
     save_fits(fits, args.output)
-    print(
-        json.dumps(
+    return {
+        "output": str(args.output),
+        "n_fits": len(fits),
+        "groups": [
             {
-                "output": str(args.output),
-                "n_fits": len(fits),
-                "groups": [
-                    {
-                        "question_id": f.question_id,
-                        "model_served": f.model_served,
-                        "primitive": f.primitive,
-                        "method": f.method,
-                        "n": f.n,
-                        "nll_before": f.nll_before,
-                        "nll_after": f.nll_after,
-                    }
-                    for f in fits
-                ],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
-    return 0
+                "question_id": f.question_id,
+                "model_served": f.model_served,
+                "primitive": f.primitive,
+                "method": f.method,
+                "n": f.n,
+                "nll_before": f.nll_before,
+                "nll_after": f.nll_after,
+            }
+            for f in fits
+        ],
+    }
 
 
 def _cmd_apply(args: argparse.Namespace) -> int:
+    summary = _apply(args)
+    if len(summary) > 1:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def _apply(args: argparse.Namespace) -> dict[str, Any]:
+    """Calibrate into `args.output`; the summary `s1 apply` prints when it has more than `calibrated`."""
     records = read_records(args.records, require_answer=True)
     fits = load_fits(args.fit)
     # `safe-v1`: no row is written with its item `state`.
@@ -448,9 +457,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         summary["passed_through"] = applied.passed_through
     if state_dropped:
         summary["state_dropped"] = state_dropped
-    if len(summary) > 1:
-        print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0
+    return summary
 
 
 def _check_policy_args(args: argparse.Namespace) -> None:
@@ -472,6 +479,12 @@ def _check_policy_args(args: argparse.Namespace) -> None:
 
 
 def _cmd_policy(args: argparse.Namespace) -> int:
+    print(json.dumps(_policy(args), indent=2, sort_keys=True))
+    return 0
+
+
+def _policy(args: argparse.Namespace) -> dict[str, Any]:
+    """What `s1 policy curve` or `tune` prints; `tune` has written `args.output` by then."""
     _check_policy_args(args)
     records, src_sha = read_records_hashed(args.records, use_calib=args.use_calib)
     trained = _trained(args, records)
@@ -504,8 +517,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
             )
         if not curves:
             raise _no_groups(args, sel, args.records)
-        print(json.dumps({"groups": curves}, indent=2, sort_keys=True))
-        return 0
+        return {"groups": curves}
 
     false_pass = args.max_false_pass
     if false_pass is not None and args.max_escalation is not None:
@@ -587,19 +599,12 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     if not policies:
         raise _no_groups(args, sel, args.records)
     save_policies(policies, args.output)
-    print(
-        json.dumps(
-            {
-                "output": str(args.output),
-                "n_policies": len(policies),
-                # The file's rows, plus a null `trainrun_id` for a policy whose model no record names.
-                "policies": [{**p.to_dict(), **_trainrun_shown(args, runs, p.model_served)} for p in policies],
-            },
-            indent=2,
-            sort_keys=True,
-        )
-    )
-    return 0
+    return {
+        "output": str(args.output),
+        "n_policies": len(policies),
+        # The file's rows, plus a null `trainrun_id` for a policy whose model no record names.
+        "policies": [{**p.to_dict(), **_trainrun_shown(args, runs, p.model_served)} for p in policies],
+    }
 
 
 def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned: dict[GroupKey, list[Record]]) -> PolicyEntry:
@@ -851,13 +856,119 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
 
 
 def _cmd_compare(args: argparse.Namespace) -> int:
-    rep = compare_records(
+    print(json.dumps(_compare(args), indent=2, sort_keys=True))
+    return 0
+
+
+def _compare(args: argparse.Namespace) -> dict[str, Any]:
+    return compare_records(
         args.primary,
         args.shadow,
         training_manifests=args.training_manifest or (),
         training_runs=args.training_run or (),
     )
-    print(json.dumps(rep, indent=2, sort_keys=True))
+
+
+_PROMOTE_FILES = {
+    "fits": "fits.json",
+    "calibrated": "candidate_eval_calibrated.jsonl",
+    "policy": "policy.json",
+    "report": "promotion.json",
+}
+
+
+def _answered_models(path: str) -> set[str]:
+    return {r.model_served for r in read_records(path) if r.model_served is not None}
+
+
+def _promote_step(name: str, run, skeleton: list[str], **values: Any) -> dict[str, Any]:
+    """Run one command of the sequence as its own parser would have it: `skeleton` gives the
+    subcommand its defaults, `values` are set over them. A refusal keeps its exit code and says
+    which step it came from."""
+    step = build_parser().parse_args(skeleton)
+    for dest, value in values.items():
+        setattr(step, dest, value)
+    try:
+        return run(step)
+    except Exception as e:
+        failure = _failure(e)
+        if failure is None or (os.environ.get("S1_DEBUG") and not isinstance(e, CliError)):
+            raise
+        raise CliError(f"promote: {name}: {failure[0]}", failure[1]) from None
+
+
+def _cmd_promote(args: argparse.Namespace) -> int:
+    """README's promotion check for one fine-tuned candidate, with its manifest on every step that takes one."""
+    inputs = [args.current, args.cal, args.eval, *args.training_manifest, *(args.training_run or [])]
+    for path in inputs:
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            raise CliError(f"{path}: more than one step reads each input, so it must be a regular file")
+    out_dir = Path(args.output)
+    out = {key: out_dir / name for key, name in _PROMOTE_FILES.items()}
+    for path in out.values():
+        for other in inputs:
+            if path.exists() and path.samefile(other):
+                raise CliError(f"--output {out_dir} would write {path}, which is the input {other}")
+
+    served = {path: _answered_models(path) for path in (args.cal, args.eval)}
+    for path, names in served.items():
+        if len(names) != 1:
+            raise CliError(f"{path}: a candidate's records are answered by one model, and these name {sorted(names)}")
+    (candidate,) = served[args.cal]
+    if served[args.eval] != {candidate}:
+        raise CliError(f"{args.eval}: answered by {sorted(served[args.eval])}, and {args.cal} by {candidate!r}; both are the candidate's")
+    current_models = _answered_models(args.current)
+    if candidate in current_models:
+        raise CliError(f"{args.current}: holds answers of the candidate {candidate!r}; it is the model in place that is compared with it")
+    # Each step refuses a manifest or record whose checkpoint answered nothing in its input, so the
+    # candidate-only steps get the candidate's and `compare`, which reads both models, gets them all.
+    manifests = {path: load_manifest(path).checkpoint for path in args.training_manifest}
+    mine = [path for path, checkpoint in manifests.items() if checkpoint == candidate]
+    if not mine:
+        raise CliError(
+            f"no --training-manifest is for {candidate!r}, the model of {args.cal} and {args.eval} "
+            f"(given: {sorted(set(manifests.values()))}); without it no step knows what the candidate trained on"
+        )
+    runs = {path: load_trainrun(path) for path in args.training_run or []}
+    my_runs = [path for path, run in runs.items() if run.checkpoint == candidate]
+
+    compared = _promote_step(
+        "compare", _compare, ["compare", "-", "-"],
+        primary=args.current, shadow=args.eval, training_manifest=list(manifests), training_run=list(runs) or None,
+    )  # fmt: skip
+    if not compared["shared_pairs"]:
+        raise CliError(f"promote: compare: no item of {args.eval} was answered in {args.current}; nothing would be compared")
+    drift = _promote_step("drift", _drift, ["drift", "-", "-"], reference=args.current, current=args.eval)
+    # Nothing is written before this line; a step that fails after it leaves the files of the steps before it.
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fitted = _promote_step(
+        "fit", _fit, ["fit", "-", "-o", "-"],
+        records=args.cal, output=str(out["fits"]), training_manifest=mine, method=args.method, min_n=args.min_n,
+    )  # fmt: skip
+    applied = _promote_step("apply", _apply, ["apply", "-", "--fit", "-", "-o", "-"], records=args.eval, fit=str(out["fits"]), output=str(out["calibrated"]))
+    tuned = _promote_step(
+        "policy tune", _policy, ["policy", "tune", "-", "-o", "-", "--use-calib"],
+        records=str(out["calibrated"]), output=str(out["policy"]), training_manifest=mine, training_run=my_runs or None,
+        **{dest: getattr(args, dest) for dest in _TUNE_OPTIONS},
+    )  # fmt: skip
+
+    report: dict[str, Any] = {
+        "schema": "s1-promotion/1",
+        "checkpoint": candidate,
+        "current_models": sorted(current_models),
+        "replaceable": all(q["replaceable"] for q in compared["questions"]),
+        "output": {key: str(path) for key, path in out.items()},
+        "compare": compared,
+        "drift": drift,
+        "fit": fitted,
+        "apply": applied,
+        "policy": tuned,
+    }
+    if my_runs:
+        report["trainrun_id"] = runs[my_runs[0]].trainrun_id
+    text = json.dumps(report, indent=2, sort_keys=True)
+    out["report"].write_text(text + "\n", encoding="utf-8")
+    print(text)
     return 0
 
 
@@ -1037,6 +1148,15 @@ def _cmd_ledger(args: argparse.Namespace) -> int:
 
 
 def _cmd_drift(args: argparse.Namespace) -> int:
+    rep = _drift(args)
+    print(json.dumps(rep, indent=2, sort_keys=True))
+    if args.fail_on_critical and rep["summary"]["critical"] > 0:
+        return EXIT_DRIFT_CRITICAL
+    return EXIT_OK
+
+
+def _drift(args: argparse.Namespace) -> dict[str, Any]:
+    """The report `s1 drift` prints."""
     _check_fit_args(args)
     if args.fit and not (args.policy or args.calibrated):
         raise CliError(
@@ -1057,10 +1177,7 @@ def _cmd_drift(args: argparse.Namespace) -> int:
         bins=args.bins,
         use_calib=args.calibrated,
     )
-    print(json.dumps({**rep, **fit_info}, indent=2, sort_keys=True))
-    if args.fail_on_critical and rep["summary"]["critical"] > 0:
-        return EXIT_DRIFT_CRITICAL
-    return EXIT_OK
+    return {**rep, **fit_info}
 
 
 _MOCK_MODEL = "jev-1.13.0"
@@ -1351,6 +1468,31 @@ _H_COST_S1 = "USD cost of one System 1 call"
 _H_COST_SYS2 = "USD cost of escalating one item to System 2 (LLM or human)"
 
 
+_TUNE_OPTIONS = ("error_budget", "use_cp_upper", "cp_alpha", "cost_s1", "cost_sys2", "max_escalation", "max_false_pass", "noul_routing")
+
+
+def _add_tune_options(p: argparse.ArgumentParser) -> None:
+    """The options that decide what `s1 policy tune` compiles; `s1 promote` takes the same ones."""
+    p.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it. A noul group is routed by the F1 band instead, which this does not bound (metrics_on_split.accepted_error says what it does), unless --noul-routing threshold (choice and score groups only under --max-false-pass)")
+    p.add_argument("--use-cp-upper", action="store_true", help="judge the budget (or --max-false-pass) against the Clopper-Pearson upper bound instead of the point estimate")
+    p.add_argument("--cp-alpha", type=float, default=0.05, help="significance level of the Clopper-Pearson bound")
+    p.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
+    p.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
+    p.add_argument("--max-escalation", type=float, default=None, help="largest fraction of items the noul escalation band may send to System 2 (default: 0.35). At 0 the band is empty, one cutoff that accepts every item, not the threshold")
+    p.add_argument(
+        "--max-false-pass",
+        type=float,
+        default=None,
+        help="for noul groups, in place of the F1 band: the smallest cutoff at which at most this share of label-false items pass (p >= cutoff), written as a band with band_lo == band_hi",
+    )
+    p.add_argument(
+        "--noul-routing",
+        choices=("band", "threshold"),
+        default=None,
+        help="what routes a noul group: band (the default) is the F1 escalation band under --max-escalation; threshold writes mode error_budget, accepting when max(p, 1 - p) reaches the --error-budget threshold, so the budget bounds accepted_error on the split",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(
         prog="s1",
@@ -1420,24 +1562,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pt.add_argument("-o", "--output", required=True, help="policy.json to write")
     p_pt.add_argument("--question", default=None, help=_H_QUESTION)
     p_pt.add_argument("--model", default=None, help=_H_MODEL)
-    p_pt.add_argument("--error-budget", type=float, default=0.10, help="maximum error rate among auto-accepted items; the threshold is the lowest tie-safe one that meets it. A noul group is routed by the F1 band instead, which this does not bound (metrics_on_split.accepted_error says what it does), unless --noul-routing threshold (choice and score groups only under --max-false-pass)")
-    p_pt.add_argument("--use-cp-upper", action="store_true", help="judge the budget (or --max-false-pass) against the Clopper-Pearson upper bound instead of the point estimate")
-    p_pt.add_argument("--cp-alpha", type=float, default=0.05, help="significance level of the Clopper-Pearson bound")
-    p_pt.add_argument("--cost-s1", type=float, default=0.00004, help=_H_COST_S1)
-    p_pt.add_argument("--cost-sys2", type=float, default=0.004, help=_H_COST_SYS2)
-    p_pt.add_argument("--max-escalation", type=float, default=None, help="largest fraction of items the noul escalation band may send to System 2 (default: 0.35). At 0 the band is empty, one cutoff that accepts every item, not the threshold")
-    p_pt.add_argument(
-        "--max-false-pass",
-        type=float,
-        default=None,
-        help="for noul groups, in place of the F1 band: the smallest cutoff at which at most this share of label-false items pass (p >= cutoff), written as a band with band_lo == band_hi",
-    )
-    p_pt.add_argument(
-        "--noul-routing",
-        choices=("band", "threshold"),
-        default=None,
-        help="what routes a noul group: band (the default) is the F1 escalation band under --max-escalation; threshold writes mode error_budget, accepting when max(p, 1 - p) reaches the --error-budget threshold, so the budget bounds accepted_error on the split",
-    )
+    _add_tune_options(p_pt)
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
     p_pt.add_argument("--training-run", action="append", help=f"{_H_TRAINING_RUN}. policy.json records it too, on each policy whose model a record names; s1ops 0.11.1 and earlier refuse a policy file with that field")
@@ -1515,6 +1640,33 @@ def build_parser() -> argparse.ArgumentParser:
         "`shadow_trainrun_id`, the run that produced that side's model (null when no record names it). A record whose checkpoint answered no record in either file exits 1",
     )
     p_cmp.set_defaults(func=_cmd_compare)
+
+    # promote
+    p_pro = sub.add_parser(
+        "promote",
+        help="Promotion check for a fine-tuned candidate: compare, drift, fit, apply and policy tune in one run, with its training manifest on every step that takes one",
+        **_FMT,
+    )
+    p_pro.add_argument("--current", required=True, help=f"the model in place, answering the candidate's evaluation items: {_H_RECORDS}")
+    p_pro.add_argument("--cal", required=True, help=f"the candidate's calibration fold, which the fit is fitted on: {_H_RECORDS}")
+    p_pro.add_argument("--eval", required=True, help=f"the candidate's evaluation fold, which is compared, calibrated and tuned on: {_H_RECORDS}")
+    p_pro.add_argument(
+        "--training-manifest",
+        action="append",
+        required=True,
+        help="training manifest from `s1 trainset export`, repeatable; one must be for the candidate. A step exits 2 on an item its model trained on",
+    )
+    p_pro.add_argument("--training-run", action="append", help="training-run record from `s1 trainset record`, repeatable: its `trainrun_id` goes into the report and policy.json, as `s1 compare` and `s1 policy tune` write it")
+    p_pro.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help="directory to write fits.json, candidate_eval_calibrated.jsonl, policy.json and promotion.json (the printed report) into; created if missing",
+    )
+    p_pro.add_argument("--method", choices=["temperature", "platt", "isotonic"], default="temperature", help="calibration map for `s1 fit`; platt and isotonic are noul-only")
+    p_pro.add_argument("--min-n", type=int, default=30, help="as `s1 fit --min-n`: smaller groups are fitted with a small-sample warning")
+    _add_tune_options(p_pro)
+    p_pro.set_defaults(func=_cmd_promote)
 
     # trainset
     p_ts = sub.add_parser("trainset", help="Training sets for an external trainer (s1ops starts no training)", **_FMT)
@@ -1665,29 +1817,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _check_inputs(args)
         return int(args.func(args))
-    except CliError as e:
-        return _fail(str(e), e.code)
-    except ModelServedMismatchError as e:
-        if debug:
+    except Exception as e:
+        failure = _failure(e)
+        if failure is None or (debug and not isinstance(e, CliError)):
             raise
-        return _fail(str(e), EXIT_MODEL_MISMATCH)
-    except FitApplyError as e:
-        if debug:
-            raise
-        return _fail(str(e), _FIT_APPLY_EXIT[e.kind])
-    except TrainedItemError as e:
-        if debug:
-            raise
-        return _fail(str(e), EXIT_IN_SAMPLE)
-    except OSError as e:
-        if debug:
-            raise
-        return _fail(_os_error_message(e))
-    except (ValueError, PolicyIntegrityError, BudgetExceeded) as e:
-        # ValueError covers RecordError, FitError, LedgerCorrupt and json.JSONDecodeError.
-        if debug:
-            raise
-        return _fail(str(e))
+        return _fail(*failure)
+
+
+def _failure(e: Exception) -> tuple[str, int] | None:
+    """The message and exit code of an exception a command may raise; `None` for any other, which is a bug."""
+    if isinstance(e, CliError):
+        return str(e), e.code
+    if isinstance(e, ModelServedMismatchError):
+        return str(e), EXIT_MODEL_MISMATCH
+    if isinstance(e, FitApplyError):
+        return str(e), _FIT_APPLY_EXIT[e.kind]
+    if isinstance(e, TrainedItemError):
+        return str(e), EXIT_IN_SAMPLE
+    if isinstance(e, OSError):
+        return _os_error_message(e), EXIT_ERROR
+    # ValueError covers RecordError, FitError, LedgerCorrupt and json.JSONDecodeError.
+    if isinstance(e, (ValueError, PolicyIntegrityError, BudgetExceeded)):
+        return str(e), EXIT_ERROR
+    return None
 
 
 def _silence_stdout() -> None:

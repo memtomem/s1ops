@@ -251,11 +251,81 @@ def _error(capsys) -> str:
     return err
 
 
-@pytest.mark.parametrize("rate", ["1", "-0.1", "nan"])
+@pytest.mark.parametrize("rate", ["1", "1.5", "-0.1", "nan", "inf"])
 def test_cli_rejects_a_rate_outside_zero_one(pipeline, capsys, rate) -> None:
     out = pipeline["tmp"] / "policy.json"
     assert cli_main(["policy", "tune", pipeline["eval"], "-o", str(out), "--max-false-pass", rate]) == 1
-    assert "max_false_pass" in _error(capsys)
+    assert _error(capsys) == f"s1: --max-false-pass must be a number in [0, 1), got {float(rate)!r}\n"
+    assert not out.exists()
+
+
+def test_a_rate_of_zero_is_accepted(pipeline, capsys) -> None:
+    (pol,) = _tune(capsys, pipeline["eval"], pipeline["tmp"] / "policy.json", "--max-false-pass", "0")
+    assert pol.metrics_on_split["max_false_pass"] == 0.0
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--max-escalation", "0.35"],  # the combination refusal used to win: the range was checked per group
+        ["--question", "q-nope"],  # and so did no matching group
+    ],
+)
+def test_the_rate_is_checked_before_the_records_and_the_other_flags(pipeline, capsys, extra) -> None:
+    out = pipeline["tmp"] / "policy.json"
+    assert cli_main(["policy", "tune", pipeline["eval"], "-o", str(out), "--max-false-pass", "1", *extra]) == 1
+    assert _error(capsys) == "s1: --max-false-pass must be a number in [0, 1), got 1.0\n"
+    assert not out.exists()
+
+
+def test_a_bad_rate_on_a_categorical_file_reports_the_rate(tmp_path: Path, capsys) -> None:
+    # Before, `applies to noul groups` won and the rate was never checked.
+    ws = generate_workspace(tmp_path / "ws")
+    out = tmp_path / "policy.json"
+    for rate in ("1", "1.5", "-0.1", "nan"):
+        assert cli_main(["policy", "tune", ws["records_categorical"], "-o", str(out), "--max-false-pass", rate]) == 1
+        assert _error(capsys) == f"s1: --max-false-pass must be a number in [0, 1), got {float(rate)!r}\n"
+        assert not out.exists()
+
+
+def _flat(n_false: int, n: int = 10, p: float = 0.9) -> list[dict]:
+    return [
+        {"schema": "jev-record/1", "item_id": f"i{i}", "question_id": QID, "primitive": "noul",
+         "model_requested": MODEL, "model_served": MODEL, "dataset": "d", "split": "eval",
+         "label": i >= n_false, "ts": "2026-10-27T00:00:00+00:00", "p": p}
+        for i in range(n)
+    ]
+
+
+def test_a_valid_rate_with_no_matching_group_reports_no_groups(tmp_path: Path, capsys) -> None:
+    records = _write(tmp_path / "records.jsonl", _flat(5))
+    out = tmp_path / "policy.json"
+    assert cli_main(["policy", "tune", records, "-o", str(out), "--max-false-pass", "0.1", "--question", "q-nope"]) == 1
+    assert _error(capsys) == (
+        f"s1: no labeled groups matching --question q-nope in {records} "
+        "(1 group(s) before filters; skipped 0 without a response, 0 unlabeled, 0 in other splits)\n"
+    )
+    assert not out.exists()
+
+
+_NO_FALSE = f"{QID} ({MODEL}): no label-false items: nothing bounds the false-pass rate"
+_NO_CUT = (
+    f"{QID} ({MODEL}): no cutoff keeps the Clopper-Pearson upper bound (alpha 0.05) at or under 0.01 with 5 "
+    "label-false items; more label-false items, a larger --max-false-pass or a larger --cp-alpha may help"
+)
+
+
+@pytest.mark.parametrize(
+    ("n_false", "extra", "message"),
+    [(0, ["--max-false-pass", "0.1"], _NO_FALSE), (5, ["--max-false-pass", "0.01", "--use-cp-upper"], _NO_CUT)],
+)
+# A newline in the path is written as the two characters backslash and n, so the line stays one line.
+@pytest.mark.parametrize(("name", "shown"), [("records.jsonl", "records.jsonl"), ("a\nb.jsonl", "a\\nb.jsonl")])
+def test_a_group_refusal_starts_with_the_records_file(tmp_path: Path, capsys, n_false, extra, message, name, shown) -> None:
+    records = _write(tmp_path / name, _flat(n_false))
+    out = tmp_path / "policy.json"
+    assert cli_main(["policy", "tune", records, "-o", str(out), *extra]) == 1
+    assert _error(capsys) == f"s1: {tmp_path}/{shown}: {message}\n"
     assert not out.exists()
 
 
@@ -286,7 +356,8 @@ def test_cli_reports_an_unreachable_cp_cap(tmp_path: Path, capsys, rate, alpha) 
     argv = ["policy", "tune", records, "-o", str(out), "--max-false-pass", rate, "--use-cp-upper", "--cp-alpha", alpha]
     assert cli_main(argv) == 1
     err = _error(capsys)
-    assert QID in err and "no cutoff" in err and f"{sum(not r['label'] for r in rows)} label-false" in err
+    assert err.startswith(f"s1: {records}: {QID} ({MODEL}): no cutoff keeps ")
+    assert f"{sum(not r['label'] for r in rows)} label-false" in err
     assert not out.exists()
 
 

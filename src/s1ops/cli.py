@@ -419,6 +419,11 @@ def _check_policy_args(args: argparse.Namespace) -> None:
         raise CliError(f"--max-escalation must be a number in [0, 1], got {args.max_escalation!r}")
     if args.use_cp_upper and not (math.isfinite(args.cp_alpha) and 0.0 < args.cp_alpha < 1.0):
         raise CliError(f"--cp-alpha must be in (0, 1), got {args.cp_alpha!r}")
+    # Checked even when no selected group uses it (only noul groups under --max-false-pass).
+    if not (math.isfinite(args.error_budget) and 0.0 <= args.error_budget <= 1.0):
+        raise CliError(f"--error-budget must be a number in [0, 1], got {args.error_budget!r}")
+    if args.max_false_pass is not None and not (math.isfinite(args.max_false_pass) and 0.0 <= args.max_false_pass < 1.0):
+        raise CliError(f"--max-false-pass must be a number in [0, 1), got {args.max_false_pass!r}")
 
 
 def _cmd_policy(args: argparse.Namespace) -> int:
@@ -552,7 +557,7 @@ def _false_pass_policy(args: argparse.Namespace, grp: Group, src_sha: str, tuned
     """A noul policy that passes (does not block) `p >= cutoff`, the smallest cutoff at which at
     most `--max-false-pass` of the group's label-false items pass. Written as a band with
     `band_lo == band_hi`, so it never escalates and the gate routes it unchanged."""
-    name = f"{grp.question_id} ({grp.model_served})"
+    name = f"{args.records}: {grp.question_id} ({grp.model_served})"
     p, label = grp.P[:, 1], grp.y == 1
     try:
         cut = select_false_pass_cutoff(p, label, args.max_false_pass, use_cp_upper=args.use_cp_upper, alpha=args.cp_alpha)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -31,6 +32,14 @@ def _without_wall_clock(value):
     if isinstance(value, list):
         return [_without_wall_clock(v) for v in value]
     return value
+
+
+def _source_checked(policies: dict, calibrated: Path) -> dict:
+    """`policies` without `source_sha256`, once each is checked to hash `calibrated`: that file holds the fit's
+    wall-clock `fitted_at`, so two runs a second apart hash it differently."""
+    digest = hashlib.sha256(calibrated.read_bytes()).hexdigest()
+    assert {p["source_sha256"] for p in policies["policies"]} == {digest}
+    return {**policies, "policies": [{k: v for k, v in p.items() if k != "source_sha256"} for p in policies["policies"]]}
 
 
 @pytest.fixture
@@ -113,10 +122,12 @@ def test_promote_is_the_documented_commands(ws: dict, tmp_path: Path, capsys) ->
     assert report["drift"] == drift
     assert report["fit"] == placed(fitted)
     assert report["apply"] == {"calibrated": 60}
-    assert _without_wall_clock(report["policy"]) == placed(tuned)
+    calibrated_out, calibrated_hand = out / "candidate_eval_calibrated.jsonl", hand / "candidate_eval_calibrated.jsonl"
+    assert _source_checked(_without_wall_clock(report["policy"]), calibrated_out) == _source_checked(placed(tuned), calibrated_hand)
     assert report["replaceable"] is all(q["replaceable"] for q in compared["questions"])
-    for name in ("fits.json", "policy.json"):
-        assert _without_wall_clock(json.loads((out / name).read_text())) == _without_wall_clock(json.loads((hand / name).read_text()))
+    assert _without_wall_clock(json.loads((out / "fits.json").read_text())) == _without_wall_clock(json.loads((hand / "fits.json").read_text()))
+    policy_out = _source_checked(_without_wall_clock(json.loads((out / "policy.json").read_text())), calibrated_out)
+    assert policy_out == _source_checked(_without_wall_clock(json.loads((hand / "policy.json").read_text())), calibrated_hand)
     assert _without_wall_clock(_rows(str(out / "candidate_eval_calibrated.jsonl"))) == _without_wall_clock(_rows(str(hand / "candidate_eval_calibrated.jsonl")))
 
 

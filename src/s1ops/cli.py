@@ -1535,7 +1535,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_tsr.add_argument("--weights", action="append", required=True, help="a weights file the run wrote (adapter, head, model), recorded by name and SHA-256; repeatable")
     p_tsr.add_argument("--trainer", default=None, help="JSON object of trainer settings (strings, numbers, booleans, null; flatten nested ones); none may be named `state`, and keep paths and text out")
-    p_tsr.add_argument("--summary", default=None, help="JSON object of summary metrics, such as wall_seconds, peak memory or a temperature the trainer kept")
+    p_tsr.add_argument("--summary", default=None, help="JSON object of summary metrics, such as wall_seconds, peak memory or a temperature the trainer kept; none may be named `state`")
     p_tsr.add_argument("--steps", default=None, help="JSONL of per-step metrics: an increasing integer `step` and other finite numbers (`epoch`, `loss`, ...)")
     p_tsr.add_argument("--parent-run", default=None, help="record of the run this checkpoint started from, from `s1 trainset record`")
     p_tsr.set_defaults(func=_cmd_trainset_record)

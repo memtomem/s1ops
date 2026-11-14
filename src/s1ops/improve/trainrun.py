@@ -313,7 +313,7 @@ def build_trainrun(
     *,
     manifest_sha256: str,
     data: str | Path,
-    weights: Sequence[str | Path],
+    weights: Iterable[str | Path],
     trainer: Mapping[str, Scalar] | None = None,
     summary: Mapping[str, Scalar] | None = None,
     steps: Sequence[Mapping[str, float | int]] = (),
@@ -325,8 +325,9 @@ def build_trainrun(
     file name and SHA-256, so names must differ. `parent` is the record of the run this checkpoint
     started from. `trainrun_id` hashes everything but `created_at`: the same inputs give the same id.
     """
-    # A lone path would be read character by character, and each character taken for a file.
-    if isinstance(weights, (str, bytes, os.PathLike)) or not isinstance(weights, Iterable):
+    # A lone path would be read character by character, and each character taken for a file; a
+    # mapping, such as a record's own `weights_sha256`, would be read as its keys.
+    if isinstance(weights, (str, bytes, os.PathLike, Mapping)) or not isinstance(weights, Iterable):
         raise TrainRunError(f"weights must be a sequence of paths, got a {type(weights).__name__}")
     weights = list(weights)
     if not weights:

@@ -277,6 +277,9 @@ s1 probe questions.json --no-expand-probes --model current-1 --states states_eva
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_cal.jsonl -o candidate_cal.jsonl --ledger ledger.jsonl
 s1 probe questions.json --no-expand-probes --model tickets-r1 --states states_eval.jsonl -o candidate_eval.jsonl --ledger ledger.jsonl
 
+# 3b. Record the finished run next to its manifest: exit 2 if train.jsonl holds an item the manifest does not list.
+s1 trainset record training_manifest.json --data train.jsonl --weights out/adapter_model.safetensors -o trainrun.json
+
 # 4. Promotion check. A new name starts with no fit and no policy: the current model's `s1 apply` exits 3 on it, and `DecisionGate`
 #    raises `ModelServedMismatchError`.
 s1 compare current.jsonl candidate_eval.jsonl --training-manifest training_manifest.json
@@ -311,7 +314,8 @@ for line in open("states_local.jsonl", encoding="utf-8"):
 rows = {}
 for item in manifest["items"]:
     key = (item["dataset"], item["item_id"])
-    row = rows.setdefault(key, {"state": states[key], "questions": {}})
+    # dataset and item_id let `s1 trainset record` check this file against the manifest
+    row = rows.setdefault(key, {"dataset": key[0], "item_id": key[1], "state": states[key], "questions": {}})
     row["questions"][item["question_id"]] = {**wording[item["question_id"]], "label": item["label"]}
 
 with open("train.jsonl", "w", encoding="utf-8") as f:
@@ -319,11 +323,14 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 ```
 
+**The training record** (`s1-trainrun/1`, from `s1 trainset record`) ties a checkpoint's name to what produced it: the manifest's SHA-256, the data file's SHA-256 with its row and item counts, the SHA-256 of each `--weights` file by name, and, as you pass them, flat trainer settings (`--trainer`), summary metrics (`--summary`) and per-step metrics (`--steps`, JSONL with an increasing integer `step`). `--parent-run` links the record of the run a checkpoint started from. `trainrun_id` hashes everything but `created_at`, so the same inputs give the same id, and a record whose contents no longer match its id is refused as a parent. Before writing, it checks that the data file's `(dataset, item_id)` set is the manifest's: an item the manifest does not list exits 2, since the refusal below would not know the checkpoint trained on it; a listed item with no row exits 1; an inherited item may appear (a replay). Other fields of a data row, `state` and labels among them, are neither read nor kept. s1ops parses no trainer's log: convert it to these files first.
+
 **The refusal.** `--training-manifest` is repeatable on `s1 fit`, `s1 audit`, `s1 policy tune`, `s1 policy curve` and `s1 compare`. It exits 2 when a group those filters select is served under the manifest's checkpoint and holds an item it trained on; `s1 compare` checks each pair against the model of its side, and a candidate's training item the other file lacks is not compared. An item is its `(dataset, item_id)` across questions, because the model saw the state and rewording a question changes its `question_id`. Another model's answers on those items pass. A manifest whose checkpoint answered no record in the input file exits 1, which catches a misspelled name; it does not promise that the rows selected include that model, so `--model current-1` on a mixed file checks no candidate row.
 
 **What it does not cover:**
 
 - The check runs only in a command given the flag. `s1 apply`, `s1 drift`, `s1 slice`, `s1 labelaudit` and the workbench do not take it, and `s1 policy tune --use-calib` does not look behind a stored `calib`: an `s1 fit` on trained items without the flag, followed by `s1 apply` on clean items, passes a checked `tune`. `fits.json` does not record that a check ran.
+- `s1 trainset record` checks the data file you name, not what the trainer read: pass the file the trainer was given.
 - `--parent` covers ancestors exported through s1ops. A released base checkpoint's training set is unknown here.
 - Identity is exact. A near-duplicate or another item from a trained source is not refused, though it can inflate a score the same way.
 - `--model` is your claim about what answers. A server such as `kev.serve` echoes the requested name without checking it, so name every checkpoint differently: fits, policies and drift's model comparison key on that name and see two checkpoints under one name as one model. A name is 1-128 characters, an ASCII letter or digit and then ASCII letters, digits or `._:/@+-`, the form a live backend accepts as `model_served`. `s1 trainset export` reports `answered_as_checkpoint` when the source file already holds records under the name.
@@ -336,7 +343,7 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
 | --- | --- |
 | `0` | Success |
 | `1` | Usage error, missing or malformed input, no matching groups, `lint check --strict` findings, policy fingerprint mismatch, ledger error, `s1 demo` target not new or empty |
-| `2` | In-sample refusal: `s1 apply`, or `s1 drift` or `s1 export` with `--fit`, on an item the fit used (override with `--allow-in-sample`), or `--training-manifest` on an item the checkpoint trained on |
+| `2` | In-sample refusal: `s1 apply`, or `s1 drift` or `s1 export` with `--fit`, on an item the fit used (override with `--allow-in-sample`), or `--training-manifest` on an item the checkpoint trained on, or `s1 trainset record` on a data item its manifest does not list |
 | `3` | `model_served` mismatch against the fit or policy (`s1 apply` without `--pass-through-unfitted`, `s1 gate`) |
 | `4` | `s1 drift --fail-on-critical` found a `CRITICAL` question |
 

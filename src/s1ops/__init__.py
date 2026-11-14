@@ -47,6 +47,14 @@ if TYPE_CHECKING:
         transform,
     )
     from s1ops.improve.policy import select_threshold
+    from s1ops.improve.trainrun import (
+        TrainingDataError,
+        TrainRun,
+        TrainRunError,
+        build_trainrun,
+        load_trainrun,
+        save_trainrun,
+    )
     from s1ops.improve.trainset import (
         ManifestError,
         TrainedItemError,
@@ -118,6 +126,12 @@ _LAZY = {
     "build_manifest": "s1ops.improve.trainset",
     "load_manifest": "s1ops.improve.trainset",
     "save_manifest": "s1ops.improve.trainset",
+    "TrainingDataError": "s1ops.improve.trainrun",
+    "TrainRun": "s1ops.improve.trainrun",
+    "TrainRunError": "s1ops.improve.trainrun",
+    "build_trainrun": "s1ops.improve.trainrun",
+    "load_trainrun": "s1ops.improve.trainrun",
+    "save_trainrun": "s1ops.improve.trainrun",
     "lint_path": "s1ops.lint.lint",
     "DriftReport": "s1ops.monitor.drift",
     "audit_drift": "s1ops.monitor.drift",
@@ -176,6 +190,12 @@ __all__ = [
     "build_manifest",
     "load_manifest",
     "save_manifest",
+    "TrainingDataError",
+    "TrainRun",
+    "TrainRunError",
+    "build_trainrun",
+    "load_trainrun",
+    "save_trainrun",
     "lint_path",
     "DriftReport",
     "audit_drift",

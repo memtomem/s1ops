@@ -64,7 +64,17 @@ from s1ops.improve.policy import (
     tuned_rows,
 )
 from s1ops.improve.slices import FeatureKey, mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report
-from s1ops.improve.trainset import Trained, TrainedItemError, build_manifest, check_not_trained, load_manifest, load_trained, save_manifest
+from s1ops.improve.trainrun import build_trainrun, load_trainrun, read_scalars, read_steps, save_trainrun
+from s1ops.improve.trainset import (
+    Trained,
+    TrainedItemError,
+    build_manifest,
+    check_not_trained,
+    load_manifest,
+    load_manifest_hashed,
+    load_trained,
+    save_manifest,
+)
 from s1ops.ledger.journal import (
     BudgetExceeded,
     Ledger,
@@ -144,6 +154,13 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
     "sheet": ("review sheet", "s1 labelaudit sheet"),
     "training_manifest": ("training manifest", "s1 trainset export"),
     "parent": ("parent training manifest", "s1 trainset export"),
+    "manifest": ("training manifest", "s1 trainset export"),
+    "data": ("training data file", None),
+    "weights": ("weights file", None),
+    "trainer": ("trainer settings file", None),
+    "summary": ("summary metrics file", None),
+    "steps": ("step metrics file", None),
+    "parent_run": ("parent training-run record", "s1 trainset record"),
 }
 
 
@@ -835,6 +852,39 @@ def _cmd_trainset(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_trainset_record(args: argparse.Namespace) -> int:
+    output = Path(args.output)
+    inputs = [args.manifest, args.data, *args.weights, args.trainer, args.summary, args.steps, args.parent_run]
+    if output.exists():
+        for other in inputs:
+            if other and output.samefile(other):
+                raise CliError(f"--output {output} is the same file as {other}")
+    manifest, manifest_sha = load_manifest_hashed(args.manifest)
+    run = build_trainrun(
+        manifest,
+        manifest_sha256=manifest_sha,
+        data=args.data,
+        weights=args.weights,
+        trainer=read_scalars(args.trainer, "trainer setting") if args.trainer else None,
+        summary=read_scalars(args.summary, "summary metric") if args.summary else None,
+        steps=read_steps(args.steps) if args.steps else (),
+        parent=load_trainrun(args.parent_run) if args.parent_run else None,
+    )
+    save_trainrun(run, output)
+    doc = run.doc
+    summary: dict[str, Any] = {
+        "output": str(output),
+        "trainrun_id": run.trainrun_id,
+        "checkpoint": run.checkpoint,
+        "data": doc["data"],
+        "manifest_items": len(manifest.items),
+        "weights": sorted(doc["weights_sha256"]),  # type: ignore[call-overload]
+        "steps": len(doc["steps"]),  # type: ignore[arg-type]
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def _cmd_judge(args: argparse.Namespace) -> int:
     rows = _load_jsonl_dicts(Path(args.grades))
     if not rows:
@@ -1424,7 +1474,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_tse.add_argument("--split", required=True, help="the `split` to train on; the other splits stay for fitting and evaluation")
     p_tse.add_argument("--checkpoint", required=True, help="the name the new checkpoint will answer under in `s1 probe --model`; unique per checkpoint")
     p_tse.add_argument("--parent", default=None, help="manifest of the checkpoint this one starts from, whose trained items it inherits")
-    p_ts.set_defaults(func=_cmd_trainset)
+    p_tse.set_defaults(func=_cmd_trainset)
+    p_tsr = sub_ts.add_parser(
+        "record",
+        help="Record a finished training run: digests, a data-vs-manifest check and the trainer's numbers (no state, labels or wording)",
+        **_FMT,
+    )
+    p_tsr.add_argument("manifest", help="training manifest from `s1 trainset export` that the run trained on")
+    p_tsr.add_argument("-o", "--output", required=True, help="s1-trainrun/1 record to write")
+    p_tsr.add_argument(
+        "--data",
+        required=True,
+        help="JSONL file the trainer read; each row names its item by `item_id` (and `dataset`). Exit 2 if it holds an item the manifest does not list, 1 if a listed item has no row",
+    )
+    p_tsr.add_argument("--weights", action="append", required=True, help="a weights file the run wrote (adapter, head, model), recorded by name and SHA-256; repeatable")
+    p_tsr.add_argument("--trainer", default=None, help="JSON object of trainer settings (strings, numbers, booleans, null; flatten nested ones); keep paths and text out")
+    p_tsr.add_argument("--summary", default=None, help="JSON object of summary metrics, such as wall_seconds, peak memory or a temperature the trainer kept")
+    p_tsr.add_argument("--steps", default=None, help="JSONL of per-step metrics: an increasing integer `step` and other finite numbers (`epoch`, `loss`, ...)")
+    p_tsr.add_argument("--parent-run", default=None, help="record of the run this checkpoint started from, from `s1 trainset record`")
+    p_tsr.set_defaults(func=_cmd_trainset_record)
 
     # judge
     p_jdg = sub.add_parser("judge", help="Rubric judge agreement & weighted kappa audit", **_FMT)

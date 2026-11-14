@@ -490,10 +490,16 @@ def test_the_readme_recipe_builds_rows_from_the_manifest(tmp_path: Path, monkeyp
     exec(compile(recipe, "README recipe", "exec"), {})
     rows = [json.loads(line) for line in (tmp_path / "train.jsonl").read_text(encoding="utf-8").splitlines()]
     qid = read_records(probed)[0].question_id
+    # a states row without `dataset` is probed as "default"; an explicit null stays null
+    a, b = "default", None
     assert sorted(rows, key=lambda r: r["state"]) == [
-        {"state": "state of a", "questions": {qid: {"type": "noul", "instructions": "Is this urgent?", "label": True}}},
-        {"state": "state of b", "questions": {qid: {"type": "noul", "instructions": "Is this urgent?", "label": False}}},
+        {"dataset": a, "item_id": "a", "state": "state of a", "questions": {qid: {"type": "noul", "instructions": "Is this urgent?", "label": True}}},
+        {"dataset": b, "item_id": "b", "state": "state of b", "questions": {qid: {"type": "noul", "instructions": "Is this urgent?", "label": False}}},
     ]
+    # The recipe's rows name their items, so `s1 trainset record` can check them against the manifest.
+    (tmp_path / "head.pt").write_bytes(b"weights")
+    record = ["trainset", "record", "training_manifest.json", "--data", "train.jsonl", "--weights", "head.pt", "-o", "trainrun.json"]
+    assert cli_main(record) == 0
 
 
 def test_the_documented_promotion_sequence_runs(tmp_path: Path, capsys) -> None:

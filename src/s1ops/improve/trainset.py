@@ -6,6 +6,7 @@ checkpoint on them. A manifest holds ids, question ids and labels, which records
 `state` text or question wording, which the trainer joins from its own local files.
 """
 
+import hashlib
 import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from s1ops.contracts._validation import pydantic_errors, read_json_file
+from s1ops.contracts._validation import pydantic_errors, read_json_bytes, read_json_file
 from s1ops.contracts.records import MODEL_NAME, GroupKey, ItemKey, Record, RecordError
 
 MANIFEST_SCHEMA = "s1-training-manifest/1"
@@ -189,7 +190,16 @@ class _Manifest(BaseModel):
 
 
 def load_manifest(path: str | Path) -> TrainingManifest:
-    doc = read_json_file(path, ManifestError)
+    return _manifest_from_doc(read_json_file(path, ManifestError), path)
+
+
+def load_manifest_hashed(path: str | Path) -> tuple[TrainingManifest, str]:
+    """`load_manifest`, plus the SHA-256 of the bytes it parsed, from one read: a FIFO has only one."""
+    data = Path(path).read_bytes()
+    return _manifest_from_doc(read_json_bytes(data, path, ManifestError), path), hashlib.sha256(data).hexdigest()
+
+
+def _manifest_from_doc(doc: object, path: str | Path) -> TrainingManifest:
     if not isinstance(doc, dict) or doc.get("schema") != MANIFEST_SCHEMA:
         raise ManifestError(f"{path}: not a {MANIFEST_SCHEMA} file")
     try:

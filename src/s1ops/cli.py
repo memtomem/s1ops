@@ -50,6 +50,7 @@ from s1ops.improve.labelaudit import (
     score_sheet,
     LabelPatchError,
     patch_labels,
+    pull_labels,
 )
 from s1ops.improve.policy import (
     Band,
@@ -162,6 +163,8 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
     "fit": ("fits file", "s1 fit"),
     "policy": ("policy file", "s1 policy tune"),
     "sheet": ("review sheet", "s1 labelaudit sheet"),
+    "export": ("Langfuse export", "s1 export langfuse"),
+    "scores": ("Langfuse scores file", None),
     "training_manifest": ("training manifest", "s1 trainset export"),
     "parent": ("parent training manifest", "s1 trainset export"),
     "manifest": ("training manifest", "s1 trainset export"),
@@ -782,6 +785,8 @@ def _cmd_labelaudit(args: argparse.Namespace) -> int:
 
     if args.la_cmd == "patch":
         return _labelaudit_patch(args)
+    if args.la_cmd == "pull":
+        return _labelaudit_pull(args)
 
     records = _filtered_records(args)
     # `--fit` given means calibrate, even when the file holds no fits: every record is then refused.
@@ -889,6 +894,43 @@ def _labelaudit_patch(args: argparse.Namespace) -> int:
         "records_patched": patch.records_patched,
         "records_already": patch.records_already,
         "corrections": [c.as_dict() for c in patch.corrections],
+    }
+    state_dropped = sum(1 for r in records if "state" in r.raw)
+    if state_dropped:
+        summary["state_dropped"] = state_dropped
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def _labelaudit_pull(args: argparse.Namespace) -> int:
+    output = Path(args.output)
+    if output.exists():
+        for other in (args.records, args.export, args.scores):
+            if output.samefile(other):
+                raise CliError(f"--output {output} is the same file as {other}")
+    export_doc = _read_json(Path(args.export))
+    scores_doc = _read_json(Path(args.scores))
+    records = read_records(args.records)
+    try:
+        pull = pull_labels(records, export_doc, scores_doc)
+    except LabelPatchError as e:
+        if os.environ.get("S1_DEBUG"):
+            raise
+        where = {"export": args.export, "scores": args.scores}.get(e.source, args.records)
+        raise CliError(f"{where}: {e}") from None
+    # Encoded before the file is opened, so a refusal leaves the old file in place. Rows as `s1 apply` writes them.
+    data = "".join(json.dumps(row, sort_keys=True) + "\n" for row in pull.rows).encode("utf-8")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(data)
+    summary: dict[str, Any] = {
+        "output": str(output),
+        "scores": pull.scores,
+        "scores_elsewhere": pull.scores_elsewhere,
+        "reviewed": pull.reviewed,
+        "corrected": len(pull.corrections),
+        "records_patched": pull.records_patched,
+        "records_already": pull.records_already,
+        "corrections": [c.as_dict() for c in pull.corrections],
     }
     state_dropped = sum(1 for r in records if "state" in r.raw)
     if state_dropped:
@@ -1684,6 +1726,24 @@ def build_parser() -> argparse.ArgumentParser:
     p_lap.add_argument("--sheet", required=True, help="review sheet completed by the reviewer")
     p_lap.add_argument("--key", required=True, help="secret key JSON from `s1 labelaudit sheet`")
     p_lap.add_argument(
+        "-o",
+        "--output",
+        required=True,
+        help="records JSONL to write, every input row with corrected labels; item `state` is never written (safe-v1). Fits and policies made from the old labels are not changed: fit and tune again",
+    )
+    p_lal = sub_la.add_parser(
+        "pull",
+        help="Apply reviews made in a Langfuse annotation queue to the records' labels: a score `s1.<question_id>.label` on an exported observation is the reviewer's answer. Reads files only; fetching the scores is yours",
+        **_FMT,
+    )
+    p_lal.add_argument("records", help=f"the records the export was made from: {_H_RECORDS}")
+    p_lal.add_argument("--export", required=True, help="the `s1 export langfuse` file whose observations were reviewed")
+    p_lal.add_argument(
+        "--scores",
+        required=True,
+        help="Langfuse scores: a Scores API v3 response (GET /api/public/v3/scores?name=s1.<question_id>.label&fields=subject) or a JSON list of its rows, pages joined. Scores of other names, and label scores on observations the export does not hold, are left out",
+    )
+    p_lal.add_argument(
         "-o",
         "--output",
         required=True,

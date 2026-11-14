@@ -35,6 +35,11 @@ class PolicyEntry:
     source_sha256: str = ""
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
     metrics_on_split: dict = field(default_factory=dict)
+    trainrun_id: str | None = None
+    """The `s1-trainrun/1` record of the run that produced `model_served`, when `s1 policy tune` was
+    given one (`--training-run`). Where the policy came from, like `source_sha256`: no part of
+    `policy_sha256`, and nothing routes on it. Written only when set, since a reader from before
+    the field refuses a row that has it."""
 
     @property
     def policy_sha256(self) -> str:
@@ -55,6 +60,8 @@ class PolicyEntry:
 
     def to_dict(self) -> dict:
         d = asdict(self)
+        if d["trainrun_id"] is None:
+            del d["trainrun_id"]  # a file tuned without a record is what it was before the field
         d["policy_sha256"] = self.policy_sha256
         return d
 
@@ -86,6 +93,7 @@ class _PolicyRow(BaseModel):
     source_sha256: str = ""
     created_at: str | None = None
     metrics_on_split: dict = Field(default_factory=dict)
+    trainrun_id: str | None = Field(default=None, pattern=r"^tr-[0-9a-f]{16}$")
     policy_sha256: str | None = None
     """Written by `save_policies`. When present, `load_policies` recomputes it from the routing
     fields and refuses a mismatch; absent or `null`, it is only recomputed."""

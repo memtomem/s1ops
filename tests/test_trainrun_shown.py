@@ -11,7 +11,7 @@ import pytest
 from s1ops.bridges.langfuse import build_langfuse_events
 from s1ops.cli import main as cli_main
 from s1ops.contracts.records import read_records
-from s1ops.contracts.schemas import load_policies
+from s1ops.contracts.schemas import load_policies, save_policies
 from s1ops.eval.compare import compare_records
 from s1ops.improve.trainrun import TrainRun, TrainRunError, _trainrun_id, load_trainrun, runs_by_checkpoint
 
@@ -130,7 +130,11 @@ def test_compare_records_takes_records_from_the_sdk(tmp_path: Path, run: Path) -
 # ---- policy ----
 
 
-def test_policy_tune_prints_the_run_and_writes_the_same_policy_file(tmp_path: Path, run: Path, capsys) -> None:
+def _policy_rows(path: Path) -> list[dict]:
+    return [{k: v for k, v in p.items() if k != "created_at"} for p in json.loads(path.read_text())["policies"]]
+
+
+def test_policy_tune_records_the_run_in_the_file_and_prints_it(tmp_path: Path, run: Path, capsys) -> None:
     records = _write(tmp_path / "e.jsonl", [*_spread("h", 12, None, R1), *_spread("h", 12, None, BASELINE)])
     assert cli_main(["policy", "tune", records, "-o", str(tmp_path / "plain.json")]) == 0
     plain = _printed(capsys)
@@ -138,14 +142,59 @@ def test_policy_tune_prints_the_run_and_writes_the_same_policy_file(tmp_path: Pa
     shown = _printed(capsys)
     assert {p["model_served"]: p["trainrun_id"] for p in shown["policies"]} == {R1: _id(run), BASELINE: None}
     assert all("trainrun_id" not in p for p in plain["policies"])
+    # In the file only the policy a record names has the field, and nothing else differs.
+    rows = {p["model_served"]: p for p in _policy_rows(tmp_path / "shown.json")}
+    assert rows[R1].pop("trainrun_id") == _id(run)
+    assert "trainrun_id" not in rows[BASELINE]
+    assert list(rows.values()) == _policy_rows(tmp_path / "plain.json")
+    assert "trainrun_id" not in (tmp_path / "plain.json").read_text()
 
-    def rows(path: Path) -> list[dict]:
-        return [{k: v for k, v in p.items() if k != "created_at"} for p in json.loads(path.read_text())["policies"]]
 
-    # `s1-policy/1` has no such field: the file is what it was, and every reader still takes it.
-    assert rows(tmp_path / "shown.json") == rows(tmp_path / "plain.json")
-    assert "trainrun_id" not in (tmp_path / "shown.json").read_text()
-    assert len(load_policies(tmp_path / "shown.json")) == 2
+def test_the_run_is_no_part_of_the_fingerprint_and_survives_a_round_trip(tmp_path: Path, run: Path, capsys) -> None:
+    records = _write(tmp_path / "e.jsonl", _spread("h", 12, None, R1))
+    assert cli_main(["policy", "tune", records, "-o", str(tmp_path / "plain.json")]) == 0
+    assert cli_main(["policy", "tune", records, "-o", str(tmp_path / "shown.json"), "--training-run", str(run)]) == 0
+    (plain,), (shown,) = load_policies(tmp_path / "plain.json"), load_policies(tmp_path / "shown.json")
+    assert (plain.trainrun_id, shown.trainrun_id) == (None, _id(run))
+    assert plain.policy_sha256 == shown.policy_sha256
+    assert "trainrun_id" not in plain.to_dict()
+    save_policies([shown], tmp_path / "again.json")
+    assert load_policies(tmp_path / "again.json") == [shown]
+
+
+def test_max_false_pass_policies_record_the_run_too(tmp_path: Path, run: Path, capsys) -> None:
+    records = _write(tmp_path / "e.jsonl", _spread("h", 12, None, R1))
+    out = tmp_path / "p.json"
+    assert cli_main(["policy", "tune", records, "--max-false-pass", "0.5", "-o", str(out), "--training-run", str(run)]) == 0
+    assert [p.trainrun_id for p in load_policies(out)] == [_id(run)]
+
+
+@pytest.mark.parametrize("bad", ["tr-0", "f39be3f077a54295", 7, ""])
+def test_a_malformed_run_id_in_a_policy_file_names_its_field(tmp_path: Path, run: Path, bad) -> None:
+    records = _write(tmp_path / "e.jsonl", _spread("h", 12, None, R1))
+    out = tmp_path / "p.json"
+    assert cli_main(["policy", "tune", records, "-o", str(out), "--training-run", str(run)]) == 0
+    doc = json.loads(out.read_text())
+    doc["policies"][0]["trainrun_id"] = bad
+    out.write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match=rf"^{out}: policies\.0\.trainrun_id: "):
+        load_policies(out)
+
+
+def test_the_export_refuses_a_record_of_another_run_than_the_policy_names(tmp_path: Path, run: Path, capsys) -> None:
+    """Two sets of weights under one name: the policy was tuned on one, and the record is the other's."""
+    retrained = _recorded(tmp_path, R1, weights=b"\x02other", name="retrained")
+    records = _write(tmp_path / "e.jsonl", _spread("h", 12, None, R1))
+    policy, out = tmp_path / "p.json", tmp_path / "lf.json"
+    assert cli_main(["policy", "tune", records, "-o", str(policy), "--training-run", str(run)]) == 0
+    capsys.readouterr()
+    export = ["export", "langfuse", records, "--policy", str(policy), "-o", str(out)]
+    assert cli_main([*export, "--training-run", str(retrained)]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"s1: {retrained}: is run {_id(retrained)} of '{R1}', and the policy for question {QID} was tuned on run {_id(run)}")
+    assert not out.exists()
+    assert cli_main([*export, "--training-run", str(run)]) == 0
+    assert cli_main(export) == 0  # no record given: nothing to compare the policy's run with
 
 
 def test_policy_curve_prints_the_run(tmp_path: Path, run: Path, capsys) -> None:

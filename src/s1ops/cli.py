@@ -228,13 +228,17 @@ def _trainruns(args: argparse.Namespace, records: list[Record]) -> TrainRuns:
     return load_trainruns(paths, [r.model_served for r in records], args.records) if paths else {}
 
 
+def _trainrun_id(runs: TrainRuns, model_served: str) -> str | None:
+    run = runs.get(model_served)
+    return None if run is None else run.trainrun_id
+
+
 def _trainrun_shown(args: argparse.Namespace, runs: TrainRuns, model_served: str) -> dict[str, str | None]:
     """The `trainrun_id` key a printed row gains under `--training-run`: the run that produced its
     model, null when no record names it. Without the option the row is as it was."""
     if not args.training_run:
         return {}
-    run = runs.get(model_served)
-    return {"trainrun_id": None if run is None else run.trainrun_id}
+    return {"trainrun_id": _trainrun_id(runs, model_served)}
 
 
 def _tuned_fit_sha256(path: str, grp: Group, rows: list[Record]) -> str | None:
@@ -519,7 +523,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
     policies: list[PolicyEntry] = []
     for grp in selected:
         if false_pass is not None and grp.primitive == "noul":
-            policies.append(_false_pass_policy(args, grp, src_sha, tuned))
+            policies.append(replace(_false_pass_policy(args, grp, src_sha, tuned), trainrun_id=_trainrun_id(runs, grp.model_served)))
             continue
         # A threshold that routes is tuned on what it routes (a choice or score tie at the top is
         # escalated, so left out). Under the noul band it does not route, and keeps `top_label`'s,
@@ -575,6 +579,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
             calibrated=args.use_calib,
             fit_sha256=_tuned_fit_sha256(args.records, grp, tuned[grp.key]) if args.use_calib else None,
             source_sha256=src_sha,
+            trainrun_id=_trainrun_id(runs, grp.model_served),
         )
         metrics = routed_metrics(policy, grp, use_cp_upper=args.use_cp_upper, cp_alpha=args.cp_alpha)
         policies.append(replace(policy, metrics_on_split=metrics))
@@ -587,7 +592,7 @@ def _cmd_policy(args: argparse.Namespace) -> int:
             {
                 "output": str(args.output),
                 "n_policies": len(policies),
-                # policy.json itself gains nothing: `s1-policy/1` has no such field.
+                # The file's rows, plus a null `trainrun_id` for a policy whose model no record names.
                 "policies": [{**p.to_dict(), **_trainrun_shown(args, runs, p.model_served)} for p in policies],
             },
             indent=2,
@@ -1435,7 +1440,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_pt.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB)
     p_pt.add_argument("--training-manifest", action="append", help=_H_TRAINING_MANIFEST)
-    p_pt.add_argument("--training-run", action="append", help=f"{_H_TRAINING_RUN}. policy.json is written as without it")
+    p_pt.add_argument("--training-run", action="append", help=f"{_H_TRAINING_RUN}. policy.json records it too, on each policy whose model a record names; s1ops 0.11.1 and earlier refuse a policy file with that field")
     p_pc = sub_pol.add_parser("curve", help="Generate threshold operating curve: each point counts what an error_budget policy at its threshold accepts (for noul, what `policy tune --noul-routing threshold` writes, not the F1 band; a choice or score tie at the top is always escalated)", **_FMT)
     p_pc.add_argument("records", help=_H_RECORDS)
     p_pc.add_argument("--question", default=None, help=_H_QUESTION)

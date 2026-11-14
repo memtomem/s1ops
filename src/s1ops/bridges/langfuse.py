@@ -13,7 +13,7 @@ from typing import Any
 
 from s1ops.contracts.records import Record, reparse, score_level
 from s1ops.contracts.schemas import PolicyEntry
-from s1ops.improve.trainrun import TrainRun, TrainRuns, runs_by_checkpoint
+from s1ops.improve.trainrun import TrainRun, TrainRuns, TrainRunError, runs_by_checkpoint
 from s1ops.runtime.routing import ROUTING_RULE, policy_distribution, route
 
 
@@ -141,6 +141,14 @@ def build_langfuse_events(
     if policies:
         for pol in policies:
             policy_map[(pol.question_id, pol.model_served, pol.primitive)] = pol
+            run = runs.get(pol.model_served)
+            if run is not None and pol.trainrun_id not in (None, run.trainrun_id):
+                # One name, two sets of weights: the policy's thresholds belong to the other one.
+                source = run.path if run.path is not None else "the training-run record"
+                raise TrainRunError(
+                    f"{source}: is run {run.trainrun_id} of {pol.model_served!r}, and the policy for question "
+                    f"{pol.question_id} was tuned on run {pol.trainrun_id} of that name; pass the record the policy names"
+                )
 
     dataset_run_items: list[dict[str, Any]] = []
     observations: list[dict[str, Any]] = []

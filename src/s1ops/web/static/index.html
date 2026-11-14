@@ -758,7 +758,7 @@
       if (mode === "wait") {
         return `<div class="card state-card"><strong>Waiting for the labeled groups.</strong> With more than ${auditListLimit()} groups this view lists them instead of bootstrapping every one.</div>`;
       }
-      return `<div class="card state-card"><strong>The labeled groups could not be loaded</strong> (${esc(error)}), so this view does not know whether auditing every group is a small request. Refresh to retry, or choose a group.</div>`;
+      return `<div class="card state-card"><strong>The labeled groups could not be loaded</strong> (${esc(error)}), so this view does not know whether auditing every group is a small request, and requests nothing. Refresh to retry.</div>`;
     }
 
     function groupParams(st, resolved) {
@@ -1350,7 +1350,7 @@
       });
       const strips = series.map(s => countStrip(s, x));
       const maxN = Math.max(1, ...strips.flat().map(b => b.n));
-      body += `<text class="axis-name" x="${px(ml)}" y="${px(lanesTop - 8)}">records per bin (tallest ${fmtNum(maxN, 0)})</text>`;
+      body += `<text class="axis-name" x="${px(ml)}" y="${px(lanesTop - 8)}">records per score range (tallest ${fmtNum(maxN, 0)})</text>`;
       series.forEach((s, i) => {
         const base = lanesTop + lane * (i + 1) - 3;
         body += `<line class="axis" x1="${px(ml)}" y1="${px(base)}" x2="${px(W - mr)}" y2="${px(base)}" />`;
@@ -1477,7 +1477,7 @@
         ]);
         const boot = g.bootstrap || {};
         const warnings = (g.warnings || []).map(w => `<div class="warn-row"><span class="badge badge-warn">WARN</span> ${esc(w)}</div>`).join("");
-        const binNote = strategy === "width" ? "Equal-width bins (empty bins are not drawn)." : "Equal-mass bins (each a tenth of the records; a bin's range is its lowest to highest score).";
+        const binNote = strategy === "width" ? "Equal-width bins (empty bins are not drawn)." : "Equal-mass bins (each a tenth of the records; a bin's range is its lowest to highest score; bins of one tied score share one count bar).";
         return `
           <div class="card">
             <h3>Group: <span class="badge badge-info">${esc(g.question_id)}</span> ·

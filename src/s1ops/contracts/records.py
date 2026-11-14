@@ -41,6 +41,7 @@ overflows."""
 _MAX_LEVEL_DIGITS = 20
 # `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
 MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
+_SURROGATE = re.compile(f"[{chr(0xD800)}-{chr(0xDFFF)}]")
 
 
 class RecordError(ValueError):
@@ -158,9 +159,45 @@ def _check_label(primitive: str, label: object, options: Collection[Any], line: 
         raise RecordError(line, problem)
 
 
+def surrogate_problem(what: str, text: str) -> str | None:
+    """Why `text` cannot be kept, when it holds a lone surrogate (U+D800..U+DFFF), else `None`.
+
+    A surrogate is half of a UTF-16 pair, not a character. JSON can escape one on its own and Python
+    keeps it, but no UTF-8 file can hold it, so a writer given the string fails part-way through its
+    output. The message names the code point rather than showing it, so it can be written anywhere.
+    """
+    if text.isascii():
+        return None
+    found = _SURROGATE.search(text)
+    if found is None:
+        return None
+    return f"{what} holds a lone surrogate (U+{ord(found.group()):04X}), which is not a character"
+
+
+def _row_surrogate_problem(row: object) -> str | None:
+    """`surrogate_problem` for the first string found among a decoded row's keys and values, at any
+    depth. A loop over a stack: a row nested as deep as the decoder allows must not overflow here."""
+    stack = [row]
+    while stack:
+        value = stack.pop()
+        if isinstance(value, str):
+            problem = surrogate_problem("a string", value)
+            if problem is not None:
+                return problem
+        elif isinstance(value, dict):
+            stack.extend(value)
+            stack.extend(value.values())
+        elif isinstance(value, list):
+            stack.extend(value)
+    return None
+
+
 def _string(value: object, what: str, line: int) -> str:
     if not isinstance(value, str) or not value:
         raise RecordError(line, f"{what} must be a non-empty string, got {value!r}")
+    problem = surrogate_problem(what, value)
+    if problem is not None:
+        raise RecordError(line, problem)
     return value
 
 
@@ -393,8 +430,12 @@ def read_row(
 def _read_line(
     text: str, n: int, sum_tol: float, require_answer: bool, use_calib: bool, path: str | Path | None
 ) -> Record:
-    if UNDECODABLE.search(text):
-        raise RecordError(n, "not valid UTF-8")
+    if not text.isascii() and _SURROGATE.search(text):
+        # Read with errors="surrogateescape", a file's text holds one exactly where its bytes were not
+        # UTF-8, in U+DC80..U+DCFF. Any other is a string a caller passed to `read_row`.
+        if UNDECODABLE.search(text):
+            raise RecordError(n, "not valid UTF-8")
+        raise RecordError(n, surrogate_problem("the line", text))
     try:
         row = json.loads(text, parse_constant=_reject_constant, parse_float=_finite_float)
     except _OutOfRange as e:
@@ -404,6 +445,13 @@ def _read_line(
         raise RecordError(n, f"not valid JSON: {e}") from None
     except RecursionError:
         raise RecordError(n, "not valid JSON: nested too deeply") from None
+    # An escaped lone surrogate is valid JSON, so it is refused here, anywhere in the row, as `NaN` is:
+    # no writer then copies one from a field the parser does not read. An escaped pair decodes to one
+    # character, so only a line holding such an escape is walked.
+    if "\\ud" in text or "\\uD" in text:
+        problem = _row_surrogate_problem(row)
+        if problem is not None:
+            raise RecordError(n, problem)
     return _parse_record(row, n, sum_tol=sum_tol, require_answer=require_answer, use_calib=use_calib, path=path)
 
 

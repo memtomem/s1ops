@@ -109,13 +109,16 @@ def test_invalid_utf8_after_a_lone_cr_names_the_right_line(ws, tmp_path: Path) -
     assert str(e.value) == f"{path}: line 3: not valid UTF-8"
 
 
-def test_a_json_surrogate_escape_is_still_accepted(ws, tmp_path: Path) -> None:
+def test_a_json_surrogate_escape_is_refused_as_a_surrogate_not_as_bad_utf8(ws, tmp_path: Path) -> None:
     row = json.loads(Path(ws["records"]).read_text().splitlines()[0])
-    row["dataset"] = "\udc80"
+    row["dataset"] = chr(0xDC80)
     path = tmp_path / "escape.jsonl"
-    path.write_text(json.dumps(row) + "\n")  # ensure_ascii writes the escape as "\\udc80"
+    path.write_text(json.dumps(row) + "\n")  # ensure_ascii writes the escape as six ASCII characters
     assert b"\\udc80" in path.read_bytes()
-    assert read_records(path)[0].dataset == "\udc80"
+    with pytest.raises(RecordError) as e:
+        read_records(path)
+    # The file is valid UTF-8; what it describes is not a character.
+    assert str(e.value) == f"{path}: line 1: a string holds a lone surrogate (U+DC80), which is not a character"
 
 
 # --- CLI: drift and compare say which input is broken ----------------------------------------

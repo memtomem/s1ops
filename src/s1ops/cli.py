@@ -22,7 +22,7 @@ from s1ops import __version__
 from s1ops.bridges.langfuse import export_langfuse_file
 from s1ops.bridges.openinference import export_openinference_jsonl
 from s1ops.contracts._validation import UNDECODABLE
-from s1ops.contracts.records import Group, GroupKey, Record, Selection, read_records, read_records_hashed, select
+from s1ops.contracts.records import Group, GroupKey, Record, Selection, read_records, read_records_hashed, select, surrogate_problem
 from s1ops.contracts.schemas import PolicyEntry, load_policies, save_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import compare_records
@@ -947,6 +947,10 @@ _MOCK_MODEL = "jev-1.13.0"
 
 
 def _probe_backend(args: argparse.Namespace):
+    # The name is written into every record. Argument bytes that are not UTF-8 arrive as lone surrogates.
+    problem = surrogate_problem("--model", args.model) if args.model else None
+    if problem is not None:
+        raise CliError(problem)
     if args.backend == "mock":
         if not args.model:
             raise CliError("--model must not be empty")

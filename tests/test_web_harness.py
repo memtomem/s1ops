@@ -178,6 +178,7 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         q["notes"] = q["notes"] or ["a note"]
         q["alerts"] = q["alerts"] or ["an alert"]
     return {
+        "overview": {"/api/overview": get(client, "/api/overview")},
         "audit-noul": {"/api/audit": get(client, "/api/audit")},
         "audit-categorical": {"/api/audit": get(cat, "/api/audit")},
         "policy-noul": {"/api/simulate-policy": get(client, "/api/simulate-policy")},
@@ -193,6 +194,7 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
 
 
 LOADERS = {
+    "overview": "loadOverview",
     "audit-noul": "loadAudit",
     "audit-categorical": "loadAudit",
     "policy-noul": "loadPolicy",
@@ -255,9 +257,10 @@ def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> No
 
 # --- hostile error messages --------------------------------------------------------------------
 
-# Each tab's loader and the container its errors replace. A 400's detail names workspace files and
-# identifiers, and the escape scan lets `err.message` through as safe, so only this checks it.
+# Each view's loader and the container its errors replace. A 400's detail names workspace files and
+# identifiers, which reach innerHTML through showError's interpolation of `err.message`.
 CONTAINERS = {
+    "loadOverview": "overview-container",
     "loadAudit": "calib-container",
     "loadPolicy": "policy-container",
     "loadLint": "lint-container",
@@ -268,7 +271,10 @@ CONTAINERS = {
 
 
 def test_the_error_containers_are_the_pages_own() -> None:
-    assert CONTAINERS == dict(re.findall(r'^    run\((\w+), "([^"]+)"\);$', _script(), re.M))
+    # The views' table in the page (`viewDefs`), which the shell runs each loader from.
+    defs = re.findall(r'^        \w+: \{loader: (\w+), container: "([^"]+)"', _script(), re.M)
+    assert len(defs) == 7
+    assert CONTAINERS == dict(defs)
     assert set(CONTAINERS) == set(LOADERS.values())
 
 

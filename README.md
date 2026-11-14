@@ -48,7 +48,7 @@ LLMOps platforms such as **Langfuse**, **Arize Phoenix** and **LangSmith** are b
 5. **Shadow & Judge Audit** — Noul `|Δp|` and Choice TVD, exact McNemar-Holm test, rubric quadratic-weighted κ and bias.
 6. **Drift Monitor & Runtime Gate** — PSI and Jensen-Shannon drift, silent `model_served` guard, sub-millisecond `DecisionGate`.
 
-**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` / `RERANKER` spans (noul / choice / score), and a local 6-tab web workbench on `127.0.0.1:8765`. The state store is read by two commands only: `s1 labelaudit sheet` writes the state text of every item under review (the top-ranked flags plus random controls) into the review sheet, which is meant for a human reviewer, and `s1 probe` sends each state to the selected backend (a live API for `--backend systemone` or `openai`). s1ops never writes that state text into records, ledgers, probe output or exports; `s1 apply`, which copies its input rows, leaves a top-level `state` out.
+**Outputs**: compiled `fits.json` and `policy.json`, a blind review sheet, `safe-v1` Langfuse runs/scores/queues, Phoenix / OpenInference `GUARDRAIL` / `EVALUATOR` / `RERANKER` spans (noul / choice / score), and a local web workbench on `127.0.0.1:8765`. The state store is read by two commands only: `s1 labelaudit sheet` writes the state text of every item under review (the top-ranked flags plus random controls) into the review sheet, which is meant for a human reviewer, and `s1 probe` sends each state to the selected backend (a live API for `--backend systemone` or `openai`). s1ops never writes that state text into records, ledgers, probe output or exports; `s1 apply`, which copies its input rows, leaves a top-level `state` out.
 
 ---
 
@@ -171,13 +171,13 @@ s1 export phoenix s1-demo/records_categorical.jsonl -o s1-demo/phoenix_categoric
 
 The extension is stripped before hashing, so the question keeps the `question_id` `s1 lint check` gives it. Without one, the inverse is generated as `"Is it false that: <instructions>"` with the true/false criteria swapped; a model that reads that sentence literally answers it like the original, so its error can measure the generated wording more than the model (on a local Kev, s1ops 0.6.0's generated inverse, which also dropped the criteria, gave an inverse flip rate of 1.0 next to a twin gap of 0.012). A Noul with object or list instructions and no supplied inverse is sent once, as written, and the audit skips it. Each inverse record says which wording it got (`probe_inverse`: `supplied` or `generated`), and the audit reports it as `inverse_source` (`null` for records from before the tag, or a mix). A question and model whose inverse records carry more than one `question_id` are refused rather than pooled, so audit the output of one wording at a time. A question carries `x-s1-lint` or `x-jev-lint`, not both, and `s1 probe` refuses a malformed extension, as `s1 lint check` reports it, before the ledger or the output is opened.
 
-### 4. Launch the 6-Tab Local Web Workbench
+### 4. Launch the Local Web Workbench
 
 ```bash
 s1 web --workspace s1-demo --host 127.0.0.1 --port 8765
 ```
 
-Open `http://127.0.0.1:8765` to explore:
+Open `http://127.0.0.1:8765`. The workbench opens on an **Overview** of the workspace: records, groups (with whether each has a fit), and each workspace file, present or missing, with the command that writes it. A group filter applies to the Calibration, Simulator and Slices views (the label-audit ranking then covers that group's records only); Compare and Drift have a question picker of their own, since their Holm-adjusted p-values and summary are computed over every question. The view, the group, the question and the simulator's inputs are kept in the URL, so a link reopens the same view and Back restores the previous one. Light, dark or the system's theme. Its views:
 1. **Calibration & Noise Floor**: SVG Reliability Diagram (Before vs After Fit), Monte Carlo 95th-percentile ECE Noise Floor, and Tie-Mass rounding detector.
 2. **Threshold & Escalation Simulator**: Interactive `band_lo`, `band_hi`, `cost_sys2`, and `error_budget` sliders with live System 1 Auto vs System 2 Escalation split and Pareto frontier table, on raw or calibrated probabilities (a Probabilities control; Auto picks calibrated when the group's records carry `calib`).
 3. **Question Lint & Probe Coherence**: Static `JL000`–`JL060` diagnostics + Noul/Choice twin gap and polarity inverse sum audit.

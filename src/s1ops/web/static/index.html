@@ -5,7 +5,44 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>s1ops · System 1 LLMOps Workbench</title>
   <style>
+    /* Light by default; dark from the system unless the viewer picked light, or when picked. */
     :root {
+      color-scheme: light;
+      --bg: #f5f7fa;
+      --panel: #ffffff;
+      --panel-alt: #eef1f5;
+      --border: #d9dfe8;
+      --text: #172033;
+      --muted: #566178;
+      --accent: #0b6aa2;
+      --accent-text: #ffffff;
+      --ok: #0f7a52;
+      --warn: #a15c07;
+      --err: #b42318;
+      --focus: #0b6aa2;
+      --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      --nav-width: 232px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        color-scheme: dark;
+        --bg: #0b0f17;
+        --panel: #131b29;
+        --panel-alt: #182234;
+        --border: #25324a;
+        --text: #e6edf7;
+        --muted: #8ea0be;
+        --accent: #38bdf8;
+        --accent-text: #06101e;
+        --ok: #34d399;
+        --warn: #fbbf24;
+        --err: #f87171;
+        --focus: #7dd3fc;
+      }
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
       --bg: #0b0f17;
       --panel: #131b29;
       --panel-alt: #182234;
@@ -13,12 +50,11 @@
       --text: #e6edf7;
       --muted: #8ea0be;
       --accent: #38bdf8;
-      --accent-soft: rgba(56, 189, 248, 0.14);
+      --accent-text: #06101e;
       --ok: #34d399;
       --warn: #fbbf24;
       --err: #f87171;
-      --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
-      --mono: "JetBrains Mono", "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+      --focus: #7dd3fc;
     }
     * { box-sizing: border-box; }
     body {
@@ -29,11 +65,13 @@
       font-size: 14px;
       line-height: 1.5;
     }
+    :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
     header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 14px 24px;
+      gap: 16px;
+      padding: 12px 20px;
       background: var(--panel);
       border-bottom: 1px solid var(--border);
     }
@@ -41,10 +79,11 @@
       display: flex;
       align-items: center;
       gap: 12px;
+      min-width: 0;
     }
     .brand-badge {
       background: var(--accent);
-      color: #06101e;
+      color: var(--accent-text);
       font-family: var(--mono);
       font-weight: 700;
       padding: 4px 9px;
@@ -56,49 +95,102 @@
       font-size: 16px;
       font-weight: 600;
     }
+    .header-tools {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
     .meta-bar {
       font-family: var(--mono);
       font-size: 12px;
       color: var(--muted);
+      overflow-wrap: anywhere;
     }
-    nav.tabs {
+    button.tool {
+      background: var(--panel-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 6px 10px;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button.tool:hover { border-color: var(--accent); }
+    .layout {
+      display: grid;
+      grid-template-columns: var(--nav-width) minmax(0, 1fr);
+      min-height: calc(100vh - 57px);
+    }
+    nav.views {
       display: flex;
-      gap: 4px;
-      padding: 0 24px;
+      flex-direction: column;
+      gap: 2px;
+      padding: 16px 10px;
       background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      overflow-x: auto;
+      border-right: 1px solid var(--border);
     }
-    nav.tabs button {
+    nav.views button {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      text-align: left;
       background: transparent;
       color: var(--muted);
       border: none;
-      border-bottom: 2px solid transparent;
-      padding: 12px 16px;
+      border-radius: 6px;
+      padding: 9px 12px;
       cursor: pointer;
       font-size: 13px;
       font-weight: 500;
-      white-space: nowrap;
     }
-    nav.tabs button.active {
+    nav.views button:hover { color: var(--text); background: var(--panel-alt); }
+    nav.views button[aria-selected="true"] {
       color: var(--accent);
-      border-bottom-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
     }
+    nav.views .nav-step {
+      font-family: var(--mono);
+      font-size: 11px;
+      min-width: 1.2em;
+    }
+    .content { min-width: 0; }
+    .filter-bar {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 24px;
+      background: var(--panel-alt);
+      border-bottom: 1px solid var(--border);
+    }
+    .filter-bar label {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: var(--mono);
+    }
+    .filter-bar select { max-width: min(520px, 100%); }
+    .filter-bar .filter-note { font-size: 12px; color: var(--muted); }
+    .filter-bar.filter-off select { opacity: 0.55; }
+    .filter-bar .loaded-at { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono); }
     main {
       max-width: 1360px;
-      margin: 0 auto;
       padding: 20px 24px 48px;
     }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
     .grid-2 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr));
       gap: 16px;
     }
     .grid-3 {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
       gap: 14px;
       margin-bottom: 16px;
     }
@@ -108,6 +200,7 @@
       border-radius: 8px;
       padding: 16px;
       margin-bottom: 16px;
+      overflow-x: auto;
     }
     .card h2, .card h3 {
       margin: 0 0 10px 0;
@@ -132,10 +225,11 @@
       font-size: 11px;
       font-weight: 600;
     }
-    .badge-ok { background: rgba(52, 211, 153, 0.16); color: var(--ok); }
-    .badge-warn { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
-    .badge-err { background: rgba(248, 113, 113, 0.16); color: var(--err); }
-    .badge-info { background: var(--accent-soft); color: var(--accent); }
+    .badge-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+    .badge-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+    .badge-err { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+    .badge-info { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+    .badge-none { background: var(--panel-alt); color: var(--muted); }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -175,7 +269,7 @@
     }
     input[type="range"] { width: 160px; accent-color: var(--accent); }
     select, input[type="number"] {
-      background: var(--bg);
+      background: var(--panel);
       color: var(--text);
       border: 1px solid var(--border);
       padding: 6px 10px;
@@ -197,7 +291,48 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      color: #06101e;
+      color: var(--accent-text);
+    }
+    .band-auto { background: var(--ok); }
+    .band-escalate { background: var(--warn); }
+    /* Loading, empty and error states. */
+    .state-card { border-style: dashed; color: var(--muted); }
+    .state-card strong { color: var(--text); }
+    .state-card code, .sub code { font-family: var(--mono); font-size: 12px; }
+    .skeleton {
+      height: 14px;
+      margin: 10px 0;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--panel-alt), var(--border), var(--panel-alt));
+      background-size: 200% 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+    }
+    .skeleton.short { width: 40%; }
+    @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    @media (prefers-reduced-motion: reduce) {
+      .skeleton { animation: none; }
+    }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+    .overview-grid .card { margin-bottom: 0; }
+    a.view-link { color: var(--accent); cursor: pointer; text-decoration: underline; }
+    @media (max-width: 860px) {
+      header { flex-wrap: wrap; padding: 10px 16px; }
+      .layout { grid-template-columns: minmax(0, 1fr); }
+      nav.views {
+        flex-direction: row;
+        overflow-x: auto;
+        padding: 6px 10px;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
+      nav.views button { white-space: nowrap; }
+      .filter-bar { padding: 8px 16px; }
+      main { padding: 16px 16px 40px; }
     }
   </style>
 </head>
@@ -207,24 +342,41 @@
       <span class="brand-badge">s1ops</span>
       <h1>System 1 Typed Decision LLMOps Workbench</h1>
     </div>
-    <div class="meta-bar" id="overview-meta">Loading workspace...</div>
+    <div class="header-tools">
+      <div class="meta-bar" id="overview-meta">Loading workspace...</div>
+      <button type="button" class="tool" id="btn-theme" title="Color theme: system, light or dark">Theme: system</button>
+    </div>
   </header>
 
-  <nav class="tabs">
-    <button class="active" data-tab="tab-calib">1. Calibration &amp; Noise Floor</button>
-    <button data-tab="tab-policy">2. Threshold &amp; Escalation Simulator</button>
-    <button data-tab="tab-lint">3. Question Lint &amp; Probe Coherence</button>
-    <button data-tab="tab-slices">4. Slices &amp; Blind Label Audit</button>
-    <button data-tab="tab-compare">5. Shadow Compare &amp; Judge Audit</button>
-    <button data-tab="tab-drift">6. Drift &amp; Canary Monitor</button>
-  </nav>
-
+  <div class="layout">
+    <nav class="views" role="tablist" aria-label="Workbench views" aria-orientation="vertical">
+      <button type="button" role="tab" id="nav-overview" data-view="overview" aria-controls="tab-overview" aria-selected="true" tabindex="0"><span class="nav-step">0</span>Overview</button>
+      <button type="button" role="tab" id="nav-calib" data-view="calib" aria-controls="tab-calib" aria-selected="false" tabindex="-1"><span class="nav-step">1</span>Calibration &amp; Noise Floor</button>
+      <button type="button" role="tab" id="nav-policy" data-view="policy" aria-controls="tab-policy" aria-selected="false" tabindex="-1"><span class="nav-step">2</span>Threshold &amp; Escalation Simulator</button>
+      <button type="button" role="tab" id="nav-lint" data-view="lint" aria-controls="tab-lint" aria-selected="false" tabindex="-1"><span class="nav-step">3</span>Question Lint &amp; Probe Coherence</button>
+      <button type="button" role="tab" id="nav-slices" data-view="slices" aria-controls="tab-slices" aria-selected="false" tabindex="-1"><span class="nav-step">4</span>Slices &amp; Blind Label Audit</button>
+      <button type="button" role="tab" id="nav-compare" data-view="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1"><span class="nav-step">5</span>Shadow Compare &amp; Judge Audit</button>
+      <button type="button" role="tab" id="nav-drift" data-view="drift" aria-controls="tab-drift" aria-selected="false" tabindex="-1"><span class="nav-step">6</span>Drift &amp; Canary Monitor</button>
+    </nav>
+    <div class="content">
+      <div class="filter-bar" id="filter-bar">
+        <label for="flt-group">Group (question_id · model_served · primitive)</label>
+        <select id="flt-group" aria-describedby="flt-note"><option value="">All labeled groups</option></select>
+        <span class="filter-note" id="flt-note" aria-live="polite"></span>
+        <button type="button" class="tool" id="btn-clear-group" hidden>Clear group</button>
+        <button type="button" class="tool" id="btn-refresh">Refresh</button>
+        <span class="loaded-at" id="loaded-at"></span>
+      </div>
   <main>
-    <section id="tab-calib" class="tab-pane active">
+    <section id="tab-overview" class="tab-pane active" role="tabpanel" aria-labelledby="nav-overview">
+      <div id="overview-container">Loading overview...</div>
+    </section>
+
+    <section id="tab-calib" class="tab-pane" role="tabpanel" aria-labelledby="nav-calib">
       <div id="calib-container">Loading calibration audit...</div>
     </section>
 
-    <section id="tab-policy" class="tab-pane">
+    <section id="tab-policy" class="tab-pane" role="tabpanel" aria-labelledby="nav-policy">
       <div class="controls">
         <div class="control-group">
           <label>Group (question_id · model_served · primitive)</label>
@@ -258,22 +410,24 @@
       <div id="policy-container">Loading policy simulation...</div>
     </section>
 
-    <section id="tab-lint" class="tab-pane">
+    <section id="tab-lint" class="tab-pane" role="tabpanel" aria-labelledby="nav-lint">
       <div id="lint-container">Loading question lint and probe coherence...</div>
     </section>
 
-    <section id="tab-slices" class="tab-pane">
+    <section id="tab-slices" class="tab-pane" role="tabpanel" aria-labelledby="nav-slices">
       <div id="slices-container">Loading slice discovery and blind label audit...</div>
     </section>
 
-    <section id="tab-compare" class="tab-pane">
+    <section id="tab-compare" class="tab-pane" role="tabpanel" aria-labelledby="nav-compare">
       <div id="compare-container">Loading multi-backend shadow comparison...</div>
     </section>
 
-    <section id="tab-drift" class="tab-pane">
+    <section id="tab-drift" class="tab-pane" role="tabpanel" aria-labelledby="nav-drift">
       <div id="drift-container">Loading production canary drift monitor...</div>
     </section>
   </main>
+    </div>
+  </div>
 
 
   <script>
@@ -290,7 +444,9 @@
           const body = await res.json();
           if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
         } catch (_) {}
-        throw new Error(detail);
+        const err = new Error(detail);
+        err.status = res.status;
+        throw err;
       }
       return res.json();
     }
@@ -332,31 +488,227 @@
       else lo.value = hi.value;
     }
 
+    // What a failed request means for the viewer: a workspace file to fix (400, 422), nothing to show
+    // (404), a server bug (5xx), or no server at all (no status: the request never got an answer).
+    function errorKind(err) {
+      const code = err && typeof err.status === "number" ? err.status : null;
+      if (code === null) return "network";
+      if (code === 404) return "empty";
+      if (code >= 500) return "server";
+      return "input";
+    }
+
     function showError(containerId, err) {
-      document.getElementById(containerId).innerHTML =
-        `<div class="card"><span class="badge badge-err">ERROR</span> ${esc(err.message)}</div>`;
+      const kind = errorKind(err);
+      const el = document.getElementById(containerId);
+      if (kind === "empty") {
+        el.innerHTML = `<div class="card state-card"><strong>Nothing to show.</strong> ${esc(err.message)}</div>`;
+        return;
+      }
+      const hint = {
+        input: "A workspace file could not be used: fix the file named above, then Refresh.",
+        server: "The server failed on this request; the terminal running <code>s1 web</code> has the traceback.",
+        network: "No answer from the server: is <code>s1 web</code> still running?",
+      }[kind];
+      el.innerHTML =
+        `<div class="card"><div><span class="badge badge-err">ERROR</span> ${esc(err.message)}</div><div class="sub">${hint}</div></div>`;
     }
 
-    function run(loader, containerId) {
-      return loader().catch(err => showError(containerId, err));
-    }
-
-    // Which tab each optional workspace file feeds; shown when the file is absent.
-    const FILE_TABS = {
-      "records.jsonl": "1-5", "fits.json": "1 (after-fit curve)", "questions.json": "3",
-      "probe_records.jsonl": "3 (probe audit)", "features.jsonl": "4 (feature slices)",
-      "records_kev.jsonl": "5 (shadow compare)", "judge_grades.jsonl": "5 (judge audit)",
-      "records_canary.jsonl": "6", "policy.json": "6 (escalation rate)",
-    };
-
-    document.querySelectorAll("nav.tabs button").forEach(btn => {
-      btn.addEventListener("click", () => {
-        document.querySelectorAll("nav.tabs button").forEach(b => b.classList.remove("active"));
-        document.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
-        btn.classList.add("active");
-        document.getElementById(btn.dataset.tab).classList.add("active");
+    // Run a view's loader; a failure is shown unless a newer request for the view has started.
+    function run(loader, containerId, ctx) {
+      return loader(ctx).catch(err => {
+        if (!isStale(ctx)) showError(containerId, err);
       });
-    });
+    }
+
+    function isStale(ctx) {
+      return Boolean(ctx && ctx.isCurrent && !ctx.isCurrent());
+    }
+
+    function showLoading(containerId) {
+      const el = document.getElementById(containerId);
+      el.setAttribute("aria-busy", "true");
+      el.innerHTML = '<div class="card"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton short"></div></div>';
+    }
+
+    // --- view state -----------------------------------------------------------------------------
+    // One snapshot, kept in the URL hash (only what differs from the defaults), so a link opens the
+    // same view and Back restores the previous one. Picker positions, input values and what applies
+    // where are derived from it.
+
+    function viewNames() {
+      return ["overview", "calib", "policy", "lint", "slices", "compare", "drift"];
+    }
+
+    // Each view's loader and container, whether the group filter applies, and why not when it does not.
+    function viewDefs() {
+      return {
+        overview: {loader: loadOverview, container: "overview-container", group: false, note: "the overview counts the whole workspace"},
+        calib: {loader: loadAudit, container: "calib-container", group: true, note: ""},
+        policy: {loader: loadPolicy, container: "policy-container", group: true, note: ""},
+        lint: {loader: loadLint, container: "lint-container", group: false, note: "lint reads the questions file, not groups"},
+        slices: {loader: loadSlicesAndLabels, container: "slices-container", group: true, note: ""},
+        compare: {loader: loadCompare, container: "compare-container", group: false, note: "pick a question in the view; p_holm is adjusted across every question"},
+        drift: {loader: loadDrift, container: "drift-container", group: false, note: "pick a question in the view; the summary counts every question, labeled or not"},
+      };
+    }
+
+    function defaultState() {
+      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs2: 0.004, budget: 0.10};
+    }
+
+    // A number from the hash: finite and clamped to [min, max], else the default.
+    function hashNumber(raw, fallback, min, max) {
+      if (raw === null || raw === "") return fallback;
+      const v = Number(raw);
+      if (!Number.isFinite(v)) return fallback;
+      return Math.min(max, Math.max(min, v));
+    }
+
+    // A band end on the sliders' 0.05 step.
+    function bandStep(v) {
+      return Number((Math.round(v * 20) / 20).toFixed(2));
+    }
+
+    // The state a hash names. Every value is checked here; none reaches innerHTML from the hash.
+    function parseHash(hash) {
+      const st = defaultState();
+      const text = String(hash || "").replace(/^#\/?/, "");
+      const cut = text.indexOf("?");
+      const view = cut < 0 ? text : text.slice(0, cut);
+      const params = new URLSearchParams(cut < 0 ? "" : text.slice(cut + 1));
+      if (viewNames().includes(view)) st.view = view;
+      ["qid", "model", "prim", "dq", "cq"].forEach(k => { st[k] = params.get(k) || ""; });
+      const dist = params.get("dist");
+      st.dist = dist === "true" || dist === "false" ? dist : "";
+      // The simulator's own input ranges and step, and a band whose ends do not cross (the server
+      // sorts a crossed pair, so the labels would show another band than the one evaluated).
+      const lo = bandStep(hashNumber(params.get("lo"), st.lo, 0.05, 0.90));
+      const hi = bandStep(hashNumber(params.get("hi"), st.hi, 0.10, 0.95));
+      st.lo = Math.min(lo, hi);
+      st.hi = Math.max(lo, hi);
+      st.cs2 = hashNumber(params.get("cs2"), st.cs2, 0, 1e6);
+      st.budget = hashNumber(params.get("budget"), st.budget, 0, 1);
+      return st;
+    }
+
+    function formatHash(st) {
+      const d = defaultState();
+      const params = new URLSearchParams();
+      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs2", "budget"].forEach(k => {
+        if (st[k] !== d[k]) params.set(k, String(st[k]));
+      });
+      const query = params.toString();
+      if (st.view === d.view && !query) return "";
+      return "#/" + st.view + (query ? "?" + query : "");
+    }
+
+    // Where the chosen group stands: "none" (no group), "invalid" (part of a triple, or a primitive
+    // that is not one), "loading" or "error" (the labeled groups are not known), "unknown" (a whole
+    // triple that is not a labeled group), or "ok" with its position in the groups.
+    function resolveGroup(st, groups, groupsState) {
+      const parts = [st.qid, st.model, st.prim];
+      if (parts.every(v => !v)) return {status: "none", index: -1};
+      if (parts.some(v => !v) || !["noul", "choice", "score"].includes(st.prim)) return {status: "invalid", index: -1};
+      if (groupsState !== "ok") return {status: groupsState, index: -1};
+      const index = (groups || []).findIndex(g => g.question_id === st.qid && g.model_served === st.model && g.primitive === st.prim);
+      return index < 0 ? {status: "unknown", index: -1} : {status: "ok", index};
+    }
+
+    // A group view requests only with no group chosen or with its group found, so it never falls
+    // back to another group.
+    function groupReady(resolved) {
+      return resolved.status === "none" || resolved.status === "ok";
+    }
+
+    function groupParams(st, resolved) {
+      return resolved.status === "ok" ? {question_id: st.qid, model_served: st.model, primitive: st.prim} : {};
+    }
+
+    // A path with its non-empty parameters; no "?" when there are none.
+    function apiUrl(path, params) {
+      const query = new URLSearchParams();
+      Object.entries(params || {}).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== "") query.set(k, String(v));
+      });
+      const text = query.toString();
+      return text ? path + "?" + text : path;
+    }
+
+    // The filter bar's note for a view (shown with textContent).
+    function filterNote(view, resolved, st) {
+      const def = viewDefs()[view];
+      if (!def.group) return "The group filter does not apply here: " + def.note + ".";
+      const triple = [st.qid, st.model, st.prim].join(" · ");
+      if (resolved.status === "none") {
+        return view === "policy" ? "No group chosen: the simulator runs on the default group (first noul, else first)." : "All labeled groups.";
+      }
+      if (resolved.status === "loading") return "Loading the labeled groups…";
+      if (resolved.status === "error") return "The labeled groups could not be loaded; Refresh to retry, or clear the group.";
+      if (resolved.status === "invalid") return "The link names an incomplete or invalid group (" + triple + "); clear it to continue.";
+      if (resolved.status === "unknown") return "Not a labeled group in this workspace: " + triple + ". Clear it to continue.";
+      return "";
+    }
+
+    // What a group view shows instead of requesting while its group is unresolved.
+    function groupBlockedHtml(resolved) {
+      const what = {
+        loading: "Waiting for the labeled groups.",
+        error: "The labeled groups could not be loaded.",
+        invalid: "The group in the link is incomplete or invalid.",
+        unknown: "The group in the link is not a labeled group in this workspace.",
+      }[resolved.status] || "";
+      return `<div class="card state-card"><strong>${what}</strong> Nothing is requested until the group is resolved, so this view never shows another group instead. <em>Clear group</em> in the filter bar shows every group.</div>`;
+    }
+
+    // Arrow keys, Home and End move between the views (the tab list's roving focus).
+    function nextViewIndex(key, index, count) {
+      if (key === "ArrowDown" || key === "ArrowRight") return (index + 1) % count;
+      if (key === "ArrowUp" || key === "ArrowLeft") return (index - 1 + count) % count;
+      if (key === "Home") return 0;
+      if (key === "End") return count - 1;
+      return -1;
+    }
+
+    function nextTheme(mode) {
+      return {system: "light", light: "dark", dark: "system"}[mode] || "system";
+    }
+
+    // The viewer's theme choice is a per-browser convenience; storage may be unavailable.
+    function readTheme() {
+      try {
+        const mode = localStorage.getItem("s1ops:v1:theme");
+        return mode === "light" || mode === "dark" ? mode : "system";
+      } catch (_) {
+        return "system";
+      }
+    }
+
+    function applyTheme(mode) {
+      if (mode === "system") delete document.documentElement.dataset.theme;
+      else document.documentElement.dataset.theme = mode;
+      document.getElementById("btn-theme").textContent = "Theme: " + mode;
+      try {
+        if (mode === "system") localStorage.removeItem("s1ops:v1:theme");
+        else localStorage.setItem("s1ops:v1:theme", mode);
+      } catch (_) {}
+    }
+
+    // Each workspace file the workbench reads (keys as /api/overview's `files`): its default name,
+    // the views it feeds, and what writes it, shown when it is missing.
+    function fileInfo() {
+      return {
+        records: {file: "records.jsonl", views: "Calibration, Simulator, Slices, Compare, Drift", producer: "s1 probe (or your own records)"},
+        fits: {file: "fits.json", views: "Calibration (after-fit curve)", producer: "s1 fit"},
+        questions: {file: "questions.json", views: "Lint", producer: "your questions file"},
+        probe_records: {file: "probe_records.jsonl", views: "Lint (probe coherence)", producer: "s1 probe with twin and inverse roles"},
+        features: {file: "features.jsonl", views: "Slices (feature slices)", producer: "your features file"},
+        compare_records: {file: "records_kev.jsonl", views: "Compare (shadow)", producer: "s1 probe against the shadow model"},
+        judge_grades: {file: "judge_grades.jsonl", views: "Compare (judge audit)", producer: "your judge and human grades"},
+        records_canary: {file: "records_canary.jsonl", views: "Drift", producer: "s1 probe on current traffic"},
+        policy: {file: "policy.json", views: "Drift (escalation rate)", producer: "s1 policy tune"},
+      };
+    }
 
     function renderReliabilitySvg(binsRaw, binsCal) {
       const size = 280, pad = 34;
@@ -378,12 +730,12 @@
       });
 
       return `
-        <svg width="${size}" height="${size}" style="background:#0d1420;border:1px solid #25324a;border-radius:6px">
-          <line x1="${pad}" y1="${size-pad}" x2="${size-pad}" y2="${pad}" stroke="#475569" stroke-dasharray="4 4" />
-          ${ptsRaw.length > 1 ? `<polyline fill="none" stroke="#f87171" stroke-width="2" points="${ptsRaw.join(' ')}" />` : ''}
-          ${ptsCal.length > 1 ? `<polyline fill="none" stroke="#34d399" stroke-width="2.5" points="${ptsCal.join(' ')}" />` : ''}
-          <text x="${pad}" y="18" fill="#8ea0be" font-size="11" font-family="monospace">Red: Before | Green: After Fit</text>
-          <text x="${pad}" y="${size-10}" fill="#8ea0be" font-size="10" font-family="monospace">Predicted Probability →</text>
+        <svg width="${size}" height="${size}" role="img" aria-label="Reliability: observed rate against predicted probability, before and after the fit" style="background:var(--panel-alt);border:1px solid var(--border);border-radius:6px">
+          <line x1="${pad}" y1="${size-pad}" x2="${size-pad}" y2="${pad}" style="stroke:var(--muted)" stroke-dasharray="4 4" />
+          ${ptsRaw.length > 1 ? `<polyline fill="none" style="stroke:var(--err)" stroke-width="2" points="${ptsRaw.join(' ')}" />` : ''}
+          ${ptsCal.length > 1 ? `<polyline fill="none" style="stroke:var(--ok)" stroke-width="2.5" stroke-dasharray="6 3" points="${ptsCal.join(' ')}" />` : ''}
+          <text x="${pad}" y="18" style="fill:var(--muted)" font-size="11" font-family="monospace">Solid: before · Dashed: fitted</text>
+          <text x="${pad}" y="${size-10}" style="fill:var(--muted)" font-size="10" font-family="monospace">Predicted Probability →</text>
         </svg>
       `;
     }
@@ -412,31 +764,132 @@
       `;
     }
 
-    // Groups from /api/groups, indexed by the picker's option values.
+    // Groups from /api/groups, indexed by the pickers' option values, and whether they are known.
     let GROUPS = [];
+    let groupsState = "loading";
+    let groupsError = "";
+    let groupsSeq = 0;
 
     function fillGroupPicker(groups) {
       GROUPS = groups || [];
-      const picker = document.getElementById("inp-group");
-      GROUPS.forEach((g, i) => {
-        const option = document.createElement("option");
-        option.value = String(i);
-        // textContent, never innerHTML: these are workspace identifiers.
-        option.textContent = [g.question_id, g.model_served, g.primitive].join(" · ");
-        picker.appendChild(option);
+      groupsState = "ok";
+      ["flt-group", "inp-group"].forEach(id => {
+        const picker = document.getElementById(id);
+        // Rebuilt on every load, since positions change with the records; the default entry stays.
+        picker.querySelectorAll("option").forEach(o => {
+          if (o.value !== "") o.remove();
+        });
+        GROUPS.forEach((g, i) => {
+          const option = document.createElement("option");
+          option.value = String(i);
+          // textContent, never innerHTML: these are workspace identifiers.
+          option.textContent = [g.question_id, g.model_served, g.primitive].join(" · ");
+          picker.appendChild(option);
+        });
       });
+      render();
     }
 
-    async function loadOverview() {
-      const data = await fetchJson("/api/overview");
-      const missing = (data.missing_files || []).map(f => `${f} (tab ${FILE_TABS[f] || "?"})`);
-      document.getElementById("overview-meta").textContent =
-        `Records: ${data.n_records} | Groups: ${data.n_groups} | Safe-v1 Redaction Active` +
+    function groupsFailed(err) {
+      GROUPS = [];
+      groupsState = "error";
+      groupsError = err.message;
+      render();
+    }
+
+    // Only the latest groups request is applied, success or failure.
+    function loadGroups() {
+      const seq = ++groupsSeq;
+      groupsState = "loading";
+      // The picker reads records.jsonl only, so a fits.json error in the overview leaves it usable.
+      return fetchJson("/api/groups")
+        .then(d => { if (seq === groupsSeq) fillGroupPicker(d.groups); })
+        .catch(err => { if (seq === groupsSeq) groupsFailed(err); });
+    }
+
+    // The header line: counts and the missing files. Text only (textContent).
+    function overviewMetaText(data) {
+      const missing = data.missing_files || [];
+      return `Records: ${data.n_records} | Groups: ${data.n_groups}` +
         (missing.length ? ` | Missing: ${missing.join(", ")}` : "");
     }
 
-    async function loadAudit() {
-      const data = await fetchJson("/api/audit");
+    // Only the latest header request writes (a Refresh can overtake an earlier one).
+    let metaSeq = 0;
+
+    async function loadMeta() {
+      const seq = ++metaSeq;
+      try {
+        const data = await fetchJson("/api/overview");
+        if (seq !== metaSeq) return;
+        document.getElementById("overview-meta").textContent = overviewMetaText(data);
+      } catch (err) {
+        if (seq !== metaSeq) return;
+        document.getElementById("overview-meta").textContent = `Workspace error: ${err.message}`;
+      }
+    }
+
+    // The landing view: what the workspace holds, per group, and which files are missing and what
+    // writes them. Counts are workspace-wide; the group filter does not apply here.
+    function renderOverview(data) {
+      const info = fileInfo();
+      const files = data.files || {};
+      const keys = Object.keys(info);
+      // `files` names each path, null when nothing is there; the file shown is the path's own name.
+      const isMissing = k => files[k] === null || files[k] === undefined;
+      const absent = keys.filter(isMissing);
+      const groups = data.groups || [];
+      const groupRows = groups.map(g => `
+            <tr>
+              <td class="mono">${esc(g.question_id)}</td>
+              <td class="mono">${esc(g.model_served)}</td>
+              <td class="mono">${esc(g.primitive)}</td>
+              <td class="mono">${Number(g.n_records)}</td>
+              <td>${g.has_fit ? '<span class="badge badge-ok">fitted</span>' : '<span class="badge badge-none">no fit</span> <span class="sub">run <code>s1 fit</code></span>'}</td>
+              <td><button type="button" class="tool" data-act="open-group" data-qid="${esc(g.question_id)}" data-model="${esc(g.model_served)}" data-prim="${esc(g.primitive)}">Open in Calibration</button></td>
+            </tr>`).join("");
+      const fileRows = keys.map(k => `
+            <tr>
+              <td class="mono">${isMissing(k) ? info[k].file : esc(String(files[k]).split(/[\\/]/).pop())}</td>
+              <td>${isMissing(k) ? '<span class="badge badge-warn">missing</span>' : '<span class="badge badge-ok">present</span>'}</td>
+              <td class="sub">${info[k].views}</td>
+              <td class="sub">${isMissing(k) ? `<code>${info[k].producer}</code>` : ''}</td>
+            </tr>`).join("");
+      return `
+        <div class="overview-grid">
+          <div class="card"><div class="sub">Records</div><div class="kpi">${Number(data.n_records)}</div>
+            <div class="sub">${Number(data.n_calibrated_records)} carry a calibrated distribution</div></div>
+          <div class="card"><div class="sub">Groups (question · model · primitive)</div><div class="kpi">${Number(data.n_groups)}</div>
+            <div class="sub">metrics are never pooled across groups</div></div>
+          <div class="card"><div class="sub">Workspace files</div><div class="kpi">${keys.length - absent.length} / ${keys.length}</div>
+            <div class="sub">${absent.length ? `${absent.length} missing; the views they feed show what is absent` : 'all present'}</div></div>
+        </div>
+        <div class="card">
+          <h3>Groups</h3>
+          ${groups.length ? `<table>
+            <thead><tr><th>Question ID</th><th>Model Served</th><th>Primitive</th><th>Records</th><th>Fit</th><th></th></tr></thead>
+            <tbody>${groupRows}</tbody>
+          </table>` : '<div class="sub">No records with a served model in this workspace.</div>'}
+        </div>
+        <div class="card">
+          <h3>Workspace files</h3>
+          <table>
+            <thead><tr><th>File</th><th>Status</th><th>Feeds</th><th>Written by</th></tr></thead>
+            <tbody>${fileRows}</tbody>
+          </table>
+          <div class="sub">Workspace: <span class="mono">${esc(data.workspace)}</span></div>
+        </div>`;
+    }
+
+    async function loadOverview(ctx = {}) {
+      const data = await fetchJson("/api/overview");
+      if (isStale(ctx)) return;
+      document.getElementById("overview-container").innerHTML = renderOverview(data);
+    }
+
+    async function loadAudit(ctx = {}) {
+      const data = await fetchJson(apiUrl("/api/audit", ctx.params));
+      if (isStale(ctx)) return;
       const el = document.getElementById("calib-container");
       if (!data.groups || data.groups.length === 0) {
         el.innerHTML = `<div class="card">No labeled records found in workspace.</div>`;
@@ -589,8 +1042,8 @@
           <h3>Active Escalation Band ${esc(b.band)} on ${esc(d.group.question_id)} (${esc(d.group.model_served)})</h3>
           ${distLine}
           <div class="band-bar">
-            <div class="band-seg" style="width:${autoPct}%;background:#34d399">System 1 Auto (${autoPct}%)</div>
-            <div class="band-seg" style="width:${escPct}%;background:#fbbf24">Escalate to System 2 (${escPct}%)</div>
+            <div class="band-seg band-auto" style="width:${autoPct}%">System 1 Auto (${autoPct}%)</div>
+            <div class="band-seg band-escalate" style="width:${escPct}%">Escalate to System 2 (${escPct}%)</div>
           </div>
           <div class="grid-3">
             <div>
@@ -626,18 +1079,26 @@
       `;
     }
 
+    // A simulator control requests only while the group is resolved, as the shell does.
     ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
       document.getElementById(id).addEventListener("input", () => {
         if (id === "inp-tau-low" || id === "inp-tau-high") pushBand(id);
-        run(loadPolicy, "policy-container");
+        if (keepPolicyInputs() && policyReady()) run(loadPolicy, "policy-container");
       });
     });
     ["inp-group", "inp-dist"].forEach(id => {
-      document.getElementById(id).addEventListener("change", () => run(loadPolicy, "policy-container"));
+      document.getElementById(id).addEventListener("change", () => {
+        if (id === "inp-group") {
+          pickGroup(document.getElementById(id).value);
+          return;
+        }
+        if (keepPolicyInputs() && policyReady()) run(loadPolicy, "policy-container");
+      });
     });
 
-    async function loadLint() {
+    async function loadLint(ctx = {}) {
       const d = await fetchJson("/api/lint");
+      if (isStale(ctx)) return;
       const el = document.getElementById("lint-container");
       const probes = d.probe_audit || [];
       el.innerHTML = `
@@ -685,8 +1146,9 @@
       `;
     }
 
-    async function loadSlicesAndLabels() {
-      const [sData, lData] = await Promise.all([fetchJson("/api/slices"), fetchJson("/api/labelaudit")]);
+    async function loadSlicesAndLabels(ctx = {}) {
+      const [sData, lData] = await Promise.all([fetchJson(apiUrl("/api/slices", ctx.params)), fetchJson(apiUrl("/api/labelaudit", ctx.params))]);
+      if (isStale(ctx)) return;
       const groups = sData.groups || [];
       // `/api/slices` predicts from raw probabilities unless asked for `use_calib`.
       const dist = esc(sData.distribution || 'unknown');
@@ -771,10 +1233,39 @@
       `;
     }
 
-    async function loadCompare() {
+    async function loadCompare(ctx = {}) {
       const d = await fetchJson("/api/compare");
-      const qs = d.shadow ? (d.shadow.questions || []) : [];
+      if (isStale(ctx)) return;
+      if (ctx.keep) ctx.keep(d);
+      // The question in force now, not when the request started (Back may have changed it).
+      document.getElementById("compare-container").innerHTML = renderCompare(d, ctx.cq ? ctx.cq() : "");
+    }
+
+    // A view's own question picker: every question its report holds, the chosen one selected.
+    function questionPickerHtml(act, questions, chosen, allLabel) {
+      const options = questions.map(q => {
+        const selected = q.question_id === chosen ? " selected" : "";
+        return `<option value="${esc(q.question_id)}"${selected}>${esc(q.question_id)}</option>`;
+      }).join("");
+      return `
+        <div class="controls">
+          <div class="control-group">
+            <label>Question</label>
+            <select data-act="${act}" aria-label="Question"><option value="">${allLabel} (${questions.length})</option>${options}</select>
+          </div>
+        </div>`;
+    }
+
+    // The question a link chose but the report does not hold is said so, never swapped for another.
+    function questionMissingHtml(chosen, report) {
+      return `<div class="card state-card"><strong>No question ${esc(chosen)} in the ${report}.</strong> Choose another question, or all questions.</div>`;
+    }
+
+    function renderCompare(d, cq) {
+      const all = d.shadow ? (d.shadow.questions || []) : [];
+      const qs = cq ? all.filter(q => q.question_id === cq) : all;
       const j = d.judge;
+      const picker = all.length ? questionPickerHtml("compare-question", all, cq, "All shadow-compared questions") : "";
 
       let shadowHtml = qs.map(q => `
         <div class="card">
@@ -801,6 +1292,8 @@
       // Both files present but nothing to pair is not the same as no files.
       if (d.shadow && d.shadow.shared_pairs === 0) {
         shadowHtml = `<div class="card">No items shared between the two record files (${d.shadow.primary_only} primary only, ${d.shadow.shadow_only} shadow only).</div>`;
+      } else if (cq && !qs.length && all.length) {
+        shadowHtml = questionMissingHtml(cq, "shadow comparison");
       }
 
       let judgeHtml = '';
@@ -830,18 +1323,31 @@
         `;
       }
 
-      document.getElementById("compare-container").innerHTML = (shadowHtml + judgeHtml) ||
+      if (judgeHtml && cq) {
+        judgeHtml = '<div class="sub" style="margin:0 0 8px">The judge audit covers every graded item; the question filter does not apply to it.</div>' + judgeHtml;
+      }
+      return (shadowHtml + judgeHtml) ? picker + shadowHtml + judgeHtml :
         `<div class="card">No shadow comparison records or judge grades found.</div>`;
     }
 
-    async function loadDrift() {
+    async function loadDrift(ctx = {}) {
       const d = await fetchJson("/api/drift");
-      const qs = d.questions || [];
-      if (qs.length === 0) {
-        document.getElementById("drift-container").innerHTML = `<div class="card">No canary drift records found.</div>`;
-        return;
+      if (isStale(ctx)) return;
+      if (ctx.keep) ctx.keep(d);
+      document.getElementById("drift-container").innerHTML = renderDrift(d, ctx.dq ? ctx.dq() : "");
+    }
+
+    function renderDrift(d, dq) {
+      const all = d.questions || [];
+      if (all.length === 0) {
+        return `<div class="card">No canary drift records found.</div>`;
       }
-      document.getElementById("drift-container").innerHTML = qs.map(q => {
+      const qs = dq ? all.filter(q => q.question_id === dq) : all;
+      const sm = d.summary || {};
+      const summary = `<div class="sub" style="margin:0 0 12px">Every question in the report: ${Number(sm.ok)} OK · ${Number(sm.warn)} WARN · ${Number(sm.critical)} CRITICAL.</div>`;
+      const picker = questionPickerHtml("drift-question", all, dq, "All drift questions");
+      if (dq && !qs.length) return picker + summary + questionMissingHtml(dq, "drift report");
+      return picker + summary + qs.map(q => {
         const badgeCls = q.status === 'CRITICAL' ? 'badge-err' : (q.status === 'WARN' ? 'badge-warn' : 'badge-ok');
         const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${esc(q.status)}</span> ${esc(a)}</div>`).join('')
           + (q.notes || []).map(n => `<div class="sub" style="margin:4px 0;">${esc(n)}</div>`).join('');
@@ -883,17 +1389,225 @@
       }).join('');
     }
 
-    loadOverview().catch(err => {
-      document.getElementById("overview-meta").textContent = `Workspace error: ${err.message}`;
+    // --- shell ------------------------------------------------------------------------------------
+    // The state in force, and per view: the latest request's number (an older response or error is
+    // dropped), the signature of what is shown (parameters and refresh generation; the same
+    // signature is not requested again), and the data a question picker re-renders from.
+    let STATE = defaultState();
+    let viewSeq = {};
+    let loadedSig = {};
+    let viewData = {};
+    let generation = 0;
+
+    function viewSig(view, st) {
+      const def = viewDefs()[view];
+      const resolved = resolveGroup(st, GROUPS, groupsState);
+      if (def.group && !groupReady(resolved)) return JSON.stringify(["blocked", resolved.status, generation]);
+      const params = def.group ? groupParams(st, resolved) : {};
+      const extra = view === "policy" ? [st.dist, st.lo, st.hi, st.cs2, st.budget] : [];
+      return JSON.stringify([params, extra, generation]);
+    }
+
+    // Make `next` the state: "push" adds a history entry, "replace" rewrites the current one, and a
+    // state read back from the hash (Back, an edited link) is applied with neither.
+    function commit(next, mode) {
+      STATE = next;
+      const hash = formatHash(next);
+      const url = hash || location.pathname + location.search;
+      if (mode === "push" && hash !== location.hash) history.pushState(null, "", url);
+      else if (mode === "replace") history.replaceState(null, "", url);
+      render();
+    }
+
+    function onHashChange() {
+      STATE = parseHash(location.hash);
+      render();
+    }
+
+    function render() {
+      activateView(STATE.view);
+      syncFilterBar();
+      runView(STATE.view);
+    }
+
+    function activateView(view) {
+      document.querySelectorAll("nav.views [role=tab]").forEach(btn => {
+        const on = btn.dataset.view === view;
+        btn.setAttribute("aria-selected", on ? "true" : "false");
+        btn.tabIndex = on ? 0 : -1;
+      });
+      document.querySelectorAll(".tab-pane").forEach(pane => pane.classList.toggle("active", pane.id === "tab-" + view));
+    }
+
+    // A picker's value. An unresolved group gets an entry of its own, so the picker never shows
+    // another group as chosen (textContent: these are workspace identifiers).
+    function setPickerValue(picker, value, st) {
+      let extra = picker.querySelector('option[value="?"]');
+      if (value === "?") {
+        if (!extra) {
+          extra = document.createElement("option");
+          extra.value = "?";
+          picker.appendChild(extra);
+        }
+        extra.textContent = "Unresolved: " + [st.qid, st.model, st.prim].join(" · ");
+      } else if (extra) {
+        extra.remove();
+      }
+      picker.value = value;
+    }
+
+    function syncFilterBar() {
+      const def = viewDefs()[STATE.view];
+      const resolved = resolveGroup(STATE, GROUPS, groupsState);
+      const value = resolved.status === "ok" ? String(resolved.index) : (resolved.status === "none" ? "" : "?");
+      ["flt-group", "inp-group"].forEach(id => setPickerValue(document.getElementById(id), value, STATE));
+      document.getElementById("flt-group").disabled = !def.group || groupsState !== "ok";
+      document.getElementById("filter-bar").classList.toggle("filter-off", !def.group);
+      const note = filterNote(STATE.view, resolved, STATE);
+      document.getElementById("flt-note").textContent = def.group && resolved.status === "error" ? note + " (" + groupsError + ")" : note;
+      document.getElementById("btn-clear-group").hidden = resolved.status === "none";
+    }
+
+    function runView(view) {
+      const def = viewDefs()[view];
+      const sig = viewSig(view, STATE);
+      if (loadedSig[view] === sig) {
+        rerenderView(view);
+        return;
+      }
+      loadedSig[view] = sig;
+      const seq = (viewSeq[view] = (viewSeq[view] || 0) + 1);
+      const resolved = resolveGroup(STATE, GROUPS, groupsState);
+      if (view === "policy") {
+        policySeq += 1;  // the simulator's own guard drops any pending response
+        applyPolicyInputs(STATE);  // a blocked simulator still shows the link's settings
+      }
+      if (def.group && !groupReady(resolved)) {
+        const el = document.getElementById(def.container);
+        el.removeAttribute("aria-busy");
+        el.innerHTML = groupBlockedHtml(resolved);
+        return;
+      }
+      const ctx = {
+        params: def.group ? groupParams(STATE, resolved) : {},
+        dq: () => STATE.dq,
+        cq: () => STATE.cq,
+        keep: d => { viewData[view] = d; },
+        isCurrent: () => viewSeq[view] === seq,
+      };
+      showLoading(def.container);
+      run(def.loader, def.container, ctx).finally(() => {
+        if (viewSeq[view] !== seq) return;
+        document.getElementById(def.container).removeAttribute("aria-busy");
+        document.getElementById("loaded-at").textContent = "Loaded " + new Date().toLocaleTimeString();
+      });
+    }
+
+    // A question picker's change re-renders from the data already loaded.
+    function rerenderView(view) {
+      const d = viewData[view];
+      if (!d) return;
+      if (view === "drift") document.getElementById("drift-container").innerHTML = renderDrift(d, STATE.dq);
+      if (view === "compare") document.getElementById("compare-container").innerHTML = renderCompare(d, STATE.cq);
+    }
+
+    // The simulator's inputs from the state, before its loader reads them. The group picker is set
+    // only for a resolved group or none; an unresolved one keeps its own entry (syncFilterBar).
+    function applyPolicyInputs(st) {
+      document.getElementById("inp-dist").value = st.dist;
+      document.getElementById("inp-tau-low").value = String(st.lo);
+      document.getElementById("inp-tau-high").value = String(st.hi);
+      document.getElementById("inp-cost-s2").value = String(st.cs2);
+      document.getElementById("inp-err-budget").value = String(st.budget);
+      const resolved = resolveGroup(st, GROUPS, groupsState);
+      if (resolved.status === "ok") document.getElementById("inp-group").value = String(resolved.index);
+      if (resolved.status === "none") document.getElementById("inp-group").value = "";
+    }
+
+    function policyReady() {
+      return groupReady(resolveGroup(STATE, GROUPS, groupsState));
+    }
+
+    // The state the simulator's inputs name, through the hash's own rule (finite, clamped, on the
+    // band step, ends in order), so a link round-trips; null while a number is mid-edit (empty or
+    // not a number), when nothing changes and nothing is requested.
+    function policyStateFromInputs(st, values) {
+      const nums = ["lo", "hi", "cs2", "budget"].map(k => Number(values[k]));
+      if (nums.some(v => !Number.isFinite(v)) || ["lo", "hi", "cs2", "budget"].some(k => String(values[k]).trim() === "")) return null;
+      return parseHash(formatHash({...st, dist: values.dist, lo: nums[0], hi: nums[1], cs2: nums[2], budget: nums[3]}));
+    }
+
+    // After an input changed: the state and the current history entry follow, without a new one,
+    // and the inputs show the values requested. False while an input is mid-edit.
+    function keepPolicyInputs() {
+      const value = id => document.getElementById(id).value;
+      const next = policyStateFromInputs(STATE, {dist: value("inp-dist"), lo: value("inp-tau-low"), hi: value("inp-tau-high"), cs2: value("inp-cost-s2"), budget: value("inp-err-budget")});
+      if (!next) return false;
+      STATE = next;
+      applyPolicyInputs(STATE);
+      history.replaceState(null, "", formatHash(STATE) || location.pathname + location.search);
+      loadedSig.policy = viewSig("policy", STATE);
+      return true;
+    }
+
+    // The viewer chose a group in either picker: the group and both views' questions change in one
+    // history entry. "" is no group; "?" is the unresolved entry, which changes nothing.
+    function pickGroup(value) {
+      if (value === "?") return;
+      const g = value === "" ? null : GROUPS[parseInt(value, 10)];
+      if (value !== "" && !g) return;
+      const qid = g ? g.question_id : "";
+      commit({...STATE, qid, model: g ? g.model_served : "", prim: g ? g.primitive : "", dq: qid, cq: qid}, "push");
+    }
+
+    function openGroup(qid, model, prim) {
+      commit({...STATE, view: "calib", qid, model, prim, dq: qid, cq: qid}, "push");
+    }
+
+    function navKey(ev) {
+      const tabs = Array.from(document.querySelectorAll("nav.views [role=tab]"));
+      const i = tabs.indexOf(document.activeElement);
+      const next = i < 0 ? -1 : nextViewIndex(ev.key, i, tabs.length);
+      if (next < 0) return;
+      ev.preventDefault();
+      tabs[next].focus();
+      commit({...STATE, view: tabs[next].dataset.view}, "push");
+    }
+
+    function refresh() {
+      generation += 1;
+      policySeq += 1;
+      loadedSig = {};
+      viewData = {};
+      loadMeta();
+      loadGroups();
+      render();
+    }
+
+    applyTheme(readTheme());
+    document.querySelectorAll("nav.views [role=tab]").forEach(btn => {
+      btn.addEventListener("click", () => commit({...STATE, view: btn.dataset.view}, "push"));
     });
-    run(loadAudit, "calib-container");
-    run(loadPolicy, "policy-container");
-    // The picker reads records.jsonl only, so a fits.json error in the overview leaves it usable.
-    fetchJson("/api/groups").then(d => fillGroupPicker(d.groups)).catch(err => showError("policy-container", err));
-    run(loadLint, "lint-container");
-    run(loadSlicesAndLabels, "slices-container");
-    run(loadCompare, "compare-container");
-    run(loadDrift, "drift-container");
+    document.querySelector("nav.views").addEventListener("keydown", navKey);
+    document.getElementById("flt-group").addEventListener("change", ev => pickGroup(ev.target.value));
+    document.getElementById("btn-clear-group").addEventListener("click", () => pickGroup(""));
+    document.getElementById("btn-refresh").addEventListener("click", refresh);
+    document.getElementById("btn-theme").addEventListener("click", () => applyTheme(nextTheme(document.documentElement.dataset.theme || "system")));
+    document.addEventListener("click", ev => {
+      const el = ev.target.closest("[data-act]");
+      if (el && el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
+    });
+    document.addEventListener("change", ev => {
+      const el = ev.target.closest("[data-act]");
+      if (el && el.dataset.act === "drift-question") commit({...STATE, dq: el.value}, "push");
+      if (el && el.dataset.act === "compare-question") commit({...STATE, cq: el.value}, "push");
+    });
+    window.addEventListener("popstate", onHashChange);
+    window.addEventListener("hashchange", onHashChange);
+    STATE = parseHash(location.hash);
+    loadMeta();
+    loadGroups();
+    render();
   </script>
 </body>
 </html>

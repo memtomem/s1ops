@@ -291,6 +291,15 @@ s1 drift current_eval.jsonl candidate_eval.jsonl
 s1 export langfuse candidate_eval_calibrated.jsonl --policy policy.json --training-run trainrun.json -o langfuse_export.json
 ```
 
+`s1 promote` runs step 4 as one command, with the manifest on every step that takes one, so no step can be run without it:
+
+```bash
+s1 promote --current current_eval.jsonl --cal candidate_cal.jsonl --eval candidate_eval.jsonl \
+    --training-manifest training_manifest.json --training-run trainrun.json -o promotion/
+```
+
+It takes records already probed and calls no backend. It writes `fits.json`, `candidate_eval_calibrated.jsonl` and `policy.json` into the directory, the files the commands above write, and prints one `s1-promotion/1` report, also saved as `promotion.json`: each step's own report under `compare`, `drift`, `fit`, `apply` and `policy`, the candidate's name, and `replaceable`, true when `s1 compare` found every question replaceable. `--current` is the model in place answering the candidate's evaluation items; `--cal` and `--eval` are each answered by the candidate alone, one `--training-manifest` must be for it, and every question of `--eval` must share an item with `--current`: a question the model in place never answered would get a policy with nothing compared. A manifest for the model in place goes to `s1 compare` only. `--method`, `--min-n` and the options of `s1 policy tune` (`--error-budget`, `--noul-routing`, `--max-false-pass`, ...) mean what they mean there. A step that refuses keeps its exit code and names itself (`s1: promote: fit: ...`, exit 2 for a trained item). `compare` and `drift` run before anything is written; a later step that fails leaves the files of the steps before it. Each input is read by more than one step, so a FIFO is refused. It exits 0 whatever `replaceable` says: read the report.
+
 `s1 drift` across a rename reports every question `CRITICAL` with the alert that `model_served` changed, and `--fail-on-critical` exits 4, so read its PSI and quantiles here rather than its status. A later run against the promoted checkpoint's own records is the monitor. A probe's states row holds one `label`, and it goes onto every question in the questions file, so when the labels differ give each question its own questions file and states file.
 
 **The manifest** (`s1-training-manifest/1`) holds `(dataset, item_id)`, `question_id` and label for each row, plus the checkpoint's name, the split and the records file's SHA-256. It holds no `state` text and no question wording, so `s1 probe` and `s1 labelaudit sheet` stay the only readers of a states file. The trainer joins them from its own local files, checking the wording by `question_id`:
@@ -351,7 +360,7 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
 | `3` | `model_served` mismatch against the fit or policy (`s1 apply` without `--pass-through-unfitted`, `s1 gate`) |
 | `4` | `s1 drift --fail-on-critical` found a `CRITICAL` question |
 
-Errors print a single `s1: <message>` line on stderr; non-printable characters in it (a newline or an escape sequence inside an id or a path) are written escaped, as `\n` or `\x1b`, while printable text, non-ASCII included, is kept. When an input that another command produces is missing, the message names that command (for example `run \`s1 fit\` first`). Set `S1_DEBUG=1` to re-raise errors raised by the library, with their traceback; checks the CLI makes itself (a missing input file, an empty grades file) still print one line. A missing input path is an error everywhere, including `s1 ledger status`, except `s1 lint check`, which reports an unreadable questions file as a `JL000` finding in its normal (`--format json`) report.
+`s1 promote` exits with the code of the step that refused (`2` for a trained item or for calibrating on the evaluation fold, `3` for a `model_served` mismatch), and names the step. Errors print a single `s1: <message>` line on stderr; non-printable characters in it (a newline or an escape sequence inside an id or a path) are written escaped, as `\n` or `\x1b`, while printable text, non-ASCII included, is kept. When an input that another command produces is missing, the message names that command (for example `run \`s1 fit\` first`). Set `S1_DEBUG=1` to re-raise errors raised by the library, with their traceback; checks the CLI makes itself (a missing input file, an empty grades file) still print one line. A missing input path is an error everywhere, including `s1 ledger status`, except `s1 lint check`, which reports an unreadable questions file as a `JL000` finding in its normal (`--format json`) report.
 
 ---
 

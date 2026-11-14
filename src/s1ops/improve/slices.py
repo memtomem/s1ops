@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 
 from scipy.stats import fisher_exact
 
-from s1ops.contracts.records import GroupKey, Record
+from s1ops.contracts.records import GroupKey, Record, reparse
 
 
 FeatureKey = tuple[str | None, str]
@@ -251,6 +251,7 @@ def slice_inputs_by_group(
     *,
     question_id: str | None = None,
     model_served: str | None = None,
+    raw: bool = False,
 ) -> list[GroupSliceInputs]:
     """Split the labeled, answered records into their groups, in sorted key order, so slice
     statistics are never pooled across groups. Call `select(records, allow_model_mismatch=True)`
@@ -259,6 +260,10 @@ def slice_inputs_by_group(
     Each record keeps its own prediction: the first of its own classes with the top probability
     (a group may list a choice's keys in different orders). A record's slice is its item's
     (`(dataset, item_id)`, then `(None, item_id)`), else `"default"`; its features likewise, else none.
+
+    With `raw`, each kept record predicts from its raw distribution (`reparse`), whatever it was
+    read with, so records read with `use_calib=True` (which validates a stored `calib`) can still be
+    sliced raw. Without it, each predicts from the distribution it holds.
     """
     by_key: dict[GroupKey, tuple[list[dict], list[dict]]] = defaultdict(lambda: ([], []))
     for r in records:
@@ -268,6 +273,8 @@ def slice_inputs_by_group(
             model_served is not None and r.model_served != model_served
         ):
             continue
+        if raw:
+            r = reparse(r)
         predicted = r.classes[max(range(len(r.probs)), key=lambda i: r.probs[i])]
         items, rows = by_key[r.key]
         sl = slice_by_item.get(r.item) or slice_by_item.get((None, r.item_id)) or "default"

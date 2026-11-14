@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from s1ops import __version__
-from s1ops.contracts.records import GroupKey, Record, read_records, select
+from s1ops.contracts.records import GroupKey, Record, has_calib, read_records, select
 from s1ops.contracts.schemas import load_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import CompareInputError, compare_records
@@ -319,9 +319,12 @@ def create_app(
         cost_s1: float = Query(default=0.00004, ge=0.0, allow_inf_nan=False),
         cost_sys2: float = Query(default=0.004, ge=0.0, allow_inf_nan=False),
         error_budget: float = Query(default=0.10, ge=0.0, le=1.0),
-        use_calib: bool = Query(default=True),
+        use_calib: bool | None = Query(default=None),
     ) -> dict[str, Any]:
-        records = _get_records(use_calib=use_calib)
+        # Unset (auto): calibrated when any record tuned into the chosen group carries `calib`, raw
+        # when none does. Auto reads calibrated, so a group without any `calib` parses to its raw
+        # distribution already; explicit false reads raw, as before auto existed.
+        records = _get_records(use_calib=use_calib is not False)
         if not records:
             raise HTTPException(status_code=404, detail="No records loaded")
 
@@ -338,6 +341,9 @@ def create_app(
         # With no filter, open on a noul group, the only kind the band simulation applies to.
         filtered = question_id is not None or model_served is not None or primitive is not None
         chosen_grp = matching[0] if filtered else next((g for g in matching if g.primitive == "noul"), matching[0])
+        if use_calib is None:
+            tuned = tuned_rows(records)[chosen_grp.key]
+            use_calib = any(has_calib(r.raw, chosen_grp.primitive) for r in tuned)
         if use_calib:
             # What `s1 policy tune --use-calib` refuses: a record tuned on its raw distribution, or a
             # group calibrated through more than one fit.
@@ -364,6 +370,7 @@ def create_app(
                 "primitive": chosen_grp.primitive,
                 "n": chosen_grp.n,
             },
+            "distribution": "calibrated" if use_calib else "raw",
             "band_supported": chosen_grp.primitive == "noul",
             "active_band": None,
             "tuned_threshold": {
@@ -446,26 +453,45 @@ def create_app(
         question_id: str | None = Query(default=None),
         model_served: str | None = Query(default=None),
         fdr_q: float = Query(default=0.10, ge=0.001, le=0.50),
+        use_calib: bool = Query(default=False),
     ) -> dict[str, Any]:
+        # Read with use_calib in both modes, as `s1 slice`, so a malformed stored calib is a 400.
         records = _get_records(use_calib=True)
         features_rows = _load_or_400(feat_file, _load_json_or_jsonl, feat_file)
         features_by_item, slice_by_item = _load_or_400(feat_file, parse_feature_rows, features_rows)
 
+        distribution = "calibrated" if use_calib else "raw"
         if not records:
-            return {"groups": []}
+            return {"distribution": distribution, "groups": []}
         # Refuses a repeated item or differing classes in any group (400), before the filters.
-        _select(records)
+        sel = _select(records)
+        groups = slice_inputs_by_group(
+            records,
+            features_by_item,
+            slice_by_item,
+            question_id=question_id,
+            model_served=model_served,
+            raw=not use_calib,
+        )
+        if use_calib:
+            # What `s1 slice --use-calib` refuses in the groups reported (`s1 policy tune --use-calib`'s rule).
+            by_key = {g.key: g for g in sel.groups}
+            tuned = tuned_rows(records)
+            for g in groups:
+                try:
+                    tuned_fit_sha256(by_key[g.key], tuned[g.key])
+                except CalibInputError as e:
+                    raise HTTPException(status_code=400, detail=f"{rec_file.name}: {e}") from None
         return {
+            "distribution": distribution,
             "groups": [
                 {
                     **g.header(),
                     "answerability": [s.as_dict() for s in slice_report(g.items, min_n=10)],
                     "error_slices": [e.as_dict() for e in mine_error_slices(g.rows, min_support=5, fdr_q=fdr_q)],
                 }
-                for g in slice_inputs_by_group(
-                    records, features_by_item, slice_by_item, question_id=question_id, model_served=model_served
-                )
-            ]
+                for g in groups
+            ],
         }
 
     @app.get("/api/labelaudit")

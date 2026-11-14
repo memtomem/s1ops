@@ -230,6 +230,14 @@
           <label>Group (question_id · model_served · primitive)</label>
           <select id="inp-group"><option value="">First noul group</option></select>
         </div>
+        <div class="control-group">
+          <label>Probabilities</label>
+          <select id="inp-dist">
+            <option value="">Auto (calibrated when the group has calib)</option>
+            <option value="false">Raw</option>
+            <option value="true">Calibrated (s1 apply output)</option>
+          </select>
+        </div>
         <div class="control-group band-control">
           <label>band_lo (Auto-FALSE below): <span id="lbl-tau-low">0.25</span></label>
           <input type="range" id="inp-tau-low" min="0.05" max="0.90" step="0.05" value="0.25" />
@@ -481,6 +489,9 @@
       document.getElementById("lbl-tau-high").textContent = high.toFixed(2);
 
       const params = new URLSearchParams({tau_low: low, tau_high: high, cost_sys2: costS2, error_budget: budget});
+      // Auto sends no use_calib: the server picks, and the response says which it used.
+      const dist = document.getElementById("inp-dist").value;
+      if (dist) params.set("use_calib", dist);
       const picked = GROUPS[parseInt(document.getElementById("inp-group").value, 10)];
       if (picked) {
         params.set("question_id", picked.question_id);
@@ -496,6 +507,7 @@
       }
       if (seq !== policySeq) return;
       const t = d.tuned_threshold;
+      const distLine = `<div class="sub">On ${esc(d.distribution || 'unknown')} probabilities</div>`;
       const thresholdHtml = `
             <div>
               <div class="sub">Error-Budget Threshold (budget ≤ ${(budget*100).toFixed(0)}%)</div>
@@ -512,6 +524,7 @@
         document.getElementById("policy-container").innerHTML = `
           <div class="card">
             <h3>Error-Budget Threshold on ${esc(d.group.question_id)} (${esc(d.group.model_served)}, ${esc(d.group.primitive)})</h3>
+            ${distLine}
             <div class="sub">${d.band_supported ? 'No band result for this group.' : 'Escalation bands are noul-only; this group routes by an error-budget threshold on its top probability.'}</div>
             <div class="grid-3">${thresholdHtml}</div>
             <h3>Threshold Operating Curve</h3>
@@ -541,6 +554,7 @@
       document.getElementById("policy-container").innerHTML = `
         <div class="card">
           <h3>Active Escalation Band ${esc(b.band)} on ${esc(d.group.question_id)} (${esc(d.group.model_served)})</h3>
+          ${distLine}
           <div class="band-bar">
             <div class="band-seg" style="width:${autoPct}%;background:#34d399">System 1 Auto (${autoPct}%)</div>
             <div class="band-seg" style="width:${escPct}%;background:#fbbf24">Escalate to System 2 (${escPct}%)</div>
@@ -582,7 +596,9 @@
     ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
       document.getElementById(id).addEventListener("input", () => run(loadPolicy, "policy-container"));
     });
-    document.getElementById("inp-group").addEventListener("change", () => run(loadPolicy, "policy-container"));
+    ["inp-group", "inp-dist"].forEach(id => {
+      document.getElementById(id).addEventListener("change", () => run(loadPolicy, "policy-container"));
+    });
 
     async function loadLint() {
       const d = await fetchJson("/api/lint");
@@ -636,6 +652,8 @@
     async function loadSlicesAndLabels() {
       const [sData, lData] = await Promise.all([fetchJson("/api/slices"), fetchJson("/api/labelaudit")]);
       const groups = sData.groups || [];
+      // `/api/slices` predicts from raw probabilities unless asked for `use_calib`.
+      const dist = esc(sData.distribution || 'unknown');
 
       document.getElementById("slices-container").innerHTML = `
         ${groups.length ? '' : '<div class="card">No labeled groups found in workspace.</div>'}
@@ -650,6 +668,7 @@
         <div class="grid-2">
           <div class="card">
             <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
+            <div class="sub">Predictions from ${dist} probabilities</div>
             <table>
               <thead>
                 <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${esc(slices[0] ? slices[0].null_kind : 'majority')})</th><th>Answerable</th></tr>
@@ -669,6 +688,7 @@
           </div>
           <div class="card">
             <h3>Benjamini-Hochberg FDR Error Slices (q ≤ 0.10)</h3>
+            <div class="sub">Errors of predictions from ${dist} probabilities</div>
             <table>
               <thead>
                 <tr><th>Feature</th><th>Slice n</th><th>Slice Err</th><th>Rest Err</th><th>Odds Ratio</th><th>q-value</th><th>Verdict</th></tr>

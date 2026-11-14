@@ -66,14 +66,16 @@ def test_without_a_filter_the_simulator_opens_on_a_noul_group(ws) -> None:
 
 
 def test_the_noul_simulation_is_unchanged(ws) -> None:
-    # Same numbers as before the per-primitive split; only band_supported is new.
+    # Same numbers as before the per-primitive split; only band_supported and distribution are new.
     d = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get(
         "/api/simulate-policy?tau_low=0.25&tau_high=0.75"
     ).json()
     assert set(d) == {
-        "group", "band_supported", "active_band", "tuned_threshold",
+        "group", "distribution", "band_supported", "active_band", "tuned_threshold",
         "recommended_band_under_35pct_esc", "pareto_frontier", "threshold_curve",
     }
+    # The demo's records all carry calib from one fit, so auto picks it, as the old default did.
+    assert d["distribution"] == "calibrated"
     assert d["active_band"]["band"] == "[0.25, 0.75)"
     assert d["active_band"]["n"] == d["group"]["n"]
 
@@ -145,7 +147,7 @@ def test_index_html_drops_stale_simulator_responses() -> None:
     # A response for an earlier pick must not overwrite the current one, success or error
     # (checked in headless Chrome by delaying one group's responses; here the guard's wiring).
     html = (STATIC_DIR / "index.html").read_text()
-    body = html[html.index("async function loadPolicy()"):html.index("document.getElementById(\"inp-group\").addEventListener")]
+    body = html[html.index("async function loadPolicy()"):html.index('["inp-group", "inp-dist"].forEach')]
     assert "const seq = ++policySeq;" in body
     assert body.count("if (seq !== policySeq) return;") == 2
     assert body.index("if (seq !== policySeq) return;") < body.index("const b = d.band_supported")

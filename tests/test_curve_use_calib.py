@@ -71,7 +71,8 @@ def test_simulator_refuses_what_tune_refuses(tmp_path, capsys, case) -> None:
     r = client.get("/api/simulate-policy", params={"use_calib": True})
     assert r.status_code == 400
     assert r.json()["detail"] == f"records.jsonl: {expected}"
-    assert client.get("/api/simulate-policy").status_code == 400  # use_calib defaults to true
+    # Unset is auto, which picks calibrated for a group where any record carries calib: still refused.
+    assert client.get("/api/simulate-policy").status_code == 400
     assert client.get("/api/simulate-policy", params={"use_calib": False}).status_code == 200
 
 

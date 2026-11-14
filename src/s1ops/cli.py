@@ -593,10 +593,25 @@ def _cmd_slice(args: argparse.Namespace) -> int:
     # Refuses a repeated item or differing classes in any group, before the filters, as `s1 audit`.
     sel = select(records, allow_model_mismatch=True)
     groups = slice_inputs_by_group(
-        records, features_by_item, slice_by_item, question_id=args.question, model_served=args.model
+        records,
+        features_by_item,
+        slice_by_item,
+        question_id=args.question,
+        model_served=args.model,
+        raw=not args.use_calib,
     )
     if not groups:
         raise _no_groups(args, sel, args.records)
+    if args.use_calib:
+        # What `s1 policy tune --use-calib` refuses, in the groups reported: a record that would be
+        # sliced on its raw distribution, or a group calibrated through more than one fit.
+        by_key = {g.key: g for g in sel.groups}
+        tuned = tuned_rows(records)
+        for g in groups:
+            try:
+                tuned_fit_sha256(by_key[g.key], tuned[g.key])
+            except CalibInputError as e:
+                raise CliError(f"{args.records}: {e}") from None
 
     if args.slice_cmd == "answerable":
         out = [{**g.header(), "slices": [s.as_dict() for s in slice_report(g.items, min_n=args.min_n)]} for g in groups]
@@ -610,7 +625,8 @@ def _cmd_slice(args: argparse.Namespace) -> int:
             }
             for g in groups
         ]
-    print(json.dumps({"groups": out}, indent=2, sort_keys=True))
+    distribution = "calibrated" if args.use_calib else "raw"
+    print(json.dumps({"distribution": distribution, "groups": out}, indent=2, sort_keys=True))
     return 0
 
 
@@ -1215,6 +1231,10 @@ _H_TRAINING_MANIFEST = (
     "training manifest from `s1 trainset export`, repeatable: refuse (exit 2) a selected group whose model trained on any of its items"
 )
 _H_USE_CALIB = "use the calibrated probabilities written by `s1 apply` instead of the raw ones"
+_H_USE_CALIB_SLICE = (
+    "predict from the calibrated probabilities written by `s1 apply` instead of the raw ones; every "
+    "labeled record of a reported group must carry them, from one fit"
+)
 _H_COST_S1 = "USD cost of one System 1 call"
 _H_COST_SYS2 = "USD cost of escalating one item to System 2 (LLM or human)"
 
@@ -1327,6 +1347,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sa.add_argument("--question", default=None, help=_H_QUESTION)
     p_sa.add_argument("--model", default=None, help=_H_MODEL)
     p_sa.add_argument("--min-n", type=int, default=10, help="slices with fewer items are reported but never marked answerable")
+    p_sa.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB_SLICE)
     p_sm = sub_sl.add_parser("mine", help="Mine high-error feature slices with BH-FDR control, per (question, model, primitive) group", **_FMT)
     p_sm.add_argument("records", help=_H_RECORDS)
     p_sm.add_argument("--features", required=True, help="features JSONL with pre-declared per-item feature tags")
@@ -1334,6 +1355,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sm.add_argument("--model", default=None, help=_H_MODEL)
     p_sm.add_argument("--fdr-q", type=float, default=0.10, help="Benjamini-Hochberg false discovery rate")
     p_sm.add_argument("--min-support", type=int, default=5, help="minimum items in a feature slice to test it")
+    p_sm.add_argument("--use-calib", action="store_true", help=_H_USE_CALIB_SLICE)
     p_sl.set_defaults(func=_cmd_slice)
 
     # labelaudit

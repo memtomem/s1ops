@@ -133,7 +133,7 @@ s1 judge audit s1-demo/judge_grades.jsonl
 
 # 7) Distribution & Silent Model-Served Drift Monitor (PSI on raw probabilities, alerting only when a permutation test finds it significant;
 #    --calibrated compares calibrated ones and needs `calib` on every answered record of both files, from one fit per question and model;
-#    --raw-only, the 0.1.0 name of the default, cannot be combined with it; a stored `calib` is validated either way)
+#    --raw-only, the 0.1.0 name of the default, cannot be combined with it; the probabilities in a stored `calib` object are validated either way)
 s1 drift s1-demo/records.jsonl s1-demo/records_canary.jsonl --policy s1-demo/policy.json
 #    (a live canary has no `calib` yet: pass `--fit s1-demo/fits.json`, which calibrates each file in memory, as
 #    `s1 apply canary.jsonl --fit s1-demo/fits.json -o canary_calibrated.jsonl --pass-through-unfitted` writes it,

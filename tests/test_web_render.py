@@ -20,11 +20,29 @@ NO_FILES = "No shadow comparison records or judge grades found."
 NO_PAIRS = "No items shared between the two record files"
 
 
-def _functions(*names: str) -> str:
+def _script() -> str:
     html = (STATIC_DIR / "index.html").read_text()
-    script = html[html.index("<script>") + len("<script>"):html.index("</script>")]
-    bodies = (re.search(rf"(?:async )?function {n}\(.*?\n    \}}", script, re.S) for n in names)
-    return "\n".join(m.group(0) for m in bodies)
+    return html[html.index("<script>") + len("<script>"):html.index("</script>")]
+
+
+# A top-level declaration: `function` at four spaces of indent, ending at the first line that is
+# exactly four spaces and a closing brace. Every function in the page keeps that shape, and
+# tests/test_web_harness.py checks that each one extracts whole.
+DECLARATION = re.compile(r"^    (?:async\s+)?function\b\s*\*?\s*(\w+)\(.*?\n    \}$", re.M | re.S)
+
+
+def _declarations(script: str | None = None) -> list[tuple[str, str]]:
+    """(name, source) of every top-level function declaration, in page order."""
+    return [(m.group(1), m.group(0)) for m in DECLARATION.finditer(script if script is not None else _script())]
+
+
+def _all_functions(exclude: tuple[str, ...] = ("fetchJson",), script: str | None = None) -> str:
+    """Every top-level function of the page, so a function under test finds the helpers it calls.
+
+    Only declarations: the page's event wiring, startup calls and top-level `let`/`const` state are
+    not included and never run, so a test calling a function that reads that state declares it
+    (`let GROUPS = []`). `fetchJson` is left out by default because tests define their own."""
+    return "\n".join(src for name, src in _declarations(script) if name not in exclude)
 
 
 def _node(js: str) -> object:
@@ -33,13 +51,13 @@ def _node(js: str) -> object:
     return json.loads(r.stdout)
 
 
-def _load(loader: str, helpers: tuple[str, ...], payload: dict) -> str:
+def _load(loader: str, payload: dict) -> str:
     """Run an async tab loader against a payload and return the HTML it wrote to its container."""
     js = f"""
 const written = {{}};
 const document = {{getElementById: id => (written[id] ??= {{}})}};
 const fetchJson = async () => ({json.dumps(payload)});
-{_functions(loader, *helpers)}
+{_all_functions()}
 {loader}().then(() => process.stdout.write(JSON.stringify(Object.values(written).map(e => e.innerHTML))));
 """
     written = _node(js)
@@ -48,7 +66,7 @@ const fetchJson = async () => ({json.dumps(payload)});
 
 
 def _verdict(group: dict) -> str:
-    return _node(f"{_functions('esc', 'fitVerdictHtml')}\nprocess.stdout.write(JSON.stringify(fitVerdictHtml({json.dumps(group)})));")
+    return _node(f"{_all_functions()}\nprocess.stdout.write(JSON.stringify(fitVerdictHtml({json.dumps(group)})));")
 
 
 def _group(delta: list[float], after_ece: float = 0.05, p95: float = 0.10, direction: str = "no clear direction") -> dict:
@@ -107,7 +125,7 @@ def test_calibration_tab_shows_the_verdict_for_each_group(tmp_path: Path) -> Non
         )
     )
     payload = client.get("/api/audit").json()
-    html = _load("loadAudit", ("esc", "fitVerdictHtml", "renderReliabilitySvg"), payload)
+    html = _load("loadAudit", payload)
 
     cards = {}
     for card in html.split('<div class="card">')[1:]:
@@ -132,7 +150,7 @@ def _audit_noul(records: list[str], ws: dict[str, str], tmp_path: Path) -> tuple
     path.write_text("".join(line + "\n" for line in records))
     client = TestClient(create_app(workspace_dir=tmp_path / "ws", records_path=path, fits_path=ws["fits"]))
     payload = client.get("/api/audit").json()
-    html = _load("loadAudit", ("esc", "fitVerdictHtml", "renderReliabilitySvg"), payload)
+    html = _load("loadAudit", payload)
     assert len(payload["groups"]) == 1
     return payload["groups"][0], html
 
@@ -159,7 +177,7 @@ def test_calibration_tab_has_no_verdict_without_a_fit(tmp_path: Path) -> None:
     ws = generate_workspace(tmp_path / "ws")
     Path(ws["fits"]).unlink()
     payload = TestClient(create_app(workspace_dir=tmp_path / "ws")).get("/api/audit").json()
-    html = _load("loadAudit", ("esc", "fitVerdictHtml", "renderReliabilitySvg"), payload)
+    html = _load("loadAudit", payload)
     assert "No fit applied" in html
     assert "after fit" not in html
     assert "ECE (Δ" not in html
@@ -167,7 +185,7 @@ def test_calibration_tab_has_no_verdict_without_a_fit(tmp_path: Path) -> None:
 
 def _compare_tab(workspace: Path) -> str:
     payload = TestClient(create_app(workspace_dir=workspace)).get("/api/compare").json()
-    return _load("loadCompare", ("esc", "fmtKappa", "fmtP"), payload)
+    return _load("loadCompare", payload)
 
 
 def test_compare_tab_says_when_it_has_no_files(tmp_path: Path) -> None:

@@ -528,13 +528,29 @@ def test_the_documented_promotion_sequence_runs(tmp_path: Path, capsys) -> None:
     candidate_cal = probe(CANDIDATE, cal, "candidate_cal.jsonl")
     candidate_eval = probe(CANDIDATE, held, "candidate_eval.jsonl")
     flag = ["--training-manifest", m]
+    # 3b: the trainer's file, one row per manifest item, and the weights it wrote
+    train = _write(tmp_path / "train.jsonl", [{"dataset": i.dataset, "item_id": i.item_id, "state": SECRET} for i in load_manifest(m).items])
+    (tmp_path / "adapter_model.safetensors").write_bytes(b"weights")
+    run = str(tmp_path / "trainrun.json")
+    assert cli_main(["trainset", "record", m, "--data", train, "--weights", str(tmp_path / "adapter_model.safetensors"), "-o", run]) == 0
+    trainrun_id = json.loads(Path(run).read_text())["trainrun_id"]
+    shown = ["--training-run", run]
 
-    assert cli_main(["compare", current, candidate_eval, *flag]) == 0
+    capsys.readouterr()
+    assert cli_main(["compare", current, candidate_eval, *flag, *shown]) == 0
+    assert [q["shadow_trainrun_id"] for q in json.loads(capsys.readouterr().out)["questions"]] == [trainrun_id]
     fits = str(tmp_path / "fits.json")
     assert cli_main(["fit", candidate_cal, *flag, "-o", fits]) == 0
     applied = str(tmp_path / "candidate_eval_calibrated.jsonl")
     assert cli_main(["apply", candidate_eval, "--fit", fits, "-o", applied]) == 0
-    assert cli_main(["policy", "tune", applied, "--use-calib", *flag, "-o", str(tmp_path / "policy.json")]) == 0
+    capsys.readouterr()
+    policy = str(tmp_path / "policy.json")
+    assert cli_main(["policy", "tune", applied, "--use-calib", *flag, *shown, "-o", policy]) == 0
+    assert [p["trainrun_id"] for p in json.loads(capsys.readouterr().out)["policies"]] == [trainrun_id]
+    exported = tmp_path / "langfuse_export.json"
+    assert cli_main(["export", "langfuse", applied, "--policy", policy, *shown, "-o", str(exported)]) == 0
+    assert [r["trainrun_id"] for r in json.loads(exported.read_text())["training_runs"]] == [trainrun_id]
+    assert SECRET not in exported.read_text()
 
     current_fits = str(tmp_path / "current_fits.json")
     assert cli_main(["fit", current, "--split", "cal", "-o", current_fits]) == 0

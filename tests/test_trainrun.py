@@ -398,6 +398,10 @@ def _build(tmp_path: Path, run: dict, **kw):
         ({"steps": [{"loss": 0.5}]}, "steps.0: step must be a non-negative integer"),
         ({"steps": [{"step": 1}, {"step": 1}]}, "steps.1: step 1 does not follow step 1"),
         ({"steps": ["x"]}, "steps.0: Input should be a valid dictionary"),
+        ({"steps": 5}, "steps: Input should be a valid list"),
+        ({"steps": None}, "steps: Input should be a valid list"),
+        ({"steps": "abc"}, "steps.0: Input should be a valid dictionary"),
+        ({"steps": {"step": 0}}, "steps.0: Input should be a valid dictionary"),
         ({"manifest_sha256": "nope"}, "manifest.sha256: String should match pattern"),
         ({"manifest_sha256": None}, "manifest.sha256: Input should be a valid string"),
     ],
@@ -406,6 +410,12 @@ def test_the_library_refuses_what_the_reader_would(tmp_path: Path, run: dict, kw
     with pytest.raises(TrainRunError) as e:
         _build(tmp_path, run, **kw)
     assert message in str(e.value)
+
+
+def test_steps_may_come_from_any_iterable(tmp_path: Path, run: dict) -> None:
+    rows = [{"step": 0, "loss": 0.7}, {"step": 5, "loss": 0.3}]
+    assert _build(tmp_path, run, steps=iter(rows)).doc["steps"] == rows
+    assert _build(tmp_path, run, steps=iter(rows)).trainrun_id == _build(tmp_path, run, steps=rows).trainrun_id
 
 
 def test_a_weights_name_that_is_not_utf8_is_refused_by_code_point(tmp_path: Path, run: dict) -> None:

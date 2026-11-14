@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 from s1ops.contracts.records import Record, reparse, score_level
 from s1ops.contracts.schemas import PolicyEntry
+from s1ops.improve.trainrun import TrainRun, TrainRuns, runs_by_checkpoint
 from s1ops.runtime.routing import ROUTING_RULE, policy_distribution, route
 
 
@@ -118,12 +120,22 @@ def build_langfuse_events(
     policies: list[PolicyEntry] | None = None,
     annotation_candidates: list[dict[str, Any]] | None = None,
     redaction: str = "safe-v1",
+    training_runs: Sequence[TrainRun] | None = None,
 ) -> dict[str, Any]:
-    """Build Langfuse-compatible batch ingestion events (safe-v1 body-free by default)."""
+    """Build Langfuse-compatible batch ingestion events (safe-v1 body-free by default).
+
+    `training_runs` are the `s1-trainrun/1` records of checkpoints among the records' models: the
+    payload then carries each record as written (`training_runs`, by checkpoint), and every
+    observation such a checkpoint answered names its run (`metadata.trainrun_id`). Each is checked
+    as a record file is, so it holds the fields of `s1-trainrun/1` and no other, such as `state`.
+    Without any, the payload has neither."""
     if redaction != "safe-v1":
         raise ValueError(
             f"Unsupported redaction profile {redaction!r}; s1ops enforces 'safe-v1' (body-free)"
         )
+    runs: TrainRuns = {}
+    if training_runs:
+        runs = runs_by_checkpoint(training_runs, [r.model_served for r in records], "the exported records")
 
     policy_map: dict[tuple[str, str, str], PolicyEntry] = {}
     if policies:
@@ -169,6 +181,8 @@ def build_langfuse_events(
         }
         if info["routing_rule"] is not None:
             obs["metadata"]["routing_rule"] = info["routing_rule"]
+        if r.model_served in runs:
+            obs["metadata"]["trainrun_id"] = runs[r.model_served].trainrun_id
         observations.append(obs)
 
         dataset_run_items.append(
@@ -236,7 +250,7 @@ def build_langfuse_events(
                 }
             )
 
-    return {
+    payload: dict[str, Any] = {
         "schema": "s1-langfuse-export/1",
         "redaction": "safe-v1",
         "run_name": run_name,
@@ -251,6 +265,10 @@ def build_langfuse_events(
         "scores": scores,
         "annotation_queue_items": queue_items,
     }
+    if runs:
+        payload["summary"]["n_training_runs"] = len(runs)
+        payload["training_runs"] = [dict(run.doc) for run in runs.values()]
+    return payload
 
 
 def export_langfuse_file(
@@ -260,6 +278,7 @@ def export_langfuse_file(
     run_name: str = "s1ops-eval",
     policies: list[PolicyEntry] | None = None,
     annotation_candidates: list[dict[str, Any]] | None = None,
+    training_runs: Sequence[TrainRun] | None = None,
 ) -> dict[str, Any]:
     """Write Langfuse export bundle to disk and return the payload."""
     payload = build_langfuse_events(
@@ -268,6 +287,7 @@ def export_langfuse_file(
         policies=policies,
         annotation_candidates=annotation_candidates,
         redaction="safe-v1",
+        training_runs=training_runs,
     )
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)

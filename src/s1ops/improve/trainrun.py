@@ -17,7 +17,7 @@ import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -58,6 +58,8 @@ class TrainRun:
     trainrun_id: str
     checkpoint: str
     doc: Mapping[str, object]
+    path: str | Path | None = field(default=None, kw_only=True, repr=False, compare=False)
+    """The file `load_trainrun` read this from; `None` for one just built. Errors about it name it."""
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -347,7 +349,7 @@ def build_trainrun(
         "weights_sha256": dict(sorted(digests.items())),
         "trainer": _plain(trainer),
         "summary": _plain(summary),
-        "steps": [_plain(s) for s in steps],
+        "steps": _plain_rows(steps),
         "parent": None if parent is None else {"trainrun_id": parent.trainrun_id, "checkpoint": parent.checkpoint},
         "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
@@ -365,6 +367,11 @@ def _plain(value: object) -> object:
     return dict(value) if isinstance(value, Mapping) else value
 
 
+def _plain_rows(rows: object) -> object:
+    """A caller's step rows as a list; a value that cannot be iterated is left for `_check_doc` to refuse."""
+    return [_plain(row) for row in rows] if isinstance(rows, Iterable) else rows
+
+
 def save_trainrun(run: TrainRun, path: str | Path) -> None:
     # Encoded before the file is opened, so a value that cannot be written leaves the old file in place.
     data = (json.dumps(run.doc, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
@@ -376,9 +383,57 @@ def load_trainrun(path: str | Path) -> TrainRun:
     """A record `save_trainrun` wrote: the fields `build_trainrun` writes and no others, with a
     `trainrun_id` that matches them. A malformed one raises `TrainRunError` naming `path`."""
     doc = read_json_file(path, TrainRunError)
+    _check_record(doc, path)
+    return TrainRun(trainrun_id=doc["trainrun_id"], checkpoint=doc["checkpoint"], doc=doc, path=path)
+
+
+def _check_record(doc: object, where: str | Path) -> None:
+    """A whole record: the schema, `_check_doc`, and a `trainrun_id` that matches the contents."""
     if not isinstance(doc, dict) or doc.get("schema") != TRAINRUN_SCHEMA:
-        raise TrainRunError(f"{path}: not a {TRAINRUN_SCHEMA} file")
-    _check_doc(doc, _Record, path)
+        raise TrainRunError(f"{where}: not a {TRAINRUN_SCHEMA} file")
+    _check_doc(doc, _Record, where)
     if _trainrun_id(doc) != doc["trainrun_id"]:
-        raise TrainRunError(f"{path}: trainrun_id {doc['trainrun_id']} does not match the record's contents")
-    return TrainRun(trainrun_id=doc["trainrun_id"], checkpoint=doc["checkpoint"], doc=doc)
+        raise TrainRunError(f"{where}: trainrun_id {doc['trainrun_id']} does not match the record's contents")
+
+
+TrainRuns = Mapping[str, TrainRun]
+"""`checkpoint -> the record of the run that produced it`."""
+
+
+def runs_by_checkpoint(runs: Iterable[TrainRun], served: Iterable[str | None], where: str) -> TrainRuns:
+    """`runs` keyed by the checkpoint each produced, for a report or export that names them.
+
+    Each is checked as `load_trainrun` checks a file, so one built by hand cannot put into an export
+    what a record may not hold. `served` holds the `model_served` of every row in the input named
+    `where`, before any filter: a record whose checkpoint is not among them is refused, as a
+    manifest is (`load_trained`), since no row would show its id. Two records for one checkpoint
+    are refused unless they are the same run: a checkpoint name names one set of weights."""
+    names = set(served)
+    out: dict[str, TrainRun] = {}
+    for run in runs:
+        source = run.path if run.path is not None else "the training-run record"
+        doc = run.doc
+        _check_record(doc, source)
+        if (run.trainrun_id, run.checkpoint) != (doc["trainrun_id"], doc["checkpoint"]):
+            raise TrainRunError(
+                f"{source}: given as {run.trainrun_id} for {run.checkpoint!r}, "
+                f"but its record is {doc['trainrun_id']} for {doc['checkpoint']!r}"
+            )
+        if run.checkpoint not in names:
+            raise TrainRunError(
+                f"{source}: checkpoint {run.checkpoint!r} answered no record in {where}; "
+                f"its answered models are {sorted(n for n in names if n is not None)}"
+            )
+        first = out.setdefault(run.checkpoint, run)
+        if first.trainrun_id != run.trainrun_id:
+            other = first.path if first.path is not None else "another record"
+            raise TrainRunError(
+                f"{source}: {run.trainrun_id} is a second run for checkpoint {run.checkpoint!r}, "
+                f"after {first.trainrun_id} in {other}; name each checkpoint once"
+            )
+    return dict(sorted(out.items()))
+
+
+def load_trainruns(paths: Sequence[str | Path], served: Iterable[str | None], where: str) -> TrainRuns:
+    """`runs_by_checkpoint` over the records at `paths`."""
+    return runs_by_checkpoint([load_trainrun(path) for path in paths], served, where)

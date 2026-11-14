@@ -919,8 +919,8 @@ _PROMOTE_FILES = {
 }
 
 
-def _answered_models(path: str) -> set[str]:
-    return {r.model_served for r in read_records(path) if r.model_served is not None}
+def _answered(path: str) -> list[Record]:
+    return [r for r in read_records(path) if r.model_served is not None]
 
 
 def _promote_step(name: str, run, skeleton: list[str], **values: Any) -> dict[str, Any]:
@@ -946,20 +946,23 @@ def _cmd_promote(args: argparse.Namespace) -> int:
         if not stat.S_ISREG(os.stat(path).st_mode):
             raise CliError(f"{path}: more than one step reads each input, so it must be a regular file")
     out_dir = Path(args.output)
+    if out_dir.exists() and not out_dir.is_dir():
+        raise CliError(f"--output {out_dir} is not a directory; the promotion's files are written into it")
     out = {key: out_dir / name for key, name in _PROMOTE_FILES.items()}
     for path in out.values():
         for other in inputs:
             if path.exists() and path.samefile(other):
                 raise CliError(f"--output {out_dir} would write {path}, which is the input {other}")
 
-    served = {path: _answered_models(path) for path in (args.cal, args.eval)}
+    evaluated = _answered(args.eval)
+    served = {args.cal: {r.model_served for r in _answered(args.cal)}, args.eval: {r.model_served for r in evaluated}}
     for path, names in served.items():
         if len(names) != 1:
             raise CliError(f"{path}: a candidate's records are answered by one model, and these name {sorted(names)}")
     (candidate,) = served[args.cal]
     if served[args.eval] != {candidate}:
         raise CliError(f"{args.eval}: answered by {sorted(served[args.eval])}, and {args.cal} by {candidate!r}; both are the candidate's")
-    current_models = _answered_models(args.current)
+    current_models = {r.model_served for r in _answered(args.current)}
     if candidate in current_models:
         raise CliError(f"{args.current}: holds answers of the candidate {candidate!r}; it is the model in place that is compared with it")
     # Each step refuses a manifest or record whose checkpoint answered nothing in its input, so the
@@ -980,6 +983,14 @@ def _cmd_promote(args: argparse.Namespace) -> int:
     )  # fmt: skip
     if not compared["shared_pairs"]:
         raise CliError(f"promote: compare: no item of {args.eval} was answered in {args.current}; nothing would be compared")
+    # `compare` and `drift` report the questions both files hold and say nothing of the rest, while
+    # `fit` and `policy tune` would compile a policy for every question of the candidate's files.
+    uncompared = sorted({r.question_id for r in evaluated} - {q["question_id"] for q in compared["questions"]})
+    if uncompared:
+        raise CliError(
+            f"promote: compare: {len(uncompared)} question(s) of {args.eval} share no item with {args.current}, first {uncompared[0]}; "
+            "a policy would be compiled for a question the candidate was never compared on"
+        )
     drift = _promote_step("drift", _drift, ["drift", "-", "-"], reference=args.current, current=args.eval)
     # Nothing is written before this line; a step that fails after it leaves the files of the steps before it.
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1748,7 +1759,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_tsr.add_argument("--weights", action="append", required=True, help="a weights file the run wrote (adapter, head, model), recorded by name and SHA-256; repeatable")
     p_tsr.add_argument("--trainer", default=None, help="JSON object of trainer settings (strings, numbers, booleans, null; flatten nested ones); none may be named `state`, and keep paths and text out")
-    p_tsr.add_argument("--summary", default=None, help="JSON object of summary metrics, such as wall_seconds, peak memory or a temperature the trainer kept")
+    p_tsr.add_argument("--summary", default=None, help="JSON object of summary metrics, such as wall_seconds, peak memory or a temperature the trainer kept; none may be named `state`")
     p_tsr.add_argument("--steps", default=None, help="JSONL of per-step metrics: an increasing integer `step` and other finite numbers (`epoch`, `loss`, ...)")
     p_tsr.add_argument("--parent-run", default=None, help="record of the run this checkpoint started from, from `s1 trainset record`")
     p_tsr.set_defaults(func=_cmd_trainset_record)

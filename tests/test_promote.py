@@ -241,6 +241,18 @@ def test_nothing_shared_with_the_model_in_place_is_refused(ws: dict, tmp_path: P
     assert not out.exists()
 
 
+def test_a_question_the_model_in_place_never_answered_is_refused(ws: dict, tmp_path: Path, capsys) -> None:
+    """A question added, or reworded, since the model in place was probed: `compare` and `drift`
+    would skip it, and `replaceable` would speak for a policy nothing was compared on."""
+    new_qid = "q-" + "0" * 16
+    with_new = {key: _write(tmp_path / f"{key}_two.jsonl", [*_rows(ws[key]), *({**r, "question_id": new_qid} for r in _rows(ws[key]))]) for key in ("cal", "eval")}
+    out = tmp_path / "promotion"
+    assert _promote(ws, out, **with_new) == 1
+    err = capsys.readouterr().err
+    assert err.startswith(f"s1: promote: compare: 1 question(s) of {with_new['eval']} share no item with {ws['current']}, first {new_qid}")
+    assert not out.exists()
+
+
 # ---- inputs and outputs ----
 
 
@@ -266,6 +278,14 @@ def test_the_output_directory_cannot_hold_an_input_under_an_output_name(ws: dict
     assert _promote(ws, out, eval=str(clash)) == 1
     assert capsys.readouterr().err == f"s1: --output {out} would write {clash}, which is the input {clash}\n"
     assert clash.read_text() == Path(ws["eval"]).read_text()
+
+
+def test_an_output_that_is_a_file_is_refused_before_any_step(ws: dict, tmp_path: Path, capsys) -> None:
+    out = tmp_path / "taken"
+    out.write_text("not a directory")
+    assert _promote(ws, out) == 1
+    assert capsys.readouterr().err == f"s1: --output {out} is not a directory; the promotion's files are written into it\n"
+    assert out.read_text() == "not a directory"
 
 
 def test_a_second_run_into_the_directory_replaces_the_first(ws: dict, tmp_path: Path, capsys) -> None:

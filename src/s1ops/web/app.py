@@ -273,6 +273,7 @@ def create_app(
     def api_audit(
         question_id: str | None = Query(default=None),
         model_served: str | None = Query(default=None),
+        primitive: str | None = Query(default=None),
         n_boot: int = Query(default=200, ge=20, le=2000),
     ) -> dict[str, Any]:
         records = _get_records(use_calib=False)
@@ -285,6 +286,8 @@ def create_app(
             if question_id and grp.question_id != question_id:
                 continue
             if model_served and grp.model_served != model_served:
+                continue
+            if primitive and grp.primitive != primitive:
                 continue
             fit = fit_for(fits, grp.key)
             after_P = (
@@ -454,6 +457,7 @@ def create_app(
     def api_slices(
         question_id: str | None = Query(default=None),
         model_served: str | None = Query(default=None),
+        primitive: str | None = Query(default=None),
         fdr_q: float = Query(default=0.10, ge=0.001, le=0.50),
         use_calib: bool = Query(default=False),
     ) -> dict[str, Any]:
@@ -475,6 +479,8 @@ def create_app(
             model_served=model_served,
             raw=not use_calib,
         )
+        if primitive:
+            groups = [g for g in groups if g.key[2] == primitive]
         if use_calib:
             # What `s1 slice --use-calib` refuses in the groups reported (`s1 policy tune --use-calib`'s rule).
             by_key = {g.key: g for g in sel.groups}
@@ -500,10 +506,23 @@ def create_app(
     @app.get("/api/labelaudit")
     def api_labelaudit(
         top_k: int = Query(default=15, ge=1, le=100),
+        question_id: str | None = Query(default=None),
+        model_served: str | None = Query(default=None),
+        primitive: str | None = Query(default=None),
     ) -> dict[str, Any]:
         records = _get_records(use_calib=False)
         if not records:
             return {"top_flags": [], "skipped": {}}
+        # One group's records, chosen before ranking, as `s1 labelaudit rank --question --model`
+        # does: the ranking, its class balance, the top k and the skip counts are all the group's.
+        # An empty value is no filter, as for /api/audit. A served-model filter drops unanswered
+        # records, which have no model.
+        records = [
+            r for r in records
+            if (not question_id or r.question_id == question_id)
+            and (not model_served or r.model_served == model_served)
+            and (not primitive or r.primitive == primitive)
+        ]
         # A fits.json that exists means calibrate, even with no fits in it; only a missing one ranks raw.
         fits = _get_fits() if _present(fit_file) else None
         raw_rows = [r.raw for r in records]

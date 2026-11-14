@@ -83,7 +83,8 @@ def test_the_noul_simulation_is_unchanged(ws) -> None:
 def test_index_html_wires_the_picker_and_drift_escalation() -> None:
     html = (STATIC_DIR / "index.html").read_text()
     assert 'id="inp-group"' in html
-    assert 'fetchJson("/api/groups").then(d => fillGroupPicker(d.groups))' in html
+    # The picker is filled from /api/groups alone (only the latest request's answer is applied).
+    assert re.search(r'fetchJson\("/api/groups"\)\s*\.then\(d => \{ if \(seq === groupsSeq\) fillGroupPicker\(d\.groups\); \}\)', html)
     for param in ("question_id", "model_served", "primitive"):
         assert f'params.set("{param}", picked.{param})' in html
     assert "fmtRate(q.escalation_rate_ref)" in html and "fmtRate(q.escalation_rate_cur)" in html

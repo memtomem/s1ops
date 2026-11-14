@@ -53,6 +53,8 @@ from s1ops.runtime.routing import RoutingInputError
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+SLICE_MIN_N = 10
+"""Slices with fewer items are reported but never answerable (`/api/slices`, `s1 slice answerable --min-n`'s default is 10 too)."""
 
 def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Run one input-reading or input-validation call; a malformed or unreadable input becomes
@@ -462,7 +464,7 @@ def create_app(
 
         distribution = "calibrated" if use_calib else "raw"
         if not records:
-            return {"distribution": distribution, "groups": []}
+            return {"distribution": distribution, "min_n": SLICE_MIN_N, "groups": []}
         # Refuses a repeated item or differing classes in any group (400), before the filters.
         sel = _select(records)
         groups = slice_inputs_by_group(
@@ -484,10 +486,11 @@ def create_app(
                     raise HTTPException(status_code=400, detail=f"{rec_file.name}: {e}") from None
         return {
             "distribution": distribution,
+            "min_n": SLICE_MIN_N,
             "groups": [
                 {
                     **g.header(),
-                    "answerability": [s.as_dict() for s in slice_report(g.items, min_n=10)],
+                    "answerability": [s.as_dict() for s in slice_report(g.items, min_n=SLICE_MIN_N)],
                     "error_slices": [e.as_dict() for e in mine_error_slices(g.rows, min_support=5, fdr_q=fdr_q)],
                 }
                 for g in groups

@@ -228,7 +228,7 @@
       <div class="controls">
         <div class="control-group">
           <label>Group (question_id · model_served · primitive)</label>
-          <select id="inp-group"><option value="">First noul group</option></select>
+          <select id="inp-group"><option value="">Default group (first noul, else first)</option></select>
         </div>
         <div class="control-group">
           <label>Probabilities</label>
@@ -251,7 +251,7 @@
           <input type="number" id="inp-cost-s2" value="0.004" step="0.001" min="0.0001" />
         </div>
         <div class="control-group">
-          <label>Error Budget (1 - Precision)</label>
+          <label>Error budget (error rate among accepted answers)</label>
           <input type="number" id="inp-err-budget" value="0.10" step="0.02" min="0.01" max="0.50" />
         </div>
       </div>
@@ -300,9 +300,36 @@
       return k === null || k === undefined ? "N/A" : k.toFixed(3);
     }
 
+    // A p- or q-value to four places; under 0.0001 as "< 0.0001", never as an exact zero.
+    function fmtP(p) {
+      if (p === null || p === undefined) return "N/A";
+      return p < 0.0001 ? "&lt; 0.0001" : p.toFixed(4);
+    }
+
     // A rate in [0, 1] as a percentage; null (no policy for the group) as "N/A".
     function fmtRate(r) {
       return r === null || r === undefined ? "N/A" : (r * 100).toFixed(1) + "%";
+    }
+
+    // A slice's answerability: `improve/slices.py` marks it answerable when n >= min_n and the
+    // accuracy CI's lower end is above the null CI's upper end. Every other case is worded for what
+    // decided it, since "below" was false for a slice above the null whose CIs overlap.
+    function answerabilityBadge(m, minN) {
+      let cls, text;
+      if (m.answerable) [cls, text] = ["badge-ok", "ANSWERABLE"];
+      else if (m.n < minN) [cls, text] = ["badge-info", `TOO FEW (n &lt; ${Number(minN)})`];
+      else if (m.ci[1] < m.null_ci[0]) [cls, text] = ["badge-err", "BELOW NULL"];
+      else [cls, text] = ["badge-warn", "NOT DISTINGUISHABLE FROM NULL"];
+      return `<span class="badge ${cls}">${text}</span>`;
+    }
+
+    // The band's handles cannot cross: moving one past the other pushes the other along, so the
+    // labels and the request always show the band evaluated (the server sorts a crossed pair).
+    function pushBand(changedId) {
+      const lo = document.getElementById("inp-tau-low"), hi = document.getElementById("inp-tau-high");
+      if (parseFloat(lo.value) <= parseFloat(hi.value)) return;
+      if (changedId === "inp-tau-low") hi.value = lo.value;
+      else lo.value = hi.value;
     }
 
     function showError(containerId, err) {
@@ -439,7 +466,7 @@
               </div>
               <div>
                 <div class="sub">Calibrated ECE / Brier / LogLoss</div>
-                <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : bef.brier.toFixed(4)}</span></div>
+                <div class="kpi">${aft ? aft.ece_mass.toFixed(4) : 'N/A'} <span class="sub">/ Brier ${aft ? aft.brier.toFixed(4) : 'N/A'} / LogLoss ${aft ? aft.log_loss.toFixed(4) : 'N/A'}</span></div>
                 <span class="sub">${g.fit ? `Fit: ${esc(g.fit.method)} (NLL ${g.fit.nll_before.toFixed(3)} → ${g.fit.nll_after.toFixed(3)})` : 'No fit applied'}</span>
                 ${fitVerdictHtml(g)}
               </div>
@@ -508,6 +535,11 @@
       if (seq !== policySeq) return;
       const t = d.tuned_threshold;
       const distLine = `<div class="sub">On ${esc(d.distribution || 'unknown')} probabilities</div>`;
+      // The simulator's threshold is the one `s1 policy tune` writes for the same group, budget and
+      // distribution (by empirical error rate; the simulator has no --use-cp-upper). A noul policy
+      // routes by it only under --noul-routing threshold; the default band is not bounded by it.
+      const tuneFlags = (d.band_supported ? " --noul-routing threshold" : "") + (d.distribution === "calibrated" ? " --use-calib" : "");
+      const thresholdNote = `The cutoff <code>s1 policy tune${tuneFlags}</code> writes for this group and budget (empirical error rate)${d.band_supported ? "; it does not bound the escalation band" : ""}.`;
       const thresholdHtml = `
             <div>
               <div class="sub">Error-Budget Threshold (budget ≤ ${(budget*100).toFixed(0)}%)</div>
@@ -515,6 +547,7 @@
               <span class="badge ${t.threshold !== null ? 'badge-ok' : 'badge-warn'}">
                 ${t.threshold !== null ? 'Feasible' : 'No threshold meets error budget'}
               </span>
+              <div class="sub">${thresholdNote}</div>
             </div>`;
       const b = d.band_supported ? d.active_band : null;
       // The band sliders only mean something for a noul group.
@@ -594,7 +627,10 @@
     }
 
     ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
-      document.getElementById(id).addEventListener("input", () => run(loadPolicy, "policy-container"));
+      document.getElementById(id).addEventListener("input", () => {
+        if (id === "inp-tau-low" || id === "inp-tau-high") pushBand(id);
+        run(loadPolicy, "policy-container");
+      });
     });
     ["inp-group", "inp-dist"].forEach(id => {
       document.getElementById(id).addEventListener("change", () => run(loadPolicy, "policy-container"));
@@ -654,6 +690,7 @@
       const groups = sData.groups || [];
       // `/api/slices` predicts from raw probabilities unless asked for `use_calib`.
       const dist = esc(sData.distribution || 'unknown');
+      const minN = sData.min_n;
 
       document.getElementById("slices-container").innerHTML = `
         ${groups.length ? '' : '<div class="card">No labeled groups found in workspace.</div>'}
@@ -668,10 +705,10 @@
         <div class="grid-2">
           <div class="card">
             <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
-            <div class="sub">Predictions from ${dist} probabilities</div>
+            <div class="sub">Predictions from ${dist} probabilities. Answerable: n ≥ ${Number(minN)} and the accuracy CI's lower end above the null CI's upper end.</div>
             <table>
               <thead>
-                <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${esc(slices[0] ? slices[0].null_kind : 'majority')})</th><th>Answerable</th></tr>
+                <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${esc(slices[0] ? slices[0].null_kind : 'majority')}, 95% CI)</th><th>Answerable</th></tr>
               </thead>
               <tbody>
                 ${slices.map(m => `
@@ -679,8 +716,8 @@
                     <td class="mono">${esc(m.slice)}</td>
                     <td class="mono">${m.n}</td>
                     <td class="mono">${(m.accuracy * 100).toFixed(1)}% [${(m.ci[0]*100).toFixed(1)}%, ${(m.ci[1]*100).toFixed(1)}%]</td>
-                    <td class="mono">${(m.null_accuracy * 100).toFixed(1)}%</td>
-                    <td><span class="badge ${m.answerable ? 'badge-ok' : 'badge-warn'}">${m.answerable ? 'ANSWERABLE' : 'BELOW NULL CI'}</span></td>
+                    <td class="mono">${(m.null_accuracy * 100).toFixed(1)}% [${(m.null_ci[0]*100).toFixed(1)}%, ${(m.null_ci[1]*100).toFixed(1)}%]</td>
+                    <td>${answerabilityBadge(m, minN)}</td>
                   </tr>
                 `).join('')}
               </tbody>
@@ -701,7 +738,7 @@
                     <td class="mono">${(e.slice_error_rate * 100).toFixed(1)}%</td>
                     <td class="mono">${(e.rest_error_rate * 100).toFixed(1)}%</td>
                     <td class="mono">${e.odds_ratio !== null ? e.odds_ratio.toFixed(2) : 'N/A'}</td>
-                    <td class="mono">${e.q_value.toFixed(4)}</td>
+                    <td class="mono">${fmtP(e.q_value)}</td>
                     <td><span class="badge ${e.significant ? 'badge-err' : 'badge-ok'}">${e.significant ? 'SIGNIFICANT' : 'ns'}</span></td>
                   </tr>
                 `).join('')}
@@ -755,7 +792,7 @@
             </div>
             <div>
               <div class="sub">McNemar Exact Test (Holm Adjusted)</div>
-              <div class="kpi">p_holm = ${q.mcnemar ? q.mcnemar.p_holm.toFixed(4) : 'N/A'}</div>
+              <div class="kpi">p_holm = ${q.mcnemar ? fmtP(q.mcnemar.p_holm) : 'N/A'}</div>
               <span class="sub">${q.mcnemar ? `Discordant wins: ${q.mcnemar.a_only} vs ${q.mcnemar.b_only}` : ''}</span>
             </div>
           </div>

@@ -167,7 +167,7 @@ def test_calibration_tab_has_no_verdict_without_a_fit(tmp_path: Path) -> None:
 
 def _compare_tab(workspace: Path) -> str:
     payload = TestClient(create_app(workspace_dir=workspace)).get("/api/compare").json()
-    return _load("loadCompare", ("esc", "fmtKappa"), payload)
+    return _load("loadCompare", ("esc", "fmtKappa", "fmtP"), payload)
 
 
 def test_compare_tab_says_when_it_has_no_files(tmp_path: Path) -> None:

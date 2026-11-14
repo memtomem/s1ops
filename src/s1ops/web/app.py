@@ -21,7 +21,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from s1ops import __version__
-from s1ops.contracts.records import GroupKey, Record, read_records, select
+from s1ops.contracts.records import GroupKey, Record, has_calib, read_records, select
 from s1ops.contracts.schemas import load_policies
 from s1ops.eval.audit import audit_group
 from s1ops.eval.compare import CompareInputError, compare_records
@@ -319,9 +319,12 @@ def create_app(
         cost_s1: float = Query(default=0.00004, ge=0.0, allow_inf_nan=False),
         cost_sys2: float = Query(default=0.004, ge=0.0, allow_inf_nan=False),
         error_budget: float = Query(default=0.10, ge=0.0, le=1.0),
-        use_calib: bool = Query(default=True),
+        use_calib: bool | None = Query(default=None),
     ) -> dict[str, Any]:
-        records = _get_records(use_calib=use_calib)
+        # Unset (auto): calibrated when any record tuned into the chosen group carries `calib`, raw
+        # when none does. Auto reads calibrated, so a group without any `calib` parses to its raw
+        # distribution already; explicit false reads raw, as before auto existed.
+        records = _get_records(use_calib=use_calib is not False)
         if not records:
             raise HTTPException(status_code=404, detail="No records loaded")
 
@@ -338,6 +341,9 @@ def create_app(
         # With no filter, open on a noul group, the only kind the band simulation applies to.
         filtered = question_id is not None or model_served is not None or primitive is not None
         chosen_grp = matching[0] if filtered else next((g for g in matching if g.primitive == "noul"), matching[0])
+        if use_calib is None:
+            tuned = tuned_rows(records)[chosen_grp.key]
+            use_calib = any(has_calib(r.raw, chosen_grp.primitive) for r in tuned)
         if use_calib:
             # What `s1 policy tune --use-calib` refuses: a record tuned on its raw distribution, or a
             # group calibrated through more than one fit.
@@ -364,6 +370,7 @@ def create_app(
                 "primitive": chosen_grp.primitive,
                 "n": chosen_grp.n,
             },
+            "distribution": "calibrated" if use_calib else "raw",
             "band_supported": chosen_grp.primitive == "noul",
             "active_band": None,
             "tuned_threshold": {

@@ -737,11 +737,14 @@ def test_cli_failure_before_any_request_keeps_previous_output(probe_files, live,
     assert probe_files["out"].read_text() == "previous paid results\n"
 
 
-def test_cli_empty_states_leave_an_empty_output(probe_files, capsys) -> None:
+def test_cli_empty_states_are_refused_and_keep_previous_output(probe_files, live, capsys) -> None:
     probe_files["out"].write_text("old\n", encoding="utf-8")
     probe_files["states"].write_text("", encoding="utf-8")
-    assert probe(probe_files) == 0
-    assert probe_files["out"].read_text() == ""
+    assert probe(probe_files, "--backend", "systemone", "--model", "jev-1.13.0", "--usd-per-input-token", "1e-7") == 1
+    assert capsys.readouterr().err == f"s1: {probe_files['states']}: holds no state rows, so the probe would send nothing\n"
+    assert live.bodies == []
+    assert probe_files["out"].read_text() == "old\n"
+    assert not probe_files["ledger"].exists()
 
 
 def test_cli_mock_probe_unchanged(probe_files, capsys) -> None:

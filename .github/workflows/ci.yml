@@ -35,6 +35,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install (fails if uv.lock is stale)
         run: uv sync --all-extras --locked
+      # The web page's renderers are tested in node, and those tests skip when node is absent;
+      # the runner image ships node, and this step fails rather than let them skip.
+      - name: Node is present
+        run: node --version
       - name: Test
         run: uv run --locked pytest -v
       - name: Smoke - lint the generated demo questions

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from s1ops.demo import generate_workspace
 from s1ops.web.app import STATIC_DIR, create_app
-from tests.test_web_render import _functions, _load, _node
+from tests.test_web_render import _all_functions, _load, _node
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to run the page's functions")
 
@@ -28,7 +28,7 @@ def ws(tmp_path_factory) -> dict:
 
 
 def _call(fn: str, *args) -> object:
-    js = f"{_functions(fn)}\nprocess.stdout.write(JSON.stringify({fn}(...{json.dumps(list(args))})));"
+    js = f"{_all_functions()}\nprocess.stdout.write(JSON.stringify({fn}(...{json.dumps(list(args))})));"
     return _node(js)
 
 
@@ -66,7 +66,7 @@ def test_slices_tab_shows_the_null_ci_and_the_rule(ws) -> None:
 const written = {{}};
 const document = {{getElementById: id => (written[id] ??= {{}})}};
 const fetchJson = async url => url === "/api/slices" ? {json.dumps(s)} : {json.dumps(la)};
-{_functions("loadSlicesAndLabels", "esc", "answerabilityBadge", "fmtP")}
+{_all_functions()}
 loadSlicesAndLabels().then(() => process.stdout.write(JSON.stringify(written["slices-container"].innerHTML)));
 """
     html = _node(js)
@@ -96,7 +96,7 @@ Object.assign(el("inp-group"), {{value: ""}});
 const document = {{getElementById: el, querySelectorAll: () => [el("band-a"), el("band-b")]}};
 const urls = [];
 const fetchJson = async url => {{ urls.push(url); return {json.dumps(payload)}; }};
-{_functions("esc", "pushBand", "loadPolicy")}
+{_all_functions()}
 {f"pushBand({json.dumps(moved)});" if moved else ""}
 loadPolicy().then(() => process.stdout.write(JSON.stringify({{
   lo: el("inp-tau-low").value, hi: el("inp-tau-high").value,
@@ -176,13 +176,12 @@ def test_fmt_p(p, shown) -> None:
 
 def test_the_calibrated_card_shows_logloss_and_nothing_raw_without_a_fit(tmp_path: Path) -> None:
     w = generate_workspace(tmp_path / "ws")
-    helpers = ("esc", "fitVerdictHtml", "renderReliabilitySvg")
     fitted = TestClient(create_app(tmp_path / "ws")).get("/api/audit").json()
     log_loss = fitted["groups"][0]["after"]["log_loss"]
-    assert f"/ LogLoss {log_loss:.4f}" in _load("loadAudit", helpers, fitted)
+    assert f"/ LogLoss {log_loss:.4f}" in _load("loadAudit", fitted)
     Path(w["fits"]).unlink()
     unfitted = TestClient(create_app(tmp_path / "ws")).get("/api/audit").json()
-    html = _load("loadAudit", helpers, unfitted)
+    html = _load("loadAudit", unfitted)
     assert re.search(r'Calibrated ECE / Brier / LogLoss</div>\s*<div class="kpi">N/A <span class="sub">/ Brier N/A / LogLoss N/A</span>', html)
 
 
@@ -190,7 +189,7 @@ def test_the_compare_tab_prints_a_tiny_p_as_below_its_resolution(ws) -> None:
     payload = TestClient(create_app(Path(ws["records"]).parent)).get("/api/compare").json()
     p_values = [q["mcnemar"]["p_holm"] for q in payload["shadow"]["questions"] if q.get("mcnemar")]
     assert p_values and min(p_values) < 0.0001  # the demo's case
-    assert "p_holm = &lt; 0.0001" in _load("loadCompare", ("esc", "fmtKappa", "fmtP"), payload)
+    assert "p_holm = &lt; 0.0001" in _load("loadCompare", payload)
 
 
 def test_the_default_group_entry_says_what_it_picks() -> None:

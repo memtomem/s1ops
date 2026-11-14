@@ -535,7 +535,8 @@ class Correction:
     dataset: str | None
     item_id: str
     question_id: str
-    arm: str
+    arm: str | None
+    """`flag` or `control` for a sheet's item; None for a review pulled from Langfuse, which has no arms."""
     label_from: bool | int | str
     label_to: bool | int | str
 
@@ -616,7 +617,7 @@ def patch_labels(records: Sequence[Record], form: str, key: Mapping) -> LabelPat
     primitive, classes = asked[0].primitive, asked[0].classes
     named = {str(c): c for c in classes}
 
-    reviewed: dict[tuple[Identity, str], _PatchKeyItem] = {}
+    reviewed: dict[tuple[Identity, str], _Review] = {}
     for item in doc.items:
         if item.question_id != doc.question_id:
             raise LabelPatchError(f"item {item.n} is for question {item.question_id}, the key for {doc.question_id}", "key")
@@ -627,8 +628,34 @@ def patch_labels(records: Sequence[Record], form: str, key: Mapping) -> LabelPat
         at = ((item.dataset, item.item_id), item.question_id)
         if at in reviewed:
             raise LabelPatchError(f"items {reviewed[at].n} and {item.n} are both {at[0]!r}; a sheet shows each item once", "key")
-        reviewed[at] = item
+        reviewed[at] = _Review(item.label, answers[str(item.n)], named, primitive, classes, item.arm, f"item {item.n} of the key", "key", item.n)
+    return _relabel(records, reviewed, "the sheet")
 
+
+@dataclass(frozen=True)
+class _Review:
+    """One reviewed item of one question: the label the review was of, the reviewer's answer (both
+    as the options write them), and what turns them into the question's classes."""
+
+    old: str
+    answer: str
+    named: Mapping[str, bool | int | str]
+    primitive: str
+    classes: tuple
+    arm: str | None
+    where: str
+    """Where the review is, for an error: `item 3 of the key`, `score <id>`."""
+    source: str
+    """The input a bad answer belongs to, as `LabelPatchError.source` names it."""
+    n: int = 0
+
+
+def _relabel(records: Sequence[Record], reviewed: Mapping[tuple[Identity, str], _Review], made_from: str) -> LabelPatch:
+    """The one rule for applying reviews to records (`patch_labels`, `pull_labels`). Where an
+    answer differs from the label the review was of, every labeled row of that item and question
+    takes it, whichever model answered it, and a row whose probe failed as well. A row labeled
+    neither the reviewed label nor the answer, or a reviewed item with no labeled record, is
+    refused: these are not the records the review was of. Rows are copied without `state`."""
     seen: set[tuple[Identity, str]] = set()
     corrections: dict[tuple[Identity, str], Correction] = {}
     rows: list[dict] = []
@@ -636,45 +663,233 @@ def patch_labels(records: Sequence[Record], form: str, key: Mapping) -> LabelPat
     for r in records:
         row = without_state(r.raw)
         at = (r.item, r.question_id)
-        item = reviewed.get(at)
+        review = reviewed.get(at)
         # A probe that failed still wrote the item's label, which the parser does not read.
         label = r.label if r.model_served is not None else r.raw.get("label")
-        if item is not None and label is not None:
+        if review is not None and label is not None:
             if r.model_served is not None:
                 seen.add(at)
             else:
-                problem = label_problem(primitive, label, classes)
+                problem = label_problem(review.primitive, label, review.classes)
                 if problem is not None:
                     raise RecordError(r.line, problem, r.path)
-            answer = answers[str(item.n)]
-            old, new = named[item.label], named[answer]
-            if str(label) not in (item.label, answer):
+            old, new = review.named[review.old], review.named[review.answer]
+            if str(label) not in (review.old, review.answer):
                 raise RecordError(
                     r.line,
-                    f"item {r.item} is labeled {label!r}, and the review was of the label {old!r} (item {item.n} of the key); "
-                    "these are not the records the sheet was built from",
+                    f"item {r.item} is labeled {label!r}, and the review was of the label {old!r} ({review.where}); "
+                    f"these are not the records {made_from} was built from",
                     r.path,
                 )
-            if answer != item.label:
-                if str(label) == answer:
+            if review.answer != review.old:
+                if str(label) == review.answer:
                     already += 1
                 else:
-                    problem = label_problem(primitive, new, classes)
-                    if problem is not None:  # the options are the classes, so only a hand-made key gets here
-                        raise LabelPatchError(f"item {item.n}: {problem}", "key")
+                    problem = label_problem(review.primitive, new, review.classes)
+                    if problem is not None:  # the options are the classes, so only a hand-made input gets here
+                        raise LabelPatchError(f"{review.where}: {problem}", review.source)
                     row["label"] = new
                     patched += 1
-                corrections.setdefault(at, Correction(item.dataset, item.item_id, item.question_id, item.arm, old, new))
+                corrections.setdefault(at, Correction(at[0][0], at[0][1], at[1], review.arm, old, new))
         rows.append(row)
-    missing = [item for at, item in reviewed.items() if at not in seen]
+    missing = [(at, review) for at, review in reviewed.items() if at not in seen]
     if missing:
-        first = missing[0]
+        at, first = missing[0]
         raise LabelPatchError(
-            f"{len(missing)} of the {len(reviewed)} reviewed items have no labeled record, first {(first.dataset, first.item_id)!r} "
-            f"(item {first.n} of the key); these are not the records the sheet was built from"
+            f"{len(missing)} of the {len(reviewed)} reviewed items have no labeled record, first {at[0]!r} "
+            f"({first.where}); these are not the records {made_from} was built from"
         )
-    ordered = sorted(corrections.values(), key=lambda c: (c.dataset is not None, c.dataset or "", c.item_id))
+    ordered = sorted(corrections.values(), key=lambda c: (c.question_id, c.dataset is not None, c.dataset or "", c.item_id))
     return LabelPatch(rows, len(reviewed), tuple(ordered), patched, already)
+
+
+LABEL_SCORE = re.compile(r"\As1\.(q-[0-9a-f]{16})\.label\Z")
+"""The name of a Langfuse score that carries a reviewer's answer: `s1.<question_id>.label`, as the
+export names its other scores (`s1.<question_id>.brier`)."""
+
+
+class _ExportInput(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    dataset: str | None
+    item_id: str = Field(min_length=1)
+    question_id: str = Field(min_length=1)
+
+
+class _ExportObservation(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    id: str = Field(min_length=1)
+    traceId: str = Field(min_length=1)
+    input: _ExportInput
+
+
+class _Export(BaseModel):
+    """The parts of an `s1 export langfuse` file `pull_labels` reads."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    schema_: Literal["s1-langfuse-export/1"] = Field(alias="schema")
+    redaction: Literal["safe-v1"]
+    observations: list[_ExportObservation]
+
+
+class _Subject(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    kind: str
+    id: str = Field(min_length=1)
+    traceId: str | None = None
+
+
+class _Score(BaseModel):
+    """A Scores API v3 row (`GET /api/public/v3/scores?fields=subject`): one typed `value`."""
+
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    id: str | None = None
+    name: str
+    dataType: str
+    value: bool | int | float | str | None = None
+    subject: _Subject | None = None
+
+
+@dataclass(frozen=True)
+class LabelPull(LabelPatch):
+    scores: int
+    """`s1.<question_id>.label` scores on this export's observations and traces."""
+    scores_elsewhere: int
+    """Label scores on observations or traces the export does not hold (another run's): left out."""
+
+
+def _score_answer(score: _Score, primitive: str, options: Sequence[str]) -> str | None:
+    """The answer a label score gives, written as the options write it, or None when its type and
+    value cannot answer this question: noul a BOOLEAN, choice a CATEGORICAL option, score a level
+    as a whole NUMERIC or a CATEGORICAL."""
+    v, kind = score.value, score.dataType.upper()
+    answer: str | None = None
+    if primitive == "noul" and kind == "BOOLEAN" and isinstance(v, bool):
+        answer = "True" if v else "False"
+    elif primitive in ("choice", "score") and kind == "CATEGORICAL" and isinstance(v, str):
+        answer = v
+    elif primitive == "score" and kind == "NUMERIC" and isinstance(v, (int, float)) and not isinstance(v, bool):
+        if math.isfinite(v) and float(v).is_integer():
+            answer = str(int(v))
+    return answer if answer in options else None
+
+
+_TAKES = {"noul": "a BOOLEAN", "choice": "a CATEGORICAL naming an option", "score": "a whole NUMERIC level or a CATEGORICAL naming one"}
+
+
+def pull_labels(records: Sequence[Record], export: object, scores: object) -> LabelPull:
+    """Apply reviews made in Langfuse to the labels of the records an export was made from.
+
+    `export` is the `s1 export langfuse` file whose observations were reviewed; `scores` is a
+    Scores API v3 response (`{"data": [...]}`, fetched with `fields=subject`) or its rows. A
+    review is a score named `s1.<question_id>.label` on an exported observation, or on its trace
+    (a trace is one item), whose value is the reviewer's answer. Other scores are not read, and a
+    label score on an observation or trace the export does not hold is left out and counted.
+    Answers become labels as `patch_labels` applies a sheet's: the label the review was of is the
+    item's label in the records. Two answers for one item and question that differ are refused,
+    as is anything `patch_labels` refuses (`LabelPatchError`, `.source` `export`, `scores` or
+    `records`). s1ops makes no network call: fetching the scores is the caller's."""
+    try:
+        doc = _Export.model_validate(export)
+    except ValidationError as e:
+        raise LabelPatchError("; ".join(_key_errors(e)), "export") from None
+    by_obs = {o.id: o for o in doc.observations}
+    by_trace: dict[str, list[_ExportObservation]] = {}
+    for o in doc.observations:
+        by_trace.setdefault(o.traceId, []).append(o)
+
+    rows = scores.get("data") if isinstance(scores, Mapping) else scores
+    if not isinstance(rows, list):
+        raise LabelPatchError("must be a Scores API v3 response (an object with a `data` list) or a list of its rows", "scores")
+    answers: dict[tuple[Identity, str], list[tuple[str, str, _Score]]] = {}
+    used = elsewhere = 0
+    for i, raw in enumerate(rows):
+        name = raw.get("name") if isinstance(raw, Mapping) else None
+        m = LABEL_SCORE.match(name) if isinstance(name, str) else None
+        if m is None:
+            continue
+        try:
+            score = _Score.model_validate(raw)
+        except ValidationError as e:
+            raise LabelPatchError(f"data.{i}: " + "; ".join(_key_errors(e)), "scores") from None
+        ref = f"score {score.id}" if score.id else f"score data.{i}"
+        qid, subject = m.group(1), score.subject
+        if subject is None:
+            raise LabelPatchError(f"{ref} ({name}) has no `subject`; fetch the scores with `fields=subject`", "scores")
+        if subject.kind == "observation":
+            obs = by_obs.get(subject.id)
+            if obs is None:
+                elsewhere += 1
+                continue
+            if obs.input.question_id != qid:
+                raise LabelPatchError(
+                    f"{ref} is named {name} and is on observation {obs.id}, which asked question {obs.input.question_id}", "scores"
+                )
+            item = (obs.input.dataset, obs.input.item_id)
+        elif subject.kind == "trace":
+            on_trace = by_trace.get(subject.id)
+            if on_trace is None:
+                elsewhere += 1
+                continue
+            asked = [o for o in on_trace if o.input.question_id == qid]
+            if not asked:
+                raise LabelPatchError(f"{ref} is named {name} and is on trace {subject.id}, which did not ask question {qid}", "scores")
+            item = (asked[0].input.dataset, asked[0].input.item_id)
+        else:
+            raise LabelPatchError(f"{ref} ({name}) is on a {subject.kind}; a label score is on an observation or a trace", "scores")
+        used += 1
+        answers.setdefault((item, qid), []).append((ref, name, score))
+    if not answers:
+        raise LabelPatchError(
+            f"no `s1.<question_id>.label` score is on an observation or trace of this export ({elsewhere} on others)", "scores"
+        )
+
+    records = [reparse(r) for r in records]
+    by_question: dict[str, list[Record]] = {}
+    for r in records:
+        if r.model_served is not None and r.label is not None:
+            by_question.setdefault(r.question_id, []).append(r)
+    reviewed: dict[tuple[Identity, str], _Review] = {}
+    for qid in sorted({at[1] for at in answers}):
+        asked = by_question.get(qid)
+        if not asked:
+            raise LabelPatchError(f"no answered, labeled record is for question {qid}, which the scores label")
+        try:
+            check_sheet_records(asked)
+            options = sheet_options(asked)
+        except ValueError as e:
+            raise LabelPatchError(str(e)) from None
+        primitive, classes = asked[0].primitive, asked[0].classes
+        named = {str(c): c for c in classes}
+        labels = {r.item: str(r.label) for r in asked}
+        for (item, q), given in sorted(answers.items(), key=lambda kv: (kv[0][1], kv[0][0][0] or "", kv[0][0][1])):
+            if q != qid:
+                continue
+            chosen: tuple[str, str] | None = None
+            for ref, name, score in given:
+                answer = _score_answer(score, primitive, options)
+                if answer is None:
+                    raise LabelPatchError(
+                        f"{ref} ({name}) is {score.dataType} {score.value!r}; a {primitive} question takes {_TAKES[primitive]} "
+                        f"of {options}",
+                        "scores",
+                    )
+                if chosen is not None and chosen[1] != answer:
+                    raise LabelPatchError(f"{chosen[0]} and {ref} answer item {item!r} {chosen[1]!r} and {answer!r}; keep one", "scores")
+                chosen = (ref, answer)
+            assert chosen is not None
+            if item not in labels:
+                raise LabelPatchError(
+                    f"item {item!r} of question {qid} ({chosen[0]}) has no answered, labeled record; "
+                    "these are not the records the export was made from"
+                )
+            reviewed[(item, qid)] = _Review(labels[item], chosen[1], named, primitive, classes, None, chosen[0], "scores")
+    patch = _relabel(records, reviewed, "the export")
+    return LabelPull(patch.rows, patch.reviewed, patch.corrections, patch.records_patched, patch.records_already, used, elsewhere)
 
 
 def precision_at_k(hits: int, k: int) -> tuple[float, tuple[float, float]]:

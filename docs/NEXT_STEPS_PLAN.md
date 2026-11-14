@@ -155,7 +155,7 @@
       - 전제 조건(`feat/light-gate`에서 해결): **가볍고 실패 시 닫히는 noul gate 경로.** 훅이 도구 호출마다 worker 자식 프로세스를 띄우므로(`hook.py`, `DEFAULT_DEADLINE_S = 5.0`) import 시간이 매 호출에 붙음. 실측(2026-10-26, 데워진 캐시): `DecisionGate`·`load_policies`·`load_fits` import 531–642 ms → 171–180 ms(`s1ops/__init__` 지연 import, `scipy.optimize`·`sklearn`을 `_fit_params` 안으로). 소유자 결정(2026-10-26): numpy·`scipy.special`은 유지. 순수 Python 변환은 입력의 0.03–13 %에서 마지막 비트가 달랐고, 튜닝된 임계값은 `>=`로 정확히 비교하므로 `s1 apply`와 같은 코드를 씀. 같은 브랜치에서 실패 시 닫히도록: fit 없는 보정 noul 정책 거부, `fit_sha256` 기록·대조, band 범위 검사, 그룹 키 중복 거부
       - 알려진 한계(선행 조건 아님): `model_served` 검사는 이미 있음(`backend.py`의 `"served a different model"`). 하지만 Kev는 요청한 모델 이름을 그대로 `model`로 돌려주므로(decision-plane README) policy의 `model_served`와 비교해도 설정의 이름 불일치만 잡고 checkpoint 교체는 못 잡음
     - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.policy_action` — 위임 여부는 `== "ESCALATE"`) 수집 및 시각화 연동
-  - [ ] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**:
+  - [x] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**: 파일 입력으로 구현(아래 파인튜닝 지원 항목). 자동 루프(가져오기 → fit → tune)는 호출하는 쪽의 몫:
     - Langfuse Annotation Queue에서 검수 완료된 항목을 가져와 로컬 골드셋 패치 → `s1 fit` → `s1 policy tune` 재컴파일 루프 자동화
 
 ---
@@ -168,7 +168,7 @@
 - [x] `s1 trainset record`: 끝난 학습 실행을 `s1-trainrun/1`로 기록. manifest·데이터 파일·가중치 SHA-256, 평탄한 trainer 설정·요약 지표·스텝 지표, 부모 실행 id. 데이터 행의 `(dataset, item_id)`가 manifest에 없으면 exit 2(누출 거부가 모르는 학습 항목), manifest 항목에 행이 없으면 exit 1. trainer 로그 파싱은 하지 않음(소유자 결정 2026-11-14: 범용 형식 + 학습기별 변환기는 사용처에)
 - [x] `--training-run`: `compare`·`policy tune`/`curve`의 출력에 `trainrun_id` 표시, `export langfuse`에 기록 첨부(`training_runs`, 관측마다 `metadata.trainrun_id`). 모델은 이름으로 대응(`model_served` = 기록의 `checkpoint`). 옵션이 없으면 출력은 그대로. `policy tune`은 기록이 이름 붙인 모델의 정책에만 `policy.json`에도 `trainrun_id`를 씀(소유자 결정 2026-11-15; `policy_sha256`에는 넣지 않음. 0.11.1 이하 리더는 이 필드가 있는 파일을 거부하므로, 그런 리더용 정책은 옵션 없이 튜닝). `export langfuse --policy`는 정책이 가리키는 실행과 다른 기록을 거부. trainer 설정·요약 지표의 이름 `state`는 거부
 - [x] 리뷰 라벨 교정 반영: `s1 labelaudit patch RECORDS --sheet --key -o OUT`. 완성된 블라인드 시트에서 리뷰어 답이 라벨과 다른 항목의 라벨을 답으로 교체(그 항목·질문의 모든 라벨 있는 레코드, 모델 무관), 새 레코드 파일로만 씀. 시트를 만든 레코드가 아니면 exit 1, 재적용은 변화 없음. fits·policy·states 파일의 라벨은 건드리지 않음
-- [ ] `labelaudit pull`(Langfuse Annotation Queue에서 가져오기)은 미착수: s1ops는 Langfuse에 네트워크 호출을 하지 않으므로(`s1 export`도 파일만 씀) 첫 네트워크 클라이언트가 됨. 큐 항목이 교정된 라벨을 담는 형식도 정해야 함(소유자 결정 필요)
+- [x] `s1 labelaudit pull RECORDS --export EXPORT --scores SCORES -o OUT`: Langfuse 검토 대기열의 답을 라벨에 반영. 소유자 결정 2026-11-15: s1ops는 네트워크 호출을 하지 않고 파일만 읽음(점수는 호출하는 쪽이 Scores API v3 `fields=subject`로 받아 둠), 교정 라벨은 검토자의 답 점수. 점수 이름은 질문마다 `s1.<question_id>.label`(Langfuse score config는 하나의 데이터 형식·선택지만 가지므로): noul BOOLEAN, choice CATEGORICAL, score NUMERIC 또는 CATEGORICAL. 내보낸 관찰이나 그 trace(한 항목)에 달린 점수를 읽고, `patch`와 같은 규칙(`_relabel`)으로 적용. 다른 내보내기의 점수는 세고 뺌, 한 항목의 답이 다르면 exit 1. 대기열은 모델 답을 보여 주므로 블라인드가 아님(대조군 없음)
 - [x] 승격 순서 wrapper: `s1 promote --current --cal --eval --training-manifest ... -o DIR`. 이미 probe한 레코드만 읽고 백엔드는 부르지 않음. compare·drift(쓰기 전) → fit → apply → policy tune을 각 명령의 파서 기본값으로 실행, manifest를 받는 모든 단계에 전달. `s1-promotion/1` 보고서(`promotion.json`). 후보 파일은 한 모델만, 그 모델의 manifest 필수. 거부는 단계 이름과 원래 종료 코드를 유지. `replaceable`이 false여도 exit 0(판정은 보고서로)
 - [ ] 워크벤치 읽기 전용 체크포인트 뷰(GET만)
 

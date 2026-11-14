@@ -260,7 +260,7 @@ def test_web_reports_each_group_as_the_cli(demo) -> None:
     choice = next(g for g in groups if g["primitive"] == "choice")
     narrowed = client.get("/api/slices", params={"question_id": choice["question_id"]}).json()["groups"]
     assert narrowed == [choice]
-    assert client.get("/api/slices", params={"question_id": "q-nope"}).json() == {"distribution": "raw", "groups": []}
+    assert client.get("/api/slices", params={"question_id": "q-nope"}).json() == {"distribution": "raw", "min_n": 10, "groups": []}
 
 
 def _duplicate_score_row(demo, tmp_path: Path, **change) -> tuple[Path, str, str]:

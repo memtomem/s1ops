@@ -402,6 +402,7 @@ def _build(tmp_path: Path, run: dict, **kw):
         ({"weights": "head.pt"}, "weights must be a sequence of paths, got a str"),
         ({"weights": Path("head.pt")}, "weights must be a sequence of paths, got a PosixPath"),
         ({"weights": [5]}, "a weights file must be a path, got a int"),
+        ({"weights": {"head.pt": "ab" * 32}}, "weights must be a sequence of paths, got a dict"),
         ({"weights": iter(())}, "a training run records at least one weights file"),
         ({"trainer": [1]}, "trainer: Input should be a valid dictionary"),
         ({"steps": [{"loss": 0.5}]}, "steps.0: step must be a non-negative integer"),

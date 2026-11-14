@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from s1ops.cli import main as cli_main
 from s1ops.demo import generate_workspace
 from s1ops.web.app import create_app
-from tests.test_curve_use_calib import CASES, FIT_A, GOOD, OTHER, QID, _row, _tune_error
+from tests.test_curve_use_calib import CASES, FIT_A, GOOD, OTHER, QID, _row, _tune_error, _web_detail
 from tests.test_source_digest import _through_fifo
 
 
@@ -40,17 +40,17 @@ def _accuracy(out: str) -> list[float]:
 @pytest.mark.parametrize("case", sorted(CASES))
 def test_use_calib_refuses_what_tune_refuses(tmp_path, capsys, case, cmd) -> None:
     records = _write(tmp_path / "records.jsonl", CASES[case])
-    message = _tune_error(capsys, records, tmp_path).removeprefix("s1: ")
+    line = _tune_error(capsys, records, tmp_path)
     features = _write(tmp_path / "f.jsonl", [{"dataset": "d", "item_id": "i0", "features": {"x": True}}])
     flags = ["--features", str(features)] if cmd == "mine" else []
-    # The error names the records file, which tune's line does not.
-    assert _slice(capsys, cmd, str(records), *flags, "--use-calib") == (1, "", f"s1: {records}: {message}")
+    # The same line as tune's, which names the records file.
+    assert _slice(capsys, cmd, str(records), *flags, "--use-calib") == (1, "", line)
     rc, out, err = _slice(capsys, cmd, str(records), *flags)
     assert (rc, err, json.loads(out)["distribution"]) == (0, "", "raw")
 
     client = _client(records)
     r = client.get("/api/slices", params={"use_calib": True})
-    assert (r.status_code, r.json()["detail"]) == (400, f"records.jsonl: {message.rstrip()}")
+    assert (r.status_code, r.json()["detail"]) == (400, _web_detail(line, records))
     r = client.get("/api/slices")
     assert (r.status_code, r.json()["distribution"]) == (200, "raw")
 

@@ -504,6 +504,6 @@ def test_the_issue_paths_print_one_line(tmp_path: Path, capsys, path: str) -> No
     else:
         rows = [_record(i, label=i % 2 == 0, split="eval", calib={"p": 0.6, "fit_sha256": FIT_A if i < 5 else FIT_B}) for i in range(10)]
         args = ["policy", "tune", _write_rows(tmp_path / "r.jsonl", rows), "-o", out, "--error-budget", "0.1", "--use-calib"]
-        expected = f"s1: q\\nextra (m): records were calibrated through different fits ('{FIT_A}', '{FIT_B}'); apply one fit file\n"
+        expected = f"s1: {tmp_path / 'r.jsonl'}: q\\nextra (m): records were calibrated through different fits ('{FIT_A}', '{FIT_B}'); apply one fit file\n"
     assert cli_main(args) == 1
     assert capsys.readouterr() == ("", expected)

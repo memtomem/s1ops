@@ -339,6 +339,8 @@ def _without(doc: dict, key: str) -> dict:
         (lambda d: _set(d, "data.items", 99), "data.items 99 exceeds data.rows 4"),
         (lambda d: _set(d, "weights_sha256", {}), "weights_sha256: Dictionary should have at least 1 item"),
         (lambda d: _set(d, "trainer.lora", {"rank": 16}), "trainer: trainer setting 'lora' is a dict"),
+        (lambda d: _set(d, "trainer.state", SECRET), "trainer: a trainer setting cannot be named 'state'"),
+        (lambda d: _set(d, "summary.state", SECRET), "summary: a summary metric cannot be named 'state'"),
         (lambda d: _set(d, "steps", [{"loss": 0.5}]), "steps.0: step must be a non-negative integer"),
         (lambda d: _set(d, "parent", {"trainrun_id": "tr-" + "0" * 16, "checkpoint": "two words"}), "parent.checkpoint 'two words' is not a model name"),
         (lambda d: _set(d, "parent", {"trainrun_id": "tr-" + "0" * 16, "checkpoint": CHECKPOINT}), "is for the same checkpoint"),
@@ -394,6 +396,13 @@ def _build(tmp_path: Path, run: dict, **kw):
         ({"trainer": {"lora": {"rank": 16}}}, "trainer: trainer setting 'lora' is a dict"),
         ({"trainer": {"note": "x\ud800"}}, "lone surrogate (U+D800)"),
         ({"trainer": {1: 2}}, "trainer.1.[key]: Input should be a valid string"),
+        ({"trainer": {"state": SECRET}}, "trainer: a trainer setting cannot be named 'state'"),
+        ({"summary": {"state": 1}}, "summary: a summary metric cannot be named 'state'"),
+        ({"trainer": {"max_state": 4096, "State": "x"}, "weights": 5}, "weights must be a sequence of paths, got a int"),
+        ({"weights": "head.pt"}, "weights must be a sequence of paths, got a str"),
+        ({"weights": Path("head.pt")}, "weights must be a sequence of paths, got a PosixPath"),
+        ({"weights": [5]}, "a weights file must be a path, got a int"),
+        ({"weights": iter(())}, "a training run records at least one weights file"),
         ({"trainer": [1]}, "trainer: Input should be a valid dictionary"),
         ({"steps": [{"loss": 0.5}]}, "steps.0: step must be a non-negative integer"),
         ({"steps": [{"step": 1}, {"step": 1}]}, "steps.1: step 1 does not follow step 1"),
@@ -409,7 +418,25 @@ def _build(tmp_path: Path, run: dict, **kw):
 def test_the_library_refuses_what_the_reader_would(tmp_path: Path, run: dict, kw, message) -> None:
     with pytest.raises(TrainRunError) as e:
         _build(tmp_path, run, **kw)
-    assert message in str(e.value)
+    assert message in str(e.value) and SECRET not in str(e.value)
+
+
+def test_only_the_name_state_is_refused_and_weights_may_be_any_iterable_of_paths(tmp_path: Path, run: dict) -> None:
+    built = _build(tmp_path, run, trainer={"max_state": 4096, "State": "x", "state_dict": "y"}, weights=(Path(w) for w in run["weights"]))
+    assert sorted(built.doc["trainer"]) == ["State", "max_state", "state_dict"]
+    assert sorted(built.doc["weights_sha256"]) == ["adapter.safetensors", "head.pt"]
+
+
+@pytest.mark.parametrize(("flag", "what"), [("--trainer", "trainer setting"), ("--summary", "summary metric")])
+def test_a_setting_named_state_is_refused_before_anything_is_written(tmp_path: Path, run: dict, capsys, flag: str, what: str) -> None:
+    """A trainer row's `state` passed along by mistake: the Langfuse export copies these values out."""
+    settings = tmp_path / "with-state.json"
+    settings.write_text(json.dumps({"epochs": 3, "state": SECRET}))
+    out = tmp_path / "r.json"
+    assert _record(run["manifest"], run["data"], run["weights"], out, flag, str(settings)) == 1
+    err = capsys.readouterr().err
+    assert err == f"s1: {settings}: a {what} cannot be named 'state' (safe-v1: item text is never recorded)\n"
+    assert not out.exists()
 
 
 def test_steps_may_come_from_any_iterable(tmp_path: Path, run: dict) -> None:

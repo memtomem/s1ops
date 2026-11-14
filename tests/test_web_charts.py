@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -122,10 +123,21 @@ def _js(expr: str, prelude: str = "") -> object:
         ((0.13, 0.91, 4), [0.2, 0.4, 0.6, 0.8]),
         ((-1, 1, 4), [-1, -0.5, 0, 0.5, 1]),
         ((0.5, 0.5, 5), [0.5]),
+        # Ranges too narrow for distinct float64 ticks: one tick, never an endless loop.
+        ((2000, 2000 + 1e-12, 10), [2000]),
+        ((0.6, 0.6000000000000001, 5), [0.6]),
+        # A narrow range near zero keeps distinct ticks.
+        ((0, 1e-13, 5), [0, 2e-14, 4e-14, 6e-14, 8e-14, 1e-13]),
+        ((0, 1, float("inf")), []),
+        ((0, 1, 0.5), []),
     ],
 )
 def test_nice_ticks(args, ticks) -> None:
-    assert _js(f"niceTicks(...{json.dumps(list(args))})") == ticks
+    # A timeout, since the failure this guards against is a loop that never ends.
+    js = f"{_all_functions()}\nprocess.stdout.write(JSON.stringify(niceTicks(...{json.dumps(list(args))})));"
+    r = subprocess.run(["node", "-"], input=js, capture_output=True, text=True, timeout=10)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == ticks
 
 
 @needs_node

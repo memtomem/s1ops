@@ -446,26 +446,45 @@ def create_app(
         question_id: str | None = Query(default=None),
         model_served: str | None = Query(default=None),
         fdr_q: float = Query(default=0.10, ge=0.001, le=0.50),
+        use_calib: bool = Query(default=False),
     ) -> dict[str, Any]:
+        # Read with use_calib in both modes, as `s1 slice`, so a malformed stored calib is a 400.
         records = _get_records(use_calib=True)
         features_rows = _load_or_400(feat_file, _load_json_or_jsonl, feat_file)
         features_by_item, slice_by_item = _load_or_400(feat_file, parse_feature_rows, features_rows)
 
+        distribution = "calibrated" if use_calib else "raw"
         if not records:
-            return {"groups": []}
+            return {"distribution": distribution, "groups": []}
         # Refuses a repeated item or differing classes in any group (400), before the filters.
-        _select(records)
+        sel = _select(records)
+        groups = slice_inputs_by_group(
+            records,
+            features_by_item,
+            slice_by_item,
+            question_id=question_id,
+            model_served=model_served,
+            raw=not use_calib,
+        )
+        if use_calib:
+            # What `s1 slice --use-calib` refuses in the groups reported (`s1 policy tune --use-calib`'s rule).
+            by_key = {g.key: g for g in sel.groups}
+            tuned = tuned_rows(records)
+            for g in groups:
+                try:
+                    tuned_fit_sha256(by_key[g.key], tuned[g.key])
+                except CalibInputError as e:
+                    raise HTTPException(status_code=400, detail=f"{rec_file.name}: {e}") from None
         return {
+            "distribution": distribution,
             "groups": [
                 {
                     **g.header(),
                     "answerability": [s.as_dict() for s in slice_report(g.items, min_n=10)],
                     "error_slices": [e.as_dict() for e in mine_error_slices(g.rows, min_support=5, fdr_q=fdr_q)],
                 }
-                for g in slice_inputs_by_group(
-                    records, features_by_item, slice_by_item, question_id=question_id, model_served=model_served
-                )
-            ]
+                for g in groups
+            ],
         }
 
     @app.get("/api/labelaudit")

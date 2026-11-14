@@ -4,7 +4,9 @@
 questions or two models got one number for populations that behave differently. Each group's
 report must equal what 0.5.1 printed for that group alone (narrowed with `--question` and
 `--model`), which `_old_report` reproduces from 0.5.1's loop, except that a non-finite
-`odds_ratio` is now `null` where 0.5.1 printed `Infinity` or `NaN`.
+`odds_ratio` is now `null` where 0.5.1 printed `Infinity` or `NaN`. 0.5.1 predicted from each
+record's `calib` when it had one; since #130 that is `--use-calib` (checked), and the default
+predicts from the raw distribution, so `_old_report` takes the distribution to compare with.
 """
 
 from __future__ import annotations
@@ -27,9 +29,12 @@ from s1ops.web.app import create_app
 STATIC = Path(__file__).resolve().parents[1] / "src" / "s1ops" / "web" / "static" / "index.html"
 
 
-def _old_report(records_path: Path, features_path: Path | None, cmd: str, question=None, model=None) -> dict:
-    """0.5.1's `_cmd_slice`, with its CLI defaults (`--min-n 10`, `--min-support 5`, `--fdr-q 0.10`)."""
-    records = read_records(records_path, use_calib=True)
+def _old_report(
+    records_path: Path, features_path: Path | None, cmd: str, question=None, model=None, *, use_calib: bool = False
+) -> dict:
+    """0.5.1's `_cmd_slice`, with its CLI defaults (`--min-n 10`, `--min-support 5`, `--fdr-q 0.10`),
+    over the raw distribution, or with `use_calib` over the calibrated one as 0.5.1 read it."""
+    records = read_records(records_path, use_calib=use_calib)
     features_by_item, slice_by_item = {}, {}
     if features_path is not None:
         rows = [json.loads(line) for line in features_path.read_text().splitlines() if line.strip()]
@@ -113,15 +118,18 @@ def _groups(path: Path) -> list[tuple[str, str, str]]:
 
 @pytest.mark.parametrize("cmd, key", [("answerable", "slices"), ("mine", "error_slices")])
 @pytest.mark.parametrize("which", ["noul", "categorical"])
-def test_each_group_equals_the_old_report_narrowed_to_it(demo, capsys, cmd: str, key: str, which: str) -> None:
+@pytest.mark.parametrize("use_calib", [False, True])
+def test_each_group_equals_the_old_report_narrowed_to_it(demo, capsys, cmd: str, key: str, which: str, use_calib: bool) -> None:
     path, feats = (demo["records"], demo["features"]) if which == "noul" else (demo["categorical"], demo["cat_features"])
-    code, out, err = _cli(capsys, cmd, path, "--features", feats)
+    code, out, err = _cli(capsys, cmd, path, "--features", feats, *(["--use-calib"] if use_calib else []))
     assert (code, err) == (0, "")
-    got = _strict(out)["groups"]
+    report = _strict(out)
+    assert report["distribution"] == ("calibrated" if use_calib else "raw")
+    got = report["groups"]
     keys = _groups(path)
     assert [(g["question_id"], g["model_served"], g["primitive"]) for g in got] == keys
     for g, (q, m, p) in zip(got, keys):
-        old = _old_report(path, feats, cmd, question=q, model=m)
+        old = _old_report(path, feats, cmd, question=q, model=m, use_calib=use_calib)
         assert g == {"question_id": q, "model_served": m, "primitive": p, "n": g["n"], key: old[key]}
         assert g["n"] == sum(1 for r in read_records(path) if r.key == (q, m, p) and r.label is not None)
         assert g[key], "an empty report would make this comparison vacuous"
@@ -208,13 +216,22 @@ def test_each_record_breaks_a_tie_in_its_own_key_order(demo, tmp_path: Path, cap
     assert group["slices"] == _old_report(path, None, "answerable")["slices"]
 
 
-def test_the_calibrated_answer_is_the_prediction(demo, tmp_path: Path, capsys) -> None:
+def test_the_prediction_comes_from_the_distribution_asked_for(demo, tmp_path: Path, capsys) -> None:
+    """Raw `p` 0.9 answers true, `calib.p` 0.1 answers false; the label is false. Up to 0.10.0 the
+    calibrated answer was always the prediction (and a record without `calib` fell back to raw)."""
     row = _rows(demo["records"])[0]
     row = {**row, "p": 0.9, "label": False, "calib": {**row["calib"], "p": 0.1}}
     path = _write(tmp_path / "cal.jsonl", [row])
-    code, out, _ = _cli(capsys, "answerable", path)
-    (group,) = _strict(out)["groups"]
-    assert (code, group["slices"][0]["accuracy"]) == (0, 1.0)
+    for flags, distribution, accuracy in (((), "raw", 0.0), (("--use-calib",), "calibrated", 1.0)):
+        code, out, err = _cli(capsys, "answerable", path, *flags)
+        report = _strict(out)
+        (group,) = report["groups"]
+        assert (code, err, report["distribution"], group["slices"][0]["accuracy"]) == (0, "", distribution, accuracy)
+    client = _client(demo, path)
+    for params, distribution, accuracy in (({}, "raw", 0.0), ({"use_calib": True}, "calibrated", 1.0)):
+        r = client.get("/api/slices", params=params)
+        (group,) = r.json()["groups"]
+        assert (r.status_code, r.json()["distribution"], group["answerability"][0]["accuracy"]) == (200, distribution, accuracy)
 
 
 def _no_groups_line(path: Path, filters: str) -> str:
@@ -243,7 +260,7 @@ def test_web_reports_each_group_as_the_cli(demo) -> None:
     choice = next(g for g in groups if g["primitive"] == "choice")
     narrowed = client.get("/api/slices", params={"question_id": choice["question_id"]}).json()["groups"]
     assert narrowed == [choice]
-    assert client.get("/api/slices", params={"question_id": "q-nope"}).json() == {"groups": []}
+    assert client.get("/api/slices", params={"question_id": "q-nope"}).json() == {"distribution": "raw", "groups": []}
 
 
 def _duplicate_score_row(demo, tmp_path: Path, **change) -> tuple[Path, str, str]:

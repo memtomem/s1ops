@@ -636,6 +636,8 @@
     async function loadSlicesAndLabels() {
       const [sData, lData] = await Promise.all([fetchJson("/api/slices"), fetchJson("/api/labelaudit")]);
       const groups = sData.groups || [];
+      // `/api/slices` predicts from raw probabilities unless asked for `use_calib`.
+      const dist = esc(sData.distribution || 'unknown');
 
       document.getElementById("slices-container").innerHTML = `
         ${groups.length ? '' : '<div class="card">No labeled groups found in workspace.</div>'}
@@ -650,6 +652,7 @@
         <div class="grid-2">
           <div class="card">
             <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
+            <div class="sub">Predictions from ${dist} probabilities</div>
             <table>
               <thead>
                 <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${esc(slices[0] ? slices[0].null_kind : 'majority')})</th><th>Answerable</th></tr>
@@ -669,6 +672,7 @@
           </div>
           <div class="card">
             <h3>Benjamini-Hochberg FDR Error Slices (q ≤ 0.10)</h3>
+            <div class="sub">Errors of predictions from ${dist} probabilities</div>
             <table>
               <thead>
                 <tr><th>Feature</th><th>Slice n</th><th>Slice Err</th><th>Rest Err</th><th>Odds Ratio</th><th>q-value</th><th>Verdict</th></tr>

@@ -317,3 +317,74 @@ const fetchJson = async url => {{ urls.push(url); return {{groups: []}}; }};
 loadAudit({{params: {{question_id: "q a", model_served: "m", primitive: "noul"}}, nboot: 500}}).then(() => process.stdout.write(JSON.stringify(urls)));
 """
     assert _node(js) == ["/api/audit?question_id=q+a&model_served=m&primitive=noul&n_boot=500"]
+
+
+# --- the shell keeps no payload of an older request -----------------------------------------------
+
+
+def _shell_run(steps: str, payload: dict, functions: str | None = None) -> dict:
+    """Run `runView("calib")` with the shell's state declared and `fetchJson` answering only when a
+    step settles it; return what the steps record."""
+    group = {k: payload["groups"][0][k] for k in ("question_id", "model_served", "primitive")}
+    js = f"""
+let STATE = {{view: "calib"}};
+let viewSeq = {{}}, loadedSig = {{}}, viewData = {{}}, generation = 0, TSTATE = {{}}, policySeq = 0;
+let GROUPS = [{{...{json.dumps(group)}, n: 160}}], groupsState = "ok", groupsError = "";
+const els = {{}};
+const el = id => (els[id] ??= {{id, innerHTML: "", textContent: "", value: "", attrs: {{}},
+  setAttribute(k, v) {{ this.attrs[k] = v; }}, removeAttribute(k) {{ delete this.attrs[k]; }}}});
+const document = {{getElementById: el, querySelectorAll: () => []}};
+const pending = [];
+const fetchJson = url => new Promise((resolve, reject) => pending.push({{url, resolve, reject}}));
+const tick = () => new Promise(r => setTimeout(r, 0));
+const payload = {json.dumps(payload)};
+const out = {{}};
+{functions if functions is not None else _all_functions()}
+STATE = {{...defaultState(), view: "calib"}};
+(async () => {{
+{steps}
+process.stdout.write(JSON.stringify(out));
+}})();
+"""
+    return _node(js)
+
+
+CACHE_STEPS = """
+  runView("calib");
+  pending.shift().resolve(payload);
+  await tick();
+  out.first = el("calib-container").innerHTML.includes('<svg class="chart"');
+  // A bigger bootstrap is pending; changing the bins meanwhile must not bring back the old payload.
+  STATE = {...STATE, nboot: 1000};
+  runView("calib");
+  out.url = pending[0].url;
+  STATE = {...STATE, cbins: "width"};
+  runView("calib");
+  out.pendingChart = el("calib-container").innerHTML.includes('<svg class="chart"');
+  out.pendingBusy = el("calib-container").attrs["aria-busy"] === "true";
+  out.pendingTables = Object.keys(currentTables()).length;
+  // It fails; a bins change after the failure keeps the error and offers nothing to export.
+  pending.shift().reject(Object.assign(new Error("boom"), {status: 500}));
+  await tick(); await tick();
+  STATE = {...STATE, cbins: "mass"};
+  runView("calib");
+  out.failedError = el("calib-container").innerHTML.includes("ERROR</span> boom");
+  out.failedChart = el("calib-container").innerHTML.includes('<svg class="chart"');
+  out.failedTables = Object.keys(currentTables()).length;
+"""
+
+
+@needs_node
+def test_a_bins_change_never_shows_an_older_requests_payload(payloads) -> None:
+    out = _shell_run(CACHE_STEPS, payloads["noul"])
+    assert out["first"] is True
+    assert out["url"].endswith("n_boot=1000")
+    assert (out["pendingChart"], out["pendingBusy"], out["pendingTables"]) == (False, True, 0)
+    assert (out["failedError"], out["failedChart"], out["failedTables"]) == (True, False, 0)
+
+
+@needs_node
+def test_the_payload_check_catches_a_kept_payload(payloads) -> None:
+    functions = _mutated("      delete viewData[view];\n", "")
+    out = _shell_run(CACHE_STEPS, payloads["noul"], functions=functions)
+    assert out["pendingChart"] is True and out["failedChart"] is True

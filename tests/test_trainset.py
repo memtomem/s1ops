@@ -93,9 +93,11 @@ def test_label_types_survive_the_file(tmp_path: Path) -> None:
 
 
 def test_a_manifest_holds_no_state_or_wording(tmp_path: Path) -> None:
-    row = {**_row("t0", "train"), "state": SECRET, "instructions": SECRET, "note": SECRET, "state_sha256": SECRET}
+    digest = "ab" * 32  # the reader takes nothing else in `state_sha256`
+    row = {**_row("t0", "train"), "state": SECRET, "instructions": SECRET, "note": SECRET, "state_sha256": digest}
     assert _export(_write(tmp_path / "r.jsonl", [row]), tmp_path / "m.json") == 0
-    assert SECRET not in (tmp_path / "m.json").read_text(encoding="utf-8")
+    written = (tmp_path / "m.json").read_text(encoding="utf-8")
+    assert SECRET not in written and digest not in written
     assert set(json.loads((tmp_path / "m.json").read_text())["items"][0]) == {"dataset", "item_id", "question_id", "label"}
 
 

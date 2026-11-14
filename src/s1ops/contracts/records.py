@@ -42,6 +42,7 @@ _MAX_LEVEL_DIGITS = 20
 # `model_served` is server text that reaches records, ledgers and exports, so it must look like a model name.
 MODEL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}")
 _SURROGATE = re.compile(f"[{chr(0xD800)}-{chr(0xDFFF)}]")
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 
 
 class RecordError(ValueError):
@@ -192,6 +193,25 @@ def _row_surrogate_problem(row: object) -> str | None:
     return None
 
 
+def _state_sha256_problem(value: object) -> str | None:
+    """Why `value` is not a record's `state_sha256`, else `None`: the field is absent or null, or holds
+    the 64 lowercase hex characters `hashlib.sha256(...).hexdigest()` gives.
+
+    Both exporters copy the field out and `s1 apply` copies it through, so it is the one place a
+    records file could put item text that reaches an export. The message therefore describes the
+    value by its type and length and never shows it.
+    """
+    if value is None or (isinstance(value, str) and _SHA256_HEX.fullmatch(value)):
+        return None
+    if not isinstance(value, str):
+        got = f"a value of type {type(value).__name__}"
+    elif len(value) == 64:
+        got = "64 characters that are not all in 0-9 and a-f"
+    else:
+        got = f"a string of {len(value)} characters"
+    return f"state_sha256 must be the 64 lowercase hex characters of a SHA-256 digest, got {got}"
+
+
 def _string(value: object, what: str, line: int) -> str:
     if not isinstance(value, str) or not value:
         raise RecordError(line, f"{what} must be a non-empty string, got {value!r}")
@@ -331,6 +351,10 @@ def _parse_record(
     dataset = row.get("dataset")
     if dataset is not None:
         dataset = _string(dataset, "dataset", line)
+    # Before the no-answer return: a failed call's record is exported and copied like any other.
+    problem = _state_sha256_problem(row.get("state_sha256"))
+    if problem is not None:
+        raise RecordError(line, problem)
 
     common = {
         "line": line,

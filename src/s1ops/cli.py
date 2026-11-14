@@ -228,11 +228,21 @@ def _read_text(path: Path) -> str:
         raise CliError(f"{path}: not valid UTF-8: {e}") from None
 
 
-def _read_json(path: Path) -> Any:
+def _decode_json(text: str, where: str) -> Any:
+    """The JSON value in `text`; a failure is one error line starting with `where` (a path, or a path
+    and line). Besides a syntax error, the decoder refuses an integer past Python's digit limit with a
+    plain `ValueError` and overflows the stack on deep nesting, which would otherwise escape as a
+    message without the file or as a traceback (`read_json_file`'s wording for both)."""
     try:
-        return json.loads(_read_text(path))
-    except json.JSONDecodeError as e:
-        raise CliError(f"{path}: not valid JSON: {e}") from None
+        return json.loads(text)
+    except ValueError as e:  # JSONDecodeError, or the integer-digit limit
+        raise CliError(f"{where}: not valid JSON: {e}") from None
+    except RecursionError:
+        raise CliError(f"{where}: not valid JSON: nested too deeply") from None
+
+
+def _read_json(path: Path) -> Any:
+    return _decode_json(_read_text(path), str(path))
 
 
 def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
@@ -241,7 +251,12 @@ def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
     if not text.strip():
         return []
     if text.lstrip().startswith("["):
-        rows = _read_json(path)
+        # Decode the text already read: a FIFO (`<(cat rows.json)`) has only the one read.
+        bad = UNDECODABLE.search(text)
+        if bad:
+            line = text.count("\n", 0, bad.start()) + 1
+            raise CliError(f"{path}: line {line}: not valid UTF-8")
+        rows = _decode_json(text, str(path))
         if not isinstance(rows, list):
             raise CliError(f"{path}: expected a JSON array of objects")
         for i, row in enumerate(rows):
@@ -256,10 +271,7 @@ def _load_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
             continue
         if UNDECODABLE.search(line):
             raise CliError(f"{path}: line {n}: not valid UTF-8")
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError as e:
-            raise CliError(f"{path}: line {n}: not valid JSON: {e}") from None
+        row = _decode_json(line, f"{path}: line {n}")
         if not isinstance(row, dict):
             raise CliError(f"{path}: line {n}: expected a JSON object")
         out.append(row)

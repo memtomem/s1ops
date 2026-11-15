@@ -129,7 +129,7 @@ def _hostile(value: object) -> object:
 
 # Inputs the policy loader reads, at the page's defaults.
 _INPUTS = {
-    "inp-tau-low": "0.25", "inp-tau-high": "0.75", "inp-cost-s2": "0.004",
+    "inp-tau-low": "0.25", "inp-tau-high": "0.75", "inp-cost-s1": "0.00004", "inp-cost-s2": "0.004",
     "inp-err-budget": "0.10", "inp-dist": "", "inp-group": "",
 }
 
@@ -140,6 +140,7 @@ def _render(loader: str, routes: dict[str, dict], functions: str | None = None) 
     js = f"""
 let policySeq = 0;
 let GROUPS = [];
+let viewData = {{}}, TSTATE = {{}};
 const els = {{}};
 const inputs = {json.dumps(_INPUTS)};
 const el = id => (els[id] ??= {{value: inputs[id] ?? "", textContent: "", innerHTML: "", style: {{}}}});
@@ -258,6 +259,12 @@ def _mutated(old: str, new: str) -> str:
         pytest.param("audit-noul", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="table-cell"),
         pytest.param("audit-noul", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="chart-title"),
         pytest.param("audit-filled", "WARN</span> ${esc(w)}</div>", "WARN</span> ${w}</div>", id="audit-warning"),
+        # The simulator's sections: the recommended band (a served string), a band in a tooltip, a
+        # chart's title and a band cell of the table kit.
+        pytest.param("policy-noul", '<div class="kpi">${esc(rec.band)}</div>', '<div class="kpi">${rec.band}</div>', id="policy-recommended"),
+        pytest.param("policy-noul", 'r="10" data-tip="${esc(s.tip)}" />', 'r="10" data-tip="${s.tip}" />', id="policy-band-tip"),
+        pytest.param("policy-choice", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="policy-chart-title"),
+        pytest.param("policy-noul", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="policy-table-cell"),
     ],
 )
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:
@@ -294,6 +301,7 @@ def _render_error(loader: str, functions: str | None = None) -> list[list[str]]:
     js = f"""
 let policySeq = 0;
 let GROUPS = [];
+let viewData = {{}}, TSTATE = {{}};
 const els = {{}};
 const inputs = {json.dumps(_INPUTS)};
 const el = id => (els[id] ??= {{value: inputs[id] ?? "", textContent: "", innerHTML: "", style: {{}}}});

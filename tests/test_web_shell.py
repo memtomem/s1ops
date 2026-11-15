@@ -44,11 +44,11 @@ def test_the_default_state_writes_no_hash() -> None:
 @needs_node
 def test_a_state_round_trips_through_the_hash_with_only_what_differs() -> None:
     state = {"view": "policy", "qid": "q-1", "model": "m/1 b", "prim": "choice", "dq": "q-1", "cq": "",
-             "dist": "true", "lo": 0.3, "hi": 0.75, "cs2": 0.01, "budget": 0.05, "nboot": 1000, "cbins": "mass"}
+             "dist": "true", "lo": 0.3, "hi": 0.75, "cs1": 0.0002, "cs2": 0.01, "budget": 0.05, "nboot": 1000, "cbins": "mass"}
     hash_ = _js(f"formatHash({json.dumps(state)})")
     assert hash_.startswith("#/policy?")
     keys = [k for k, _ in (pair.split("=") for pair in hash_.split("?", 1)[1].split("&"))]
-    assert keys == ["qid", "model", "prim", "dq", "dist", "lo", "cs2", "budget", "nboot"]  # cq, hi and cbins are defaults
+    assert keys == ["qid", "model", "prim", "dq", "dist", "lo", "cs1", "cs2", "budget", "nboot"]  # cq, hi and cbins are defaults
     assert _js(f"parseHash({json.dumps(hash_)})") == state
 
 
@@ -66,6 +66,10 @@ def test_a_state_round_trips_through_the_hash_with_only_what_differs() -> None:
         ("#/policy?lo=abc", "lo", 0.25),
         ("#/policy?budget=-1", "budget", 0),
         ("#/policy?cs2=1e400", "cs2", 0.004),
+        ("#/policy?cs1=1e400", "cs1", 0.00004),
+        ("#/policy?cs1=-3", "cs1", 0),
+        ("#/policy?cs1=4e-7", "cs1", 4e-7),
+        ("#/policy?cs1=", "cs1", 0.00004),
         ("#/policy?dist=maybe", "dist", ""),
         ("#/policy?dist=false", "dist", "false"),
     ],
@@ -89,22 +93,22 @@ def test_the_hash_band_is_the_one_evaluated(hash_, band) -> None:
 
 
 def _from_inputs(**values) -> dict | None:
-    base = {"dist": "", "lo": "0.25", "hi": "0.75", "cs2": "0.004", "budget": "0.10", **values}
+    base = {"dist": "", "lo": "0.25", "hi": "0.75", "cs1": "0.00004", "cs2": "0.004", "budget": "0.10", **values}
     st = {"view": "policy", "qid": "q", "model": "m", "prim": "noul", "dq": "q", "cq": "q",
-          "dist": "", "lo": 0.25, "hi": 0.75, "cs2": 0.004, "budget": 0.1, "nboot": 200, "cbins": "mass"}
+          "dist": "", "lo": 0.25, "hi": 0.75, "cs1": 0.00004, "cs2": 0.004, "budget": 0.1, "nboot": 200, "cbins": "mass"}
     return _js(f"policyStateFromInputs({json.dumps(st)}, {json.dumps(base)})")
 
 
 @needs_node
-@pytest.mark.parametrize("values", [{"cs2": ""}, {"budget": " "}, {"cs2": "abc"}, {"budget": "1e400"}])
+@pytest.mark.parametrize("values", [{"cs2": ""}, {"budget": " "}, {"cs2": "abc"}, {"budget": "1e400"}, {"cs1": ""}, {"cs1": "x"}])
 def test_a_number_mid_edit_changes_nothing(values) -> None:
     assert _from_inputs(**values) is None
 
 
 @needs_node
 def test_the_inputs_go_through_the_hashs_rule() -> None:
-    st = _from_inputs(budget="2", cs2="-1", lo="0.8", hi="0.3", dist="true")
-    assert (st["budget"], st["cs2"], st["lo"], st["hi"], st["dist"]) == (1, 0, 0.3, 0.8, "true")
+    st = _from_inputs(budget="2", cs1="0.0003", cs2="-1", lo="0.8", hi="0.3", dist="true")
+    assert (st["budget"], st["cs1"], st["cs2"], st["lo"], st["hi"], st["dist"]) == (1, 0.0003, 0, 0.3, 0.8, "true")
     # The group and the views' questions are kept, and the state is what its own hash reads back.
     assert (st["qid"], st["dq"], st["view"]) == ("q", "q", "policy")
     assert _js(f"parseHash(formatHash({json.dumps(st)}))") == st
@@ -334,3 +338,37 @@ def test_an_empty_filter_value_is_no_filter(ws) -> None:
     audit = client.get("/api/audit?n_boot=20").json()
     assert client.get("/api/audit?n_boot=20&question_id=&model_served=&primitive=").json() == audit
     assert client.get("/api/slices?primitive=").json() == client.get("/api/slices").json()
+
+
+# --- every control has a name ------------------------------------------------------------------
+
+
+def _unnamed_controls(html: str) -> list[str]:
+    """The `<input>` / `<select>` / `<textarea>` tags of the page, static or in a template, that a
+    screen reader would announce by role alone: no `aria-label`, no `aria-labelledby`, and no
+    `<label for>` naming their id."""
+    labelled = set(re.findall(r'<label for="([^"]+)"', html))
+    unnamed = []
+    for tag in re.findall(r"<(?:input|select|textarea)\b[^>]*>", html):
+        ident = re.search(r'\bid="([^"]+)"', tag)
+        if "aria-label" in tag or (ident and ident.group(1) in labelled):
+            continue
+        unnamed.append(tag)
+    return unnamed
+
+
+def test_every_control_has_an_accessible_name() -> None:
+    html = (STATIC_DIR / "index.html").read_text()
+    assert len(re.findall(r"<(?:input|select|textarea)\b[^>]*>", html)) >= 12
+    assert _unnamed_controls(html) == []
+    # The check sees a control that lost its name, by either route.
+    assert len(_unnamed_controls(html.replace('<label for="inp-cost-s2">', "<label>"))) == 1
+    assert len(_unnamed_controls(html.replace(' aria-label="band_lo (Auto-FALSE below)"', ""))) == 1
+
+
+def test_a_slider_is_named_without_its_live_value() -> None:
+    # Its visible label holds the value's <span>; the slider announces its value itself.
+    html = (STATIC_DIR / "index.html").read_text()
+    for ident in ("inp-tau-low", "inp-tau-high"):
+        assert f'<label for="{ident}"' not in html
+        assert re.search(rf'<input type="range" id="{ident}" aria-label="band_(?:lo|hi) \([^"]+\)"', html)

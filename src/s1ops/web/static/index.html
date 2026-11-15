@@ -20,9 +20,10 @@
       --warn: #a15c07;
       --err: #b42318;
       --focus: #0b6aa2;
-      /* Chart series: the dataviz categorical slots 1 and 2, never the status colors above. */
+      /* Chart series: the dataviz categorical slots 1 to 3, never the status colors above. */
       --series-1: #2a78d6;
       --series-2: #eb6834;
+      --series-3: #1baf7a;
       --grid: #e8ecf2;
       --axis: #a3adbd;
       --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
@@ -46,6 +47,7 @@
         --focus: #7dd3fc;
         --series-1: #3987e5;
         --series-2: #d95926;
+        --series-3: #199e70;
         --grid: #1f2a3d;
         --axis: #44536e;
       }
@@ -66,6 +68,7 @@
       --focus: #7dd3fc;
       --series-1: #3987e5;
       --series-2: #d95926;
+      --series-3: #199e70;
       --grid: #1f2a3d;
       --axis: #44536e;
     }
@@ -363,6 +366,18 @@
     .legend .key.ref { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
     .legend .ser-1 { stroke: var(--series-1); }
     .legend .ser-2 { stroke: var(--series-2); }
+    .viz .line.dotted { stroke-dasharray: 2 4; }
+    .viz .ser-3 { stroke: var(--series-3); }
+    .viz .dot.ser-3, .legend .ser-3.fill { fill: var(--series-3); }
+    .legend .ser-3 { stroke: var(--series-3); }
+    .legend .key.dotted { stroke-dasharray: 2 3; }
+    /* The area between two bounds, the neutral mark of an annotation, a scatter's context marks,
+       and a line chart's hover crosshair. */
+    .viz .area, .legend .area { stroke: none; fill-opacity: 0.18; }
+    .viz .area.ser-1, .legend .area.ser-1 { fill: var(--series-1); }
+    .viz .dot.mark, .legend .mark.fill { fill: var(--text); stroke: var(--panel); }
+    .viz .dot.ctx, .legend .ctx.fill { fill: var(--muted); stroke: none; fill-opacity: 0.6; }
+    .viz .cross { stroke: var(--muted); stroke-width: 1; pointer-events: none; }
     #chart-tip {
       position: fixed;
       z-index: 10;
@@ -408,6 +423,14 @@
     .calib-note { font-size: 12px; color: var(--muted); }
     .calib-top { align-items: start; }
     .kpi-stack { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+    /* Policy simulator. */
+    .policy-charts { align-items: start; }
+    .card h3.section-head { margin-top: 20px; }
+    table.facts { width: auto; margin: 6px 0; }
+    table.facts th, table.facts td { padding: 5px 14px 5px 0; }
+    table.facts td { text-align: right; }
+    .scroll-table .tk-body { max-height: 420px; overflow: auto; }
+    .scroll-table thead th { position: sticky; top: 0; background: var(--panel); }
     @media (max-width: 860px) {
       header { flex-wrap: wrap; padding: 10px 16px; }
       .layout { grid-template-columns: minmax(0, 1fr); }
@@ -486,11 +509,11 @@
     <section id="tab-policy" class="tab-pane" role="tabpanel" aria-labelledby="nav-policy">
       <div class="controls">
         <div class="control-group">
-          <label>Group (question_id · model_served · primitive)</label>
+          <label for="inp-group">Group (question_id · model_served · primitive)</label>
           <select id="inp-group"><option value="">Default group (first noul, else first)</option></select>
         </div>
         <div class="control-group">
-          <label>Probabilities</label>
+          <label for="inp-dist">Probabilities</label>
           <select id="inp-dist">
             <option value="">Auto (calibrated when the group has calib)</option>
             <option value="false">Raw</option>
@@ -499,19 +522,23 @@
         </div>
         <div class="control-group band-control">
           <label>band_lo (Auto-FALSE below): <span id="lbl-tau-low">0.25</span></label>
-          <input type="range" id="inp-tau-low" min="0.05" max="0.90" step="0.05" value="0.25" />
+          <input type="range" id="inp-tau-low" aria-label="band_lo (Auto-FALSE below)" min="0.05" max="0.90" step="0.05" value="0.25" />
         </div>
         <div class="control-group band-control">
           <label>band_hi (Auto-TRUE at/above): <span id="lbl-tau-high">0.75</span></label>
-          <input type="range" id="inp-tau-high" min="0.10" max="0.95" step="0.05" value="0.75" />
+          <input type="range" id="inp-tau-high" aria-label="band_hi (Auto-TRUE at/above)" min="0.10" max="0.95" step="0.05" value="0.75" />
         </div>
         <div class="control-group">
-          <label>System 2 Escalation Cost ($/call)</label>
+          <label for="inp-cost-s1">System 1 Cost ($/call)</label>
+          <input type="number" id="inp-cost-s1" value="0.00004" step="0.00001" min="0" />
+        </div>
+        <div class="control-group">
+          <label for="inp-cost-s2">System 2 Escalation Cost ($/call)</label>
           <input type="number" id="inp-cost-s2" value="0.004" step="0.001" min="0.0001" />
         </div>
         <div class="control-group">
           <label>Error budget (error rate among accepted answers)</label>
-          <input type="number" id="inp-err-budget" value="0.10" step="0.02" min="0.01" max="0.50" />
+          <input type="number" id="inp-err-budget" aria-label="Error budget (error rate among accepted answers)" value="0.10" step="0.02" min="0.01" max="0.50" />
         </div>
       </div>
       <div id="policy-container">Loading policy simulation...</div>
@@ -662,7 +689,7 @@
     }
 
     function defaultState() {
-      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass"};
+      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs1: 0.00004, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass"};
     }
 
     // The calibration view's bootstrap sizes: its picker's options, all inside /api/audit's 20..2000.
@@ -705,6 +732,7 @@
       const hi = bandStep(hashNumber(params.get("hi"), st.hi, 0.10, 0.95));
       st.lo = Math.min(lo, hi);
       st.hi = Math.max(lo, hi);
+      st.cs1 = hashNumber(params.get("cs1"), st.cs1, 0, 1e6);
       st.cs2 = hashNumber(params.get("cs2"), st.cs2, 0, 1e6);
       st.budget = hashNumber(params.get("budget"), st.budget, 0, 1);
       // One of the picker's sizes, else the default (never a size the picker cannot show).
@@ -717,7 +745,7 @@
     function formatHash(st) {
       const d = defaultState();
       const params = new URLSearchParams();
-      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs2", "budget", "nboot", "cbins"].forEach(k => {
+      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs1", "cs2", "budget", "nboot", "cbins"].forEach(k => {
         if (st[k] !== d[k]) params.set(k, String(st[k]));
       });
       const query = params.toString();
@@ -887,6 +915,14 @@
       return ticks;
     }
 
+    // The first multiple of the tick step at or above `v`: an axis end that is itself a tick.
+    function niceMax(v, count) {
+      const ticks = niceTicks(0, v, count);
+      if (ticks.length < 2) return v;
+      const step = ticks[1] - ticks[0];
+      return Number((Math.ceil(v / step - 1e-9) * step).toPrecision(12));
+    }
+
     // An SVG chart: its viewBox, and a title and description (its accessible name and summary).
     // Its marks take no focus: `details`, the DOM id of the table holding the same values, is the
     // keyboard and screen-reader path (aria-details), so every chart needs one.
@@ -895,15 +931,29 @@
       return `<svg class="chart" viewBox="0 0 ${Number(spec.w)} ${Number(spec.h)}" role="img"${details}><title>${esc(spec.title)}</title><desc>${esc(spec.desc)}</desc>${body}</svg>`;
     }
 
-    // Hairline gridlines at the ticks, the two axis lines, tick labels and the axis names.
+    // A tick's label: `digits` places, or scientific notation where the fixed form would be too
+    // wide to sit beside the axis (more than 4 places, or a million and up): "0.0005", then "5e-5".
+    function tickLabel(v, digits) {
+      if (typeof v !== "number" || !Number.isFinite(v)) return "N/A";
+      if (digits > 4 || Math.abs(v) >= 1e6) return v === 0 ? "0" : v.toExponential(1).replace(".0e", "e");
+      return v.toFixed(digits);
+    }
+
+    // Hairline gridlines at the ticks, the two axis lines, tick labels and the axis names. `digits`
+    // are the tick labels' places (`yDigits` for the y axis alone); `nameGap` is how far left of the
+    // axis the y name sits, and it grows to clear the widest y label (10px monospace digits).
     function svgAxes(ax) {
-      const fmt = v => esc(fmtNum(v, ax.digits === undefined ? 1 : ax.digits));
+      const digits = ax.digits === undefined ? 1 : ax.digits;
+      const fmt = v => esc(tickLabel(v, digits));
+      const fmtY = v => esc(tickLabel(v, ax.yDigits === undefined ? digits : ax.yDigits));
+      const widest = ax.yTicks.reduce((m, t) => Math.max(m, fmtY(t).length), 0);
+      const nameGap = Math.max(ax.nameGap === undefined ? 34 : ax.nameGap, 6 + widest * 6.1 + 8);
       const xs = ax.xTicks.map(t => `<line class="grid" x1="${px(ax.x(t))}" y1="${px(ax.top)}" x2="${px(ax.x(t))}" y2="${px(ax.bottom)}" /><text x="${px(ax.x(t))}" y="${px(ax.bottom + 14)}" text-anchor="middle">${fmt(t)}</text>`).join("");
-      const ys = ax.yTicks.map(t => `<line class="grid" x1="${px(ax.left)}" y1="${px(ax.y(t))}" x2="${px(ax.right)}" y2="${px(ax.y(t))}" /><text x="${px(ax.left - 6)}" y="${px(ax.y(t) + 3)}" text-anchor="end">${fmt(t)}</text>`).join("");
+      const ys = ax.yTicks.map(t => `<line class="grid" x1="${px(ax.left)}" y1="${px(ax.y(t))}" x2="${px(ax.right)}" y2="${px(ax.y(t))}" /><text x="${px(ax.left - 6)}" y="${px(ax.y(t) + 3)}" text-anchor="end">${fmtY(t)}</text>`).join("");
       const midY = (ax.top + ax.bottom) / 2;
       return `<g>${xs}${ys}<line class="axis" x1="${px(ax.left)}" y1="${px(ax.bottom)}" x2="${px(ax.right)}" y2="${px(ax.bottom)}" /><line class="axis" x1="${px(ax.left)}" y1="${px(ax.top)}" x2="${px(ax.left)}" y2="${px(ax.bottom)}" />` +
         `<text class="axis-name" x="${px((ax.left + ax.right) / 2)}" y="${px(ax.bottom + 30)}" text-anchor="middle">${esc(ax.xName)}</text>` +
-        `<text class="axis-name" transform="translate(${px(ax.left - 34)} ${px(midY)}) rotate(-90)" text-anchor="middle">${esc(ax.yName)}</text></g>`;
+        `<text class="axis-name" transform="translate(${px(ax.left - nameGap)} ${px(midY)}) rotate(-90)" text-anchor="middle">${esc(ax.yName)}</text></g>`;
     }
 
     // A 2px line through points ({x, y} in pixels); none for fewer than two.
@@ -913,15 +963,73 @@
       return `<polyline class="line ${esc(cls)}${dashed ? " dashed" : ""}" points="${pts.map(p => px(p.x) + "," + px(p.y)).join(" ")}" />`;
     }
 
-    // Markers (circle or square, r 4, ringed in the surface color), each under a larger
-    // transparent hit target carrying its tooltip.
+    // Markers (a circle of r 4, a square, a diamond, or a "small" circle of r 2.5), ringed in the
+    // surface color, each under a larger transparent hit target carrying its tooltip; a point
+    // without a `tip` gets no target (another layer answers the pointer there).
     function svgDots(points, cls, shape) {
       return points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).map(p => {
-        const mark = shape === "square"
-          ? `<rect class="dot ${esc(cls)}" x="${px(p.x - 4)}" y="${px(p.y - 4)}" width="8" height="8" />`
-          : `<circle class="dot ${esc(cls)}" cx="${px(p.x)}" cy="${px(p.y)}" r="4" />`;
-        return `${mark}<circle class="hit" cx="${px(p.x)}" cy="${px(p.y)}" r="10" data-tip="${esc(p.tip)}" />`;
+        let mark = `<circle class="dot ${esc(cls)}" cx="${px(p.x)}" cy="${px(p.y)}" r="${shape === "small" ? "2.5" : "4"}" />`;
+        if (shape === "square") mark = `<rect class="dot ${esc(cls)}" x="${px(p.x - 4)}" y="${px(p.y - 4)}" width="8" height="8" />`;
+        if (shape === "diamond") mark = `<path class="dot ${esc(cls)}" d="M${px(p.x)} ${px(p.y - 5)}L${px(p.x + 5)} ${px(p.y)}L${px(p.x)} ${px(p.y + 5)}L${px(p.x - 5)} ${px(p.y)}Z" />`;
+        return p.tip === undefined ? mark : `${mark}<circle class="hit" cx="${px(p.x)}" cy="${px(p.y)}" r="10" data-tip="${esc(p.tip)}" />`;
       }).join("");
+    }
+
+    // Hover targets alone ({x, y, tip} in pixels), for marks drawn without their own.
+    function svgHits(points) {
+      return points.filter(s => Number.isFinite(s.x) && Number.isFinite(s.y)).map(s =>
+        `<circle class="hit" cx="${px(s.x)}" cy="${px(s.y)}" r="10" data-tip="${esc(s.tip)}" />`
+      ).join("");
+    }
+
+    // The area between two bounds ({x, y0, y1} in pixels) along x; none for fewer than two points.
+    function svgBand(points, cls) {
+      const pts = points.filter(p => [p.x, p.y0, p.y1].every(Number.isFinite));
+      if (pts.length < 2) return "";
+      const there = pts.map(p => px(p.x) + " " + px(p.y1));
+      const back = pts.slice().reverse().map(p => px(p.x) + " " + px(p.y0));
+      return `<path class="area ${esc(cls)}" d="M${there.concat(back).join("L")}Z" />`;
+    }
+
+    // A line chart's hover layer: one transparent rectangle over the plot (`box`: left, right, top,
+    // bottom) carrying every point's x and tooltip ({x, tip} in pixels), after the crosshair that
+    // moveTip moves to the point it picks. The pointer reads the point nearest in x (plotPick),
+    // however close its neighbours are: there are no per-point targets to overlap, to round away
+    // or to cross the plot's sides. Points written at one x are one entry naming each.
+    function svgHoverPlot(points, box) {
+      const entries = [];
+      points.filter(p => Number.isFinite(p.x)).sort((a, b) => a.x - b.x).forEach(p => {
+        const x = Number(px(p.x));
+        const last = entries[entries.length - 1];
+        if (last && last[0] === x) last[1] += "\n\n" + p.tip;
+        else entries.push([x, String(p.tip)]);
+      });
+      if (!entries.length) return "";
+      return `<line class="cross" x1="0" y1="${px(box.top)}" x2="0" y2="${px(box.bottom)}" visibility="hidden" />` +
+        `<rect class="hit plot" x="${px(box.left)}" y="${px(box.top)}" width="${px(box.right - box.left)}" height="${px(box.bottom - box.top)}" data-points="${esc(JSON.stringify(entries))}" />`;
+    }
+
+    // The entry of a hover plot ([x, tip] pairs) nearest to x, the first of two equally near; null
+    // for none.
+    function plotPick(entries, x) {
+      const i = nearestIndex(entries.map(e => ({x: e[0], y: 0})), x, 0);
+      return i < 0 ? null : entries[i];
+    }
+
+    // A pointer's x in a chart's own coordinates: the chart is drawn `viewWidth` wide and shown
+    // `boxWidth` wide from `boxLeft`.
+    function chartX(clientX, boxLeft, boxWidth, viewWidth) {
+      return boxWidth > 0 ? (clientX - boxLeft) / boxWidth * viewWidth : NaN;
+    }
+
+    // At most `limit` of `items`, evenly spaced with both ends, and the one at index `keep` (-1 for
+    // none): what a long curve offers the pointer. Every item when there are no more than `limit`.
+    function thinned(items, limit, keep) {
+      if (items.length <= limit) return items.slice();
+      const picked = new Set();
+      for (let i = 0; i < limit; i++) picked.add(Math.round(i * (items.length - 1) / (limit - 1)));
+      if (keep >= 0 && keep < items.length) picked.add(keep);
+      return Array.from(picked).sort((a, b) => a - b).map(i => items[i]);
     }
 
     // Vertical intervals ({x, y0, y1} in pixels) with short caps.
@@ -945,13 +1053,17 @@
       }).join("");
     }
 
-    // The legend: each entry's line key (solid, dashed or the reference style) and marker shape
-    // beside its name, so a series is never told by color alone.
+    // The legend: each entry's line key (solid, dashed, dotted or the reference style; none with
+    // `noLine`) and marker shape beside its name, so a series is never told by color alone.
     function svgLegend(items) {
       return `<div class="legend">${items.map(it => {
-        const line = `<line class="key ${esc(it.cls)}${it.dashed ? " dashed" : ""}" x1="0" y1="6" x2="26" y2="6" />`;
-        const mark = it.shape === "square" ? `<rect class="${esc(it.cls)} fill" x="9" y="2" width="8" height="8" />`
-          : it.shape === "circle" ? `<circle class="${esc(it.cls)} fill" cx="13" cy="6" r="4" />` : "";
+        const line = it.noLine ? "" : `<line class="key ${esc(it.cls)}${it.dashed ? " dashed" : ""}${it.dotted ? " dotted" : ""}" x1="0" y1="6" x2="26" y2="6" />`;
+        let mark = "";
+        if (it.shape === "square") mark = `<rect class="${esc(it.cls)} fill" x="9" y="2" width="8" height="8" />`;
+        if (it.shape === "circle") mark = `<circle class="${esc(it.cls)} fill" cx="13" cy="6" r="4" />`;
+        if (it.shape === "small") mark = `<circle class="${esc(it.cls)} fill" cx="13" cy="6" r="2.5" />`;
+        if (it.shape === "diamond") mark = `<path class="${esc(it.cls)} fill" d="M13 1L18 6L13 11L8 6Z" />`;
+        if (it.shape === "area") mark = `<rect class="${esc(it.cls)} area" x="0" y="1" width="26" height="10" />`;
         return `<span class="legend-item"><svg viewBox="0 0 26 12" width="26" height="12" aria-hidden="true">${line}${mark}</svg>${esc(it.name)}</span>`;
       }).join("")}</div>`;
     }
@@ -1065,8 +1177,8 @@
             <span class="tk-title">${esc(spec.caption)}</span>
             <input type="search" class="tk-filter" data-table="${id}" aria-label="Filter rows: ${esc(spec.caption)}" placeholder="Filter rows" value="${esc(st.q)}" />
             <span class="tk-count sub" aria-live="polite">${esc(tableCountText(shown, rows.length))}</span>
-            <button type="button" class="tool" data-act="tk-csv" data-table="${id}">CSV</button>
-            <button type="button" class="tool" data-act="tk-json" data-table="${id}">JSON</button>
+            <button type="button" class="tool" data-act="tk-csv" data-table="${id}" aria-label="CSV: ${esc(spec.caption)}">CSV</button>
+            <button type="button" class="tool" data-act="tk-json" data-table="${id}" aria-label="JSON: ${esc(spec.caption)}">JSON</button>
           </div>
           <div class="tk-body">${tableBodyHtml(spec, rows, st)}</div>
         </div>`;
@@ -1275,14 +1387,16 @@
       const el = document.getElementById("calib-container");
       if (ctx.mode === "list") {
         const kept = {list: ctx.groups || []};
-        if (ctx.keep) ctx.keep(kept);
         el.innerHTML = renderCalib(kept, ctx.opts ? ctx.opts() : {});
+        if (ctx.keep) ctx.keep(kept);
         return;
       }
       const data = await fetchJson(apiUrl("/api/audit", {...(ctx.params || {}), n_boot: ctx.nboot}));
       if (isStale(ctx)) return;
-      if (ctx.keep) ctx.keep(data);
+      // Kept only once it is on screen: a payload the renderer throws on leaves nothing behind
+      // the error card for a later re-render or table action to read.
       el.innerHTML = renderCalib(data, ctx.opts ? ctx.opts() : {});
+      if (ctx.keep) ctx.keep(data);
     }
 
     // The bins one strategy draws, per side, each with its Wilson interval and success count
@@ -1531,20 +1645,375 @@
         `;
     }
 
+    // --- policy simulator -------------------------------------------------------------------------
+    // Pure builders over one /api/simulate-policy response; loadPolicy places them. The page decides
+    // nothing the server decided: the tuned point, the frontier and the recommended band are the
+    // ones the response names.
+
+    // A price per call as JavaScript prints it (0.00004, never 0.0000); "N/A" when not a number.
+    function fmtPrice(v) {
+      return typeof v === "number" && Number.isFinite(v) ? "$" + String(v) : "N/A";
+    }
+
+    // An amount in dollars to `digits` places (4 by default); "N/A" when not a number.
+    function fmtUsd(v, digits) {
+      return typeof v === "number" && Number.isFinite(v) ? "$" + v.toFixed(digits === undefined ? 4 : digits) : "N/A";
+    }
+
+    // The decimal places that tell these ticks apart: 0 for a step of 1 or more, 1 for 0.2, 2 for
+    // 0.05 (at most 20; past 4, tickLabel writes the tick in scientific notation).
+    function tickDigits(ticks) {
+      const step = ticks.length > 1 ? ticks[1] - ticks[0] : NaN;
+      if (!(step > 0) || !Number.isFinite(step)) return 2;
+      return Math.min(20, Math.max(0, Math.ceil(-Math.log10(step) - 1e-9)));
+    }
+
+    // The largest finite value of the named fields over the rows; 0 when there is none.
+    function peakOf(rows, keys) {
+      return rows.reduce((m, r) => keys.reduce((mm, k) => (typeof r[k] === "number" && Number.isFinite(r[k]) && r[k] > mm ? r[k] : mm), m), 0);
+    }
+
+    // A curve longer than this offers the pointer evenly spaced points; shorter ones, every point.
+    function curveHoverLimit() {
+      return 400;
+    }
+
+    // A curve of at most this many points draws a marker at each.
+    function curveDotLimit() {
+      return 40;
+    }
+
+    // What every exported row of the simulator carries: the group and the distribution simulated.
+    function policyIdent(d) {
+      const g = (d && d.group) || {};
+      return {question_id: g.question_id, model_served: g.model_served, primitive: g.primitive, distribution: d ? d.distribution : undefined};
+    }
+
+    // The curve's points as rows, and the index of the one the server tuned (-1 when it tuned
+    // none): the point whose threshold is the served one, never one the page judges feasible.
+    function policyCurve(d) {
+      const t = d.tuned_threshold ? d.tuned_threshold.threshold : null;
+      const ident = policyIdent(d);
+      const points = Array.isArray(d.threshold_curve) ? d.threshold_curve : [];
+      const tuned = typeof t === "number" ? points.findIndex(p => p.threshold === t) : -1;
+      return {tuned, rows: points.map((p, i) => ({...ident, ...p, tuned: i === tuned ? "tuned" : ""}))};
+    }
+
+    function sameBand(a, b) {
+      return Boolean(a && b) && a.lo === b.lo && a.hi === b.hi;
+    }
+
+    // Every band the Pareto chart draws, one row per distinct (lo, hi): the swept bands, and the
+    // active band first when the sweep's grid does not hold it. `role` names every role a band
+    // has; the frontier and the recommended band are the response's, matched by their ends.
+    function policyBands(d) {
+      const display = d.display || {};
+      const swept = Array.isArray(display.swept_bands) ? display.swept_bands : [];
+      const frontier = Array.isArray(d.pareto_frontier) ? d.pareto_frontier : [];
+      const active = d.band_supported ? d.active_band : null;
+      const recommended = d.recommended_band_under_35pct_esc || null;
+      const all = active && !swept.some(s => sameBand(s, active)) ? [active, ...swept] : swept;
+      const ident = policyIdent(d);
+      return all.map(s => {
+        const is = {active: sameBand(s, active), recommended: sameBand(s, recommended), frontier: frontier.some(f => sameBand(f, s))};
+        return {...ident, ...s, ...is, role: ["active", "recommended", "frontier"].filter(k => is[k]).join(", ")};
+      });
+    }
+
+    // The simulator's tables for one response: the curve, and for a noul group the bands. Their
+    // ids hold the group key, so a sort or filter survives every slider move.
+    function policyTables(d) {
+      const g = (d && d.group) || {};
+      const key = JSON.stringify([g.question_id, g.model_served, g.primitive]);
+      const file = fileSafe([g.question_id, g.model_served, g.primitive].join("-"));
+      const groupCols = [
+        {key: "question_id", name: "question_id", kind: "text", exportOnly: true},
+        {key: "model_served", name: "model_served", kind: "text", exportOnly: true},
+        {key: "primitive", name: "primitive", kind: "text", exportOnly: true},
+        {key: "distribution", name: "distribution", kind: "text", exportOnly: true},
+      ];
+      const out = {
+        curve: {
+          spec: {id: "policy:curve:" + key, domId: "policy-curve-table", caption: "Threshold operating curve", file: `policy-curve-${file}`, columns: [
+            ...groupCols,
+            {key: "threshold", name: "Threshold", kind: "num", digits: 4},
+            {key: "tuned", name: "Tuned", kind: "text"},
+            {key: "accepted", name: "Accepted", kind: "num", digits: 0},
+            {key: "coverage", name: "Coverage", kind: "num", digits: 4},
+            {key: "errors", name: "Errors", kind: "num", digits: 0},
+            {key: "error_rate", name: "Error rate", kind: "num", digits: 4},
+            {key: "cp_upper_95", name: "CP upper 95%", kind: "num", digits: 4},
+            {key: "cost_per_1k_usd", name: "Cost / 1k ($)", kind: "num", digits: 4},
+            {key: "s1_per_1k_usd", name: "System 1 / 1k ($)", kind: "num", digits: 4},
+            {key: "delegate_per_1k_usd", name: "System 2 / 1k ($)", kind: "num", digits: 4},
+            {key: "error_per_1k_usd", name: "Errors / 1k ($)", kind: "num", digits: 4},
+          ]},
+          rows: policyCurve(d).rows,
+        },
+      };
+      if (d && d.band_supported) {
+        out.bands = {
+          spec: {id: "policy:bands:" + key, domId: "policy-bands-table", caption: "Bands: the 0.10 sweep and the active band", file: `policy-bands-${file}`, columns: [
+            ...groupCols,
+            {key: "band", name: "Band [lo, hi)", kind: "text"},
+            {key: "lo", name: "lo", kind: "num", digits: 2, exportOnly: true},
+            {key: "hi", name: "hi", kind: "num", digits: 2, exportOnly: true},
+            {key: "role", name: "Role", kind: "text"},
+            {key: "n", name: "n", kind: "num", digits: 0, exportOnly: true},
+            {key: "escalated", name: "Escalated", kind: "num", digits: 0, exportOnly: true},
+            {key: "escalation_rate", name: "Escalation rate", kind: "num", digits: 3},
+            {key: "tp", name: "TP", kind: "num", digits: 0},
+            {key: "fp", name: "FP", kind: "num", digits: 0},
+            {key: "fn", name: "FN", kind: "num", digits: 0},
+            {key: "tn", name: "TN", kind: "num", digits: 0},
+            {key: "precision", name: "Precision", kind: "num", digits: 3},
+            {key: "recall", name: "Recall", kind: "num", digits: 3},
+            {key: "f1", name: "F1", kind: "num", digits: 3},
+            {key: "accuracy", name: "Accuracy", kind: "num", digits: 3},
+            {key: "cost_usd", name: "Batch cost ($)", kind: "num", digits: 4},
+          ]},
+          rows: policyBands(d),
+        };
+      }
+      return out;
+    }
+
+    function curveTip(p) {
+      return `threshold ${fmtNum(p.threshold, 4)}${p.tuned ? " (tuned)" : ""}\n` +
+        `accepted ${fmtNum(p.accepted, 0)}, coverage ${fmtNum(p.coverage, 4)}\n` +
+        `errors ${fmtNum(p.errors, 0)}, error rate ${fmtNum(p.error_rate, 4)}, CP upper 95% ${fmtNum(p.cp_upper_95, 4)}\n` +
+        `per 1,000: ${fmtUsd(p.cost_per_1k_usd)} = System 1 ${fmtUsd(p.s1_per_1k_usd)} + System 2 ${fmtUsd(p.delegate_per_1k_usd)} + errors ${fmtUsd(p.error_per_1k_usd)}`;
+    }
+
+    // What the two curve charts share: the plot box and the x scale over coverage. The left margin
+    // holds a seven-character tick label ("1.5e-10") and the axis name beside it.
+    function curveFrame() {
+      const W = 460, ml = 70, mr = 20, mt = 14, ph = 220;
+      return {W, H: mt + ph + 40, left: ml, right: W - mr, top: mt, bottom: mt + ph, x: scaleLinear(0, 1, ml, W - mr), xTicks: niceTicks(0, 1, 5)};
+    }
+
+    // On either curve chart: the tuned point (a reference line at its coverage and a mark on the
+    // line of `key`), and the hover layer.
+    function curveMarks(curve, f, y, key) {
+      const tuned = curve.tuned >= 0 ? curve.rows[curve.tuned] : null;
+      let body = "";
+      if (tuned) {
+        const tx = f.x(finite(tuned.coverage));
+        if (Number.isFinite(tx)) body += `<line class="ref" x1="${px(tx)}" y1="${px(f.top)}" x2="${px(tx)}" y2="${px(f.bottom)}" />`;
+        body += svgDots([{x: tx, y: y(finite(tuned[key]))}], "mark", "diamond");
+      }
+      const hover = thinned(curve.rows, curveHoverLimit(), curve.tuned);
+      return body + svgHoverPlot(hover.map(p => ({x: f.x(finite(p.coverage)), tip: curveTip(p)})), f);
+    }
+
+    // Error rate among accepted records against coverage, shaded up to the Clopper-Pearson bound,
+    // with the budget the server tuned for as a reference line.
+    function thresholdCurveChartHtml(d, curve, details) {
+      const f = curveFrame();
+      const rows = curve.rows;
+      const budget = finite(d.tuned_threshold ? d.tuned_threshold.error_budget : NaN);
+      const peak = Math.max(peakOf(rows, ["error_rate", "cp_upper_95"]), Number.isFinite(budget) ? budget : 0);
+      const yTop = peak > 0 ? niceMax(peak, 5) : 1;
+      const y = scaleLinear(0, yTop, f.bottom, f.top);
+      const yTicks = niceTicks(0, yTop, 5);
+      let body = svgAxes({x: f.x, y, xTicks: f.xTicks, yTicks, left: f.left, right: f.right, top: f.top, bottom: f.bottom,
+        digits: tickDigits(f.xTicks), yDigits: tickDigits(yTicks), nameGap: 46, xName: "coverage (share of the group's records accepted)", yName: "error rate among accepted"});
+      body += svgBand(rows.map(p => ({x: f.x(finite(p.coverage)), y0: y(finite(p.error_rate)), y1: y(finite(p.cp_upper_95))})), "ser-1");
+      if (Number.isFinite(budget)) body += `<line class="ref" x1="${px(f.left)}" y1="${px(y(budget))}" x2="${px(f.right)}" y2="${px(y(budget))}" />`;
+      const pts = rows.map(p => ({x: f.x(finite(p.coverage)), y: y(finite(p.error_rate))}));
+      body += svgLine(pts, "ser-1", false);
+      if (rows.length <= curveDotLimit()) body += svgDots(pts, "ser-1", "circle");
+      body += curveMarks(curve, f, y, "error_rate");
+      const g = d.group || {};
+      return svgFrame({w: f.W, h: f.H, details, title: "Threshold operating curve of " + [g.question_id, g.model_served, g.primitive].join(" · "),
+        desc: `Error rate among accepted records against coverage over ${rows.length} thresholds, shaded up to the Clopper-Pearson 95% upper bound, with the error budget ${fmtNum(budget, 2)}${curve.tuned >= 0 ? " and the tuned threshold" : ""}.`}, body);
+    }
+
+    // Cost per 1,000 decisions against coverage: the total and its two parts that vary.
+    function costCurveChartHtml(d, curve, details) {
+      const f = curveFrame();
+      const rows = curve.rows;
+      const peak = peakOf(rows, ["cost_per_1k_usd"]);
+      const yTop = peak > 0 ? niceMax(peak, 5) : 1;
+      const y = scaleLinear(0, yTop, f.bottom, f.top);
+      const pts = key => rows.map(p => ({x: f.x(finite(p.coverage)), y: y(finite(p[key]))}));
+      const yTicks = niceTicks(0, yTop, 5);
+      let body = svgAxes({x: f.x, y, xTicks: f.xTicks, yTicks, left: f.left, right: f.right, top: f.top, bottom: f.bottom,
+        digits: tickDigits(f.xTicks), yDigits: tickDigits(yTicks), nameGap: 50, xName: "coverage (share of the group's records accepted)", yName: "USD per 1,000 decisions"});
+      body += svgLine(pts("delegate_per_1k_usd"), "ser-2", true);
+      body += svgLine(pts("error_per_1k_usd"), "ser-3 dotted", false);
+      body += svgLine(pts("cost_per_1k_usd"), "ser-1", false);
+      if (rows.length <= curveDotLimit()) body += svgDots(pts("cost_per_1k_usd"), "ser-1", "circle");
+      body += curveMarks(curve, f, y, "cost_per_1k_usd");
+      const g = d.group || {};
+      return svgFrame({w: f.W, h: f.H, details, title: "Cost per 1,000 decisions of " + [g.question_id, g.model_served, g.primitive].join(" · "),
+        desc: `Total cost per 1,000 decisions against coverage over ${rows.length} thresholds, with its System 2 delegation part and its expected error part.`}, body);
+    }
+
+    // One band as a tooltip line. Plain concatenation: the builder that takes it escapes it.
+    function bandTip(b) {
+      return String(b.band ?? "") + (b.role ? " (" + b.role + ")" : "") + ": F1 " + fmtNum(b.f1, 3) + ", accuracy " + fmtNum(b.accuracy, 3) +
+        ", escalated " + fmtRate(b.escalation_rate) + ", cost " + fmtUsd(b.cost_usd);
+    }
+
+    // The bands grouped by where they are drawn ({x, y, bands}), in first-seen order: bands at one
+    // pixel position are one hover target naming each, so none hides under another.
+    function bandSpots(bands, at) {
+      const spots = [];
+      const index = new Map();
+      bands.forEach(b => {
+        const p = at(b);
+        if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
+        const key = px(p.x) + "," + px(p.y);
+        if (!index.has(key)) {
+          index.set(key, spots.length);
+          spots.push({x: p.x, y: p.y, bands: []});
+        }
+        spots[index.get(key)].bands.push(b);
+      });
+      return spots;
+    }
+
+    // F1 against batch cost for every band of `bands` (policyBands): the swept bands as context,
+    // the response's frontier as a line, the active and the recommended band each in a shape of
+    // its own (a band that is both is drawn as the active one; its tooltip and row name both).
+    function paretoChartHtml(d, bands, details) {
+      const W = 460, ml = 52, mr = 24, mt = 14, ph = 240;
+      const peak = peakOf(bands, ["cost_usd"]);
+      const xTop = peak > 0 ? niceMax(peak, 5) : 1;
+      const x = scaleLinear(0, xTop, ml, W - mr), y = scaleLinear(0, 1, mt + ph, mt);
+      const at = b => ({x: x(finite(b.cost_usd)), y: y(finite(b.f1))});
+      const xTicks = niceTicks(0, xTop, 5);
+      let body = svgAxes({x, y, xTicks, yTicks: niceTicks(0, 1, 5), left: ml, right: W - mr, top: mt, bottom: mt + ph,
+        digits: tickDigits(xTicks), yDigits: 1, xName: "batch cost (USD)", yName: "F1"});
+      const frontier = bands.filter(b => b.frontier).sort((a, b) => finite(a.cost_usd) - finite(b.cost_usd));
+      body += svgDots(bands.filter(b => !b.frontier && !b.active && !b.recommended).map(at), "ctx", "small");
+      body += svgLine(frontier.map(at), "ser-1", false);
+      body += svgDots(frontier.filter(b => !b.active && !b.recommended).map(at), "ser-1", "circle");
+      body += svgDots(bands.filter(b => b.recommended && !b.active).map(at), "ser-3", "diamond");
+      body += svgDots(bands.filter(b => b.active).map(at), "ser-2", "square");
+      body += svgHits(bandSpots(bands, at).map(s => ({x: s.x, y: s.y,
+        tip: s.bands.slice(0, 8).map(bandTip).join("\n") + (s.bands.length > 8 ? `\n+${s.bands.length - 8} more at this point (all are in the table)` : "")})));
+      const g = d.group || {};
+      return svgFrame({w: W, h: mt + ph + 40, details, title: "Bands of " + [g.question_id, g.model_served].join(" · ") + " by cost and F1",
+        desc: `F1 against batch cost for ${bands.length} escalation bands: the 0.10 sweep, its Pareto frontier, the active band and the recommended band.`}, body);
+    }
+
+    // The threshold curve's two charts and its table: every primitive has them.
+    function policyCurveHtml(d, tables, tstate) {
+      const curve = policyCurve(d);
+      if (!curve.rows.length) {
+        return `
+            <h3 class="section-head">Threshold Operating Curve</h3>
+            <div class="sub">No curve: no record of this group can be accepted at any threshold (every one is a tie at the top, which an error-budget policy escalates).</div>`;
+      }
+      const costs = (d.display && d.display.costs) || {};
+      const dom = tables.curve.spec.domId;
+      const tuned = curve.tuned >= 0 ? curve.rows[curve.tuned] : null;
+      const mark = tuned ? [{name: "tuned threshold", cls: "mark", shape: "diamond", noLine: true}] : [];
+      const tunedNote = tuned
+        ? `The marked point is the threshold the server tuned (${fmtNum(tuned.threshold, 4)}): the last point where errors ≤ budget × accepted, as s1 policy tune counts it.`
+        : "No point is marked: no threshold meets the error budget.";
+      const hoverNote = curve.rows.length > curveHoverLimit()
+        ? ` Hover reads ${curveHoverLimit()} evenly spaced points and the tuned one; the table below holds all ${curve.rows.length}.`
+        : " Hover a point for its numbers; the same values are in the table below.";
+      const errLegend = svgLegend([
+        {name: "error rate among accepted", cls: "ser-1"},
+        {name: "up to its Clopper-Pearson 95% upper bound", cls: "ser-1", shape: "area", noLine: true},
+        {name: `error budget (${fmtNum(d.tuned_threshold ? d.tuned_threshold.error_budget : NaN, 2)})`, cls: "ref"},
+        ...mark,
+      ]);
+      const costLegend = svgLegend([
+        {name: "total", cls: "ser-1"},
+        {name: "System 2 delegation", cls: "ser-2", dashed: true},
+        {name: "expected error cost", cls: "ser-3", dotted: true},
+        ...mark,
+      ]);
+      const costNote = `Per 1,000 decisions at each threshold: System 1 on every record (${fmtPrice(costs.cost_s1)} a call, the same at every threshold and not drawn), ` +
+        `System 2 on every record not accepted (${fmtPrice(costs.cost_sys2)} a call), and ${fmtPrice(costs.c_error)} per wrong answer, ` +
+        `counting the accepted errors and System 2's own at an assumed accuracy of ${fmtNum(costs.delegate_accuracy, 2)}.`;
+      return `
+            <h3 class="section-head">Threshold Operating Curve</h3>
+            <div class="grid-2 policy-charts">
+              <div>${chartFigure({legend: errLegend, svg: thresholdCurveChartHtml(d, curve, dom), caption: `One point per distinct confidence, most confident first. ${tunedNote}${hoverNote}`})}</div>
+              <div>${chartFigure({legend: costLegend, svg: costCurveChartHtml(d, curve, dom), caption: costNote})}</div>
+            </div>
+            <div class="panel-block scroll-table">${tableHtml(tables.curve.spec, tables.curve.rows, tstate)}</div>`;
+    }
+
+    // What only a noul group has: the active band's confusion table and cost parts, the
+    // recommended band, and the sweep as a chart and a table.
+    function policyBandHtml(d, tables, tstate) {
+      const band = d.active_band || {};
+      const costs = (d.display && d.display.costs) || {};
+      const rec = d.recommended_band_under_35pct_esc || null;
+      const rows = tables.bands.rows;
+      const count = v => esc(fmtNum(v, 0));
+      const s1 = finite(band.n) * finite(costs.cost_s1), s2 = finite(band.escalated) * finite(costs.cost_sys2);
+      const legend = svgLegend([
+        {name: "swept band (0.10 grid)", cls: "ctx", shape: "small", noLine: true},
+        {name: "Pareto frontier", cls: "ser-1", shape: "circle"},
+        {name: "active band", cls: "ser-2", shape: "square", noLine: true},
+        ...(rec ? [{name: "recommended band", cls: "ser-3", shape: "diamond", noLine: true}] : []),
+      ]);
+      const recHtml = rec
+        ? `<div class="kpi">${esc(rec.band)}</div>
+                <div class="sub">F1 ${esc(fmtNum(rec.f1, 3))} · accuracy ${esc(fmtNum(rec.accuracy, 3))} · escalated ${esc(fmtRate(rec.escalation_rate))} · cost ${esc(fmtUsd(rec.cost_usd))}</div>`
+        : `<div class="sub">No band of the 0.10 grid escalates 35% or less.</div>`;
+      return `
+          <div class="grid-2 policy-charts">
+            <div>
+              <h3>Confusion of the Active Band</h3>
+              <table class="facts">
+                <thead><tr><td></td><th scope="col">Answered true</th><th scope="col">Answered false</th></tr></thead>
+                <tbody>
+                  <tr><th scope="row">Label true</th><td class="mono num">${count(band.tp)}</td><td class="mono num">${count(band.fn)}</td></tr>
+                  <tr><th scope="row">Label false</th><td class="mono num">${count(band.fp)}</td><td class="mono num">${count(band.tn)}</td></tr>
+                </tbody>
+              </table>
+              <div class="sub">Precision ${esc(fmtNum(band.precision, 3))} · recall ${esc(fmtNum(band.recall, 3))} · unresolved ${count(band.unresolved)}. An escalated record counts as answered with its label (the simulation takes System 2 to be right), so every error here is a System 1 auto-answer.</div>
+            </div>
+            <div>
+              <h3>Cost of the Active Band</h3>
+              <table class="facts">
+                <tbody>
+                  <tr><th scope="row">System 1</th><td class="mono num">${count(band.n)} × ${esc(fmtPrice(costs.cost_s1))}</td><td class="mono num">${esc(fmtUsd(s1))}</td></tr>
+                  <tr><th scope="row">System 2</th><td class="mono num">${count(band.escalated)} × ${esc(fmtPrice(costs.cost_sys2))}</td><td class="mono num">${esc(fmtUsd(s2))}</td></tr>
+                  <tr><th scope="row">Total (as served)</th><td></td><td class="mono num">${esc(fmtUsd(band.cost_usd))}</td></tr>
+                </tbody>
+              </table>
+              <div class="sub">Every record is answered by System 1; the escalated ones by System 2 as well. No error cost is counted here (the threshold curve's cost below counts one).</div>
+            </div>
+          </div>
+          <h3 class="section-head">Pareto Frontier (Cost vs F1)</h3>
+          <div class="grid-2 policy-charts">
+            <div>${chartFigure({legend, svg: paretoChartHtml(d, rows, tables.bands.spec.domId),
+              caption: "Every band of the 0.10 sweep, and the active band. The frontier: each band whose F1 no band of the sweep costing the same or less reaches. Hover a mark for its bands; the same values are in the Bands table below."})}</div>
+            <div>
+              <div class="sub">Recommended band: the best F1 on the 0.10 grid with at most 35% escalated</div>
+              ${recHtml}
+            </div>
+          </div>
+          <div class="panel-block scroll-table">${tableHtml(tables.bands.spec, tables.bands.rows, tstate)}</div>`;
+    }
+
     // Each simulator request takes a number; a response (or error) for an older request is
     // dropped, so a slow answer for the previous group never overwrites the current one.
     let policySeq = 0;
 
     async function loadPolicy() {
       const seq = ++policySeq;
+      // What is kept belongs to the request on screen: none while another is on its way.
+      delete viewData.policy;
       const low = parseFloat(document.getElementById("inp-tau-low").value);
       const high = parseFloat(document.getElementById("inp-tau-high").value);
+      const costS1 = parseFloat(document.getElementById("inp-cost-s1").value);
       const costS2 = parseFloat(document.getElementById("inp-cost-s2").value);
       const budget = parseFloat(document.getElementById("inp-err-budget").value);
       document.getElementById("lbl-tau-low").textContent = low.toFixed(2);
       document.getElementById("lbl-tau-high").textContent = high.toFixed(2);
 
-      const params = new URLSearchParams({tau_low: low, tau_high: high, cost_sys2: costS2, error_budget: budget});
+      const params = new URLSearchParams({tau_low: low, tau_high: high, cost_s1: costS1, cost_sys2: costS2, error_budget: budget});
       // Auto sends no use_calib: the server picks, and the response says which it used.
       const dist = document.getElementById("inp-dist").value;
       if (dist) params.set("use_calib", dist);
@@ -1578,6 +2047,8 @@
               </span>
               <div class="sub">${thresholdNote}</div>
             </div>`;
+      const tables = policyTables(d);
+      const curveHtml = policyCurveHtml(d, tables, TSTATE);
       const b = d.band_supported ? d.active_band : null;
       // The band sliders only mean something for a noul group.
       document.querySelectorAll(".band-control").forEach(el => { el.style.display = d.band_supported ? "" : "none"; });
@@ -1589,25 +2060,12 @@
             ${distLine}
             <div class="sub">${d.band_supported ? 'No band result for this group.' : 'Escalation bands are noul-only; this group routes by an error-budget threshold on its top probability.'}</div>
             <div class="grid-3">${thresholdHtml}</div>
-            <h3>Threshold Operating Curve</h3>
-            <table>
-              <thead>
-                <tr><th>Threshold</th><th>Coverage</th><th>Error Rate</th><th>CP Upper 95%</th><th>Cost / 1k ($)</th></tr>
-              </thead>
-              <tbody>
-                ${(d.threshold_curve || []).map(c => `
-                  <tr>
-                    <td class="mono">${c.threshold.toFixed(3)}</td>
-                    <td class="mono">${(c.coverage * 100).toFixed(1)}%</td>
-                    <td class="mono">${(c.error_rate * 100).toFixed(2)}%</td>
-                    <td class="mono">${(c.cp_upper_95 * 100).toFixed(2)}%</td>
-                    <td class="mono">$${c.cost_per_1k_usd.toFixed(4)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+            ${curveHtml}
           </div>
         `;
+        // Kept only once it is on screen (both branches): a response a builder throws on leaves
+        // nothing behind the error card for a table action to read.
+        viewData.policy = d;
         return;
       }
       const escPct = (b.escalation_rate * 100).toFixed(1);
@@ -1634,29 +2092,15 @@
             </div>
             ${thresholdHtml}
           </div>
-          <h3>Pareto Frontier (Cost vs F1)</h3>
-          <table>
-            <thead>
-              <tr><th>Band [lo, hi)</th><th>Hybrid Accuracy</th><th>F1</th><th>Escalation Rate</th><th>Batch Cost ($)</th></tr>
-            </thead>
-            <tbody>
-              ${(d.pareto_frontier || []).map(p => `
-                <tr>
-                  <td class="mono">${esc(p.band)}</td>
-                  <td class="mono">${(p.accuracy * 100).toFixed(2)}%</td>
-                  <td class="mono">${p.f1.toFixed(3)}</td>
-                  <td class="mono">${(p.escalation_rate * 100).toFixed(1)}%</td>
-                  <td class="mono">$${p.cost_usd.toFixed(4)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+          ${policyBandHtml(d, tables, TSTATE)}
+          ${curveHtml}
         </div>
       `;
+      viewData.policy = d;
     }
 
     // A simulator control requests only while the group is resolved, as the shell does.
-    ["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"].forEach(id => {
+    ["inp-tau-low", "inp-tau-high", "inp-cost-s1", "inp-cost-s2", "inp-err-budget"].forEach(id => {
       document.getElementById(id).addEventListener("input", () => {
         if (id === "inp-tau-low" || id === "inp-tau-high") pushBand(id);
         if (keepPolicyInputs() && policyReady()) run(loadPolicy, "policy-container");
@@ -1983,7 +2427,7 @@
       if (def.group && !groupReady(resolved)) return JSON.stringify(["blocked", resolved.status, generation]);
       const params = def.group ? groupParams(st, resolved) : {};
       let extra = [];
-      if (view === "policy") extra = [st.dist, st.lo, st.hi, st.cs2, st.budget];
+      if (view === "policy") extra = [st.dist, st.lo, st.hi, st.cs1, st.cs2, st.budget];
       // The list depends on the groups themselves, not only on how many there are.
       if (view === "calib") {
         const mode = auditMode(resolved, GROUPS, groupsState);
@@ -2129,6 +2573,7 @@
     function currentTables() {
       const d = viewData[STATE.view];
       if (STATE.view === "calib" && d) return calibTables(d, viewOpts());
+      if (STATE.view === "policy" && d) return Object.fromEntries(Object.values(policyTables(d)).map(t => [t.spec.id, t]));
       return {};
     }
 
@@ -2174,15 +2619,61 @@
       else downloadText(name, toJsonRows(entry.spec, rows), "application/json");
     }
 
-    // One tooltip for every chart: a mark's data-tip, written as text.
+    // The index of the point ({x, y}) nearest to (x, y); -1 for none.
+    function nearestIndex(points, x, y) {
+      let best = -1, bestD = Infinity;
+      points.forEach((p, i) => {
+        const d = (p.x - x) * (p.x - x) + (p.y - y) * (p.y - y);
+        if (d < bestD) {
+          best = i;
+          bestD = d;
+        }
+      });
+      return best;
+    }
+
+    // The crosshair a hover plot is showing, if any: hidden again by the next pointer move.
+    let hoverCross = null;
+
+    // One tooltip for every chart, written as text. A hover plot (a line chart) answers with the
+    // point nearest the pointer in x and moves its crosshair there. Round hover targets overlap
+    // where marks crowd, and the one drawn last would answer for its neighbours: the pointer reads
+    // the target of its chart whose centre is nearest.
     function moveTip(ev) {
       const tip = document.getElementById("chart-tip");
-      const mark = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
-      if (!mark) {
+      if (hoverCross) hoverCross.setAttribute("visibility", "hidden");
+      hoverCross = null;
+      let mark = ev.target && ev.target.closest ? ev.target.closest("[data-tip], [data-points]") : null;
+      let text = null;
+      if (mark && mark.hasAttribute("data-points")) {
+        const svg = mark.ownerSVGElement;
+        const box = svg.getBoundingClientRect();
+        if (!mark.hoverPoints) mark.hoverPoints = JSON.parse(mark.getAttribute("data-points"));
+        const pick = plotPick(mark.hoverPoints, chartX(ev.clientX, box.left, box.width, svg.viewBox.baseVal.width));
+        const cross = mark.previousElementSibling;
+        if (pick && cross) {
+          cross.setAttribute("x1", px(pick[0]));
+          cross.setAttribute("x2", px(pick[0]));
+          cross.setAttribute("visibility", "visible");
+          hoverCross = cross;
+        }
+        text = pick ? pick[1] : null;
+      } else if (mark) {
+        if (mark.matches("circle.hit") && mark.parentNode) {
+          const hits = Array.from(mark.parentNode.querySelectorAll("circle.hit"));
+          const centres = hits.map(h => {
+            const box = h.getBoundingClientRect();
+            return {x: box.left + box.width / 2, y: box.top + box.height / 2};
+          });
+          mark = hits[nearestIndex(centres, ev.clientX, ev.clientY)] || mark;
+        }
+        text = mark.getAttribute("data-tip");
+      }
+      if (text === null) {
         tip.hidden = true;
         return;
       }
-      tip.textContent = mark.getAttribute("data-tip");
+      tip.textContent = text;
       tip.hidden = false;
       const left = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 6);
       const top = ev.clientY - tip.offsetHeight - 12;
@@ -2190,14 +2681,24 @@
       tip.style.top = (top < 6 ? ev.clientY + 18 : top) + "px";
     }
 
+    // A number into its input, unless the input already names that number: "0.0" names 0, and
+    // rewriting it as "0" under the viewer's hands turns the 0.05 being typed into 5. A field that
+    // names another number (a clamped one, a link's) is rewritten.
+    function setNumberInput(id, v) {
+      const el = document.getElementById(id);
+      if (String(el.value).trim() !== "" && Number(el.value) === v) return;
+      el.value = String(v);
+    }
+
     // The simulator's inputs from the state, before its loader reads them. The group picker is set
     // only for a resolved group or none; an unresolved one keeps its own entry (syncFilterBar).
     function applyPolicyInputs(st) {
       document.getElementById("inp-dist").value = st.dist;
-      document.getElementById("inp-tau-low").value = String(st.lo);
-      document.getElementById("inp-tau-high").value = String(st.hi);
-      document.getElementById("inp-cost-s2").value = String(st.cs2);
-      document.getElementById("inp-err-budget").value = String(st.budget);
+      setNumberInput("inp-tau-low", st.lo);
+      setNumberInput("inp-tau-high", st.hi);
+      setNumberInput("inp-cost-s1", st.cs1);
+      setNumberInput("inp-cost-s2", st.cs2);
+      setNumberInput("inp-err-budget", st.budget);
       const resolved = resolveGroup(st, GROUPS, groupsState);
       if (resolved.status === "ok") document.getElementById("inp-group").value = String(resolved.index);
       if (resolved.status === "none") document.getElementById("inp-group").value = "";
@@ -2211,16 +2712,17 @@
     // band step, ends in order), so a link round-trips; null while a number is mid-edit (empty or
     // not a number), when nothing changes and nothing is requested.
     function policyStateFromInputs(st, values) {
-      const nums = ["lo", "hi", "cs2", "budget"].map(k => Number(values[k]));
-      if (nums.some(v => !Number.isFinite(v)) || ["lo", "hi", "cs2", "budget"].some(k => String(values[k]).trim() === "")) return null;
-      return parseHash(formatHash({...st, dist: values.dist, lo: nums[0], hi: nums[1], cs2: nums[2], budget: nums[3]}));
+      const keys = ["lo", "hi", "cs1", "cs2", "budget"];
+      const nums = keys.map(k => Number(values[k]));
+      if (nums.some(v => !Number.isFinite(v)) || keys.some(k => String(values[k]).trim() === "")) return null;
+      return parseHash(formatHash({...st, dist: values.dist, lo: nums[0], hi: nums[1], cs1: nums[2], cs2: nums[3], budget: nums[4]}));
     }
 
     // After an input changed: the state and the current history entry follow, without a new one,
     // and the inputs show the values requested. False while an input is mid-edit.
     function keepPolicyInputs() {
       const value = id => document.getElementById(id).value;
-      const next = policyStateFromInputs(STATE, {dist: value("inp-dist"), lo: value("inp-tau-low"), hi: value("inp-tau-high"), cs2: value("inp-cost-s2"), budget: value("inp-err-budget")});
+      const next = policyStateFromInputs(STATE, {dist: value("inp-dist"), lo: value("inp-tau-low"), hi: value("inp-tau-high"), cs1: value("inp-cost-s1"), cs2: value("inp-cost-s2"), budget: value("inp-err-budget")});
       if (!next) return false;
       STATE = next;
       applyPolicyInputs(STATE);

@@ -245,14 +245,19 @@ def load_trained(paths: Sequence[str | Path], served: Iterable[str | None], wher
     return {checkpoint: frozenset(items) for checkpoint, items in trained.items()}
 
 
-def check_not_trained(key: GroupKey, items: Iterable[ItemKey], trained: Trained, where: str) -> None:
-    """Refuse the items of group `key` that its model was trained on. Identity is `(dataset, item_id)`
-    across questions: the model saw the state, and rewording a question changes its `question_id`.
-    A group of another model passes, since that model never saw these items."""
+def trained_hits(key: GroupKey, items: Iterable[ItemKey], trained: Trained) -> list[ItemKey]:
+    """The items of group `key` that its model was trained on, each once, in item order. Identity is
+    `(dataset, item_id)` across questions: the model saw the state, and rewording a question changes
+    its `question_id`. A group of another model has none, since that model never saw these items."""
     known = trained.get(key[1])
     if not known:
-        return
-    hits = sorted({i for i in items if i in known}, key=_item_order)
+        return []
+    return sorted({i for i in items if i in known}, key=_item_order)
+
+
+def check_not_trained(key: GroupKey, items: Iterable[ItemKey], trained: Trained, where: str) -> None:
+    """Refuse the items of group `key` that its model was trained on (`trained_hits`)."""
+    hits = trained_hits(key, items, trained)
     if hits:
         raise TrainedItemError(
             f"{where}: {len(hits)} item(s) of group {key} are in the training set of {key[1]!r}, first {hits[0]}; "

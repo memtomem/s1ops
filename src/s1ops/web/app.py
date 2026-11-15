@@ -1,6 +1,6 @@
 """FastAPI Local Web Workbench for s1ops.
 
-Serves a 6-tab interactive System 1 LLMOps console on `127.0.0.1`:
+Serves a 7-tab interactive System 1 LLMOps console on `127.0.0.1`:
 1. Calibration & Noise Floor Explorer (Reliability SVG + ECE Floor + Tie-Mass)
 2. Threshold & Escalation Band Simulator (Interactive band_lo / band_hi sliders + Pareto)
 3. Question Lint & Probe Coherence Inspector (JL000-JL060 + Noul/Choice & Inverse gap)

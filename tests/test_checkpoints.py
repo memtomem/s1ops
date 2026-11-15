@@ -43,8 +43,7 @@ def _record(manifest: Path, items: list[str], out: Path, *flags: str, weights: b
     assert cli_main(argv) == 0
 
 
-@pytest.fixture
-def ws(tmp_path: Path, capsys) -> Path:
+def build_workspace(tmp_path: Path) -> Path:
     """Two checkpoints, the second started from the first, and records of both and of the model in place.
 
     `tickets-r1` trained on t0..t2; `tickets-r2` on u0..u1 and inherits r1's. `records.jsonl` holds
@@ -62,6 +61,17 @@ def ws(tmp_path: Path, capsys) -> Path:
     _write(root / "records.jsonl", held_out + [{**_row("e9", "eval", R1), "model_served": None, "error_code": "timeout"}])
     _write(root / "records_kev.jsonl", [_row("t0", "train", R1), _row("t1", "train", R1), _row("e0", "eval", R1),
                                         _row("t2", "train", R2), _row("u0", "train", R2), _row("e1", "eval", R2)])
+    return root
+
+
+def policy_entry(model: str, trainrun_id: str | None) -> PolicyEntry:
+    return PolicyEntry(question_id=QID, model_served=model, primitive="noul", mode="error_budget", split="eval", n=6,
+                       threshold=0.7, error_budget=0.05, trainrun_id=trainrun_id)
+
+
+@pytest.fixture
+def ws(tmp_path: Path, capsys) -> Path:
+    root = build_workspace(tmp_path)
     capsys.readouterr()
     return root
 
@@ -223,9 +233,7 @@ def test_a_run_without_a_manifest_is_shown_with_unknown_counts(ws: Path) -> None
 # --- policies ----------------------------------------------------------------------------------
 
 
-def _policy(model: str, trainrun_id: str | None) -> PolicyEntry:
-    return PolicyEntry(question_id=QID, model_served=model, primitive="noul", mode="error_budget", split="eval", n=6,
-                       threshold=0.7, error_budget=0.05, trainrun_id=trainrun_id)
+_policy = policy_entry
 
 
 def test_a_policy_says_whether_it_names_the_recorded_run(ws: Path) -> None:

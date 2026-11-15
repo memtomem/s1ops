@@ -170,12 +170,12 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         assert r.status_code == 200, r.text
         return r.json()
 
-    lint, drift = get(client, "/api/lint"), get(client, "/api/drift")
+    lint, drift = get(client, "/api/lint"), get(client, "/api/drift/histograms")
     # Strings the demo leaves empty or null, filled so that their rendering is exercised too.
     lint_filled, drift_filled = copy.deepcopy(lint), copy.deepcopy(drift)
     for p in lint_filled["probe_audit"]:
         p["inverse_source"] = p["inverse_source"] or "generated"
-    for q in drift_filled["questions"]:
+    for q in drift_filled["report"]["questions"]:
         q["notes"] = q["notes"] or ["a note"]
         q["alerts"] = q["alerts"] or ["an alert"]
     audit_filled = get(client, "/api/audit")
@@ -193,8 +193,8 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         "lint-filled": {"/api/lint": lint_filled},
         "slices": {"/api/slices": get(client, "/api/slices"), "/api/labelaudit": get(client, "/api/labelaudit")},
         "compare": {"/api/compare": get(client, "/api/compare")},
-        "drift": {"/api/drift": drift},
-        "drift-filled": {"/api/drift": drift_filled},
+        "drift": {"/api/drift/histograms": drift},
+        "drift-filled": {"/api/drift/histograms": drift_filled},
     }
 
 
@@ -265,6 +265,11 @@ def _mutated(old: str, new: str) -> str:
         pytest.param("policy-noul", 'r="10" data-tip="${esc(s.tip)}" />', 'r="10" data-tip="${s.tip}" />', id="policy-band-tip"),
         pytest.param("policy-choice", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="policy-chart-title"),
         pytest.param("policy-noul", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="policy-table-cell"),
+        # The drift view's kits: a questions-table cell, a row button's name (it holds a question
+        # id), and the overlay's title.
+        pytest.param("drift", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="drift-table-cell"),
+        pytest.param("drift", 'aria-label="${esc(c.text + ": " + r[c.labelKey])}"', 'aria-label="${c.text + ": " + r[c.labelKey]}"', id="drift-show-name"),
+        pytest.param("drift", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="drift-chart-title"),
     ],
 )
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:

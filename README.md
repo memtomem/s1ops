@@ -187,7 +187,7 @@ Open `http://127.0.0.1:8765`. The workbench opens on an **Overview** of the work
 3. **Question Lint & Probe Coherence**: Static `JL000`–`JL060` diagnostics + Noul/Choice twin gap and polarity inverse sum audit.
 4. **Slices & Blind Label Audit**: Wilson 95% CI Answerability table and Benjamini-Hochberg FDR (`q <= 0.10`) error slices, both predicting from raw probabilities (`/api/slices?use_calib=true` for the calibrated ones), and top calibrated label disagreement candidates.
 5. **Shadow Compare & Judge Audit**: Paired `jev-1.13.0` vs `kev-1.0` accuracy, flip rate, exact McNemar Holm-adjusted p-value badges, and per-criterion quadratic-weighted κ.
-6. **Distribution & Model Drift**: Baseline vs Canary PSI with its permutation p-value and Jensen-Shannon Divergence on raw probabilities, mean/entropy/escalation rate shift, and silent `model_served` upgrade alerts (`CRITICAL` / `WARN` / `OK`).
+6. **Distribution & Model Drift**: Baseline vs Canary PSI with its permutation p-value and Jensen-Shannon Divergence on raw probabilities, mean/entropy/escalation rate shift, and silent `model_served` upgrade alerts (`CRITICAL` / `WARN` / `OK`); a table of every question, most severe first, and per question the two score distributions overlaid in the PSI's bins, their quantiles, and every per-side statistic next to each other.
 
 ---
 

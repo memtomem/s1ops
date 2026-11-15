@@ -415,7 +415,9 @@
       text-align: left;
     }
     button.tk-sort:hover { color: var(--text); }
-    .tk-body { overflow-x: auto; }
+    /* The containing block of its absolutely placed descendants (a button column's .sr-only
+       header), which would otherwise sit past the scrolled table and widen the page. */
+    .tk-body { overflow-x: auto; position: relative; }
     td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     .tk th { white-space: nowrap; }
     .warn-row { margin: 0 0 6px; font-size: 13px; }
@@ -1077,8 +1079,10 @@
     // --- table kit ------------------------------------------------------------------------------
     // A spec is {id, caption, file, columns}; a column is {key, name, kind, digits, exportOnly} with
     // kind "text" (escaped), "num" (fmtNum), "range" (a [lo, hi] pair) or "button" ({act, text,
-    // data: {attribute: key}}, never exported). The view state of a table (sort column, direction,
-    // filter text) is kept by the shell per table id; the renderers only read it.
+    // data: {attribute: key}, labelKey: the key whose value completes its accessible name; never
+    // exported). `digitsKey` takes a row's places from that row, `sortBy` sorts the column by
+    // another (numeric) key. The view state of a table (sort column, direction, filter text) is
+    // kept by the shell per table id; the renderers only read it.
 
     // A number to `digits` places; anything that is not a finite number as "N/A".
     function fmtNum(v, digits) {
@@ -1093,8 +1097,9 @@
     // A cell as the viewer reads it (and as the filter matches it).
     function cellText(c, r) {
       const v = r[c.key];
-      if (c.kind === "num") return fmtNum(v, c.digits);
-      if (c.kind === "range") return Array.isArray(v) ? "[" + fmtNum(v[0], c.digits) + ", " + fmtNum(v[1], c.digits) + "]" : "N/A";
+      const digits = c.digitsKey ? r[c.digitsKey] : c.digits;
+      if (c.kind === "num") return fmtNum(v, digits);
+      if (c.kind === "range") return Array.isArray(v) ? "[" + fmtNum(v[0], digits) + ", " + fmtNum(v[1], digits) + "]" : "N/A";
       return v === null || v === undefined ? "" : String(v);
     }
 
@@ -1117,8 +1122,9 @@
     // Rows ordered by one column: numbers numerically (a range by its lower end), text in natural
     // order; missing values last in either direction; ties keep their order.
     function sortRows(spec, rows, sort, dir) {
-      const c = spec.columns.find(col => col.key === sort && col.kind !== "button");
-      if (!c) return rows.slice();
+      const col = spec.columns.find(cc => cc.key === sort && cc.kind !== "button");
+      if (!col) return rows.slice();
+      const c = col.sortBy ? {key: col.sortBy, kind: "num"} : col;
       const sign = dir === "desc" ? -1 : 1;
       const keyOf = r => {
         const v = c.kind === "range" ? (Array.isArray(r[c.key]) ? r[c.key][0] : null) : r[c.key];
@@ -1144,7 +1150,8 @@
     function cellHtml(c, r) {
       if (c.kind === "button") {
         const data = Object.entries(c.data || {}).map(([attr, key]) => `data-${esc(attr)}="${esc(r[key])}"`).join(" ");
-        return `<td><button type="button" class="tool" data-act="${esc(c.act)}" ${data}>${esc(c.text)}</button></td>`;
+        const label = c.labelKey ? ` aria-label="${esc(c.text + ": " + r[c.labelKey])}"` : "";
+        return `<td><button type="button" class="tool" data-act="${esc(c.act)}" ${data}${label}>${esc(c.text)}</button></td>`;
       }
       return `<td class="mono${c.kind === "text" ? "" : " num"}">${esc(cellText(c, r))}</td>`;
     }
@@ -2350,31 +2357,286 @@
         `<div class="card">No shadow comparison records or judge grades found.</div>`;
     }
 
+    // --- drift monitor ----------------------------------------------------------------------------
+    // Pure builders over one /api/drift/histograms response: `report` is the drift report (what
+    // /api/drift and `s1 drift` answer) and `histograms` its binned scores, both from one read of
+    // the files. The page computes no drift statistic: PSI, its p-value, the status and the
+    // quantiles are the report's, the bins and PSI terms the histograms'.
+
     async function loadDrift(ctx = {}) {
-      const d = await fetchJson("/api/drift");
+      const d = await fetchJson("/api/drift/histograms");
       if (isStale(ctx)) return;
+      // Kept only once it is on screen: a payload the renderer throws on leaves nothing behind the
+      // error card for a later re-render or table action to read.
+      document.getElementById("drift-container").innerHTML = renderDrift(d.report, ctx.dq ? ctx.dq() : "", driftOpts(d, ctx.opts ? ctx.opts() : {}));
       if (ctx.keep) ctx.keep(d);
-      document.getElementById("drift-container").innerHTML = renderDrift(d, ctx.dq ? ctx.dq() : "");
     }
 
-    function renderDrift(d, dq) {
+    // The renderer's options for a kept /api/drift/histograms response: the one place its keys are
+    // read, for the loader, a re-render and the table actions alike.
+    function driftOpts(d, base) {
+      return {...(base || {}), hist: d && d.histograms ? d.histograms : null};
+    }
+
+    // A latency as served (milliseconds, 0 included); "N/A" when there is none.
+    function fmtMs(v) {
+      return typeof v === "number" && Number.isFinite(v) ? String(v) + " ms" : "N/A";
+    }
+
+    // A side's statistic of its answered records, or null when it has none: the report serves
+    // zeros for the quantiles and entropy of an empty side, which are not measurements.
+    function sideStat(q, side, value) {
+      const n = side === "ref" ? q.n_ref_answered : q.n_cur_answered;
+      return typeof n === "number" && n > 0 ? value : null;
+    }
+
+    function driftSeverity(status) {
+      return status === "CRITICAL" ? 2 : (status === "WARN" ? 1 : (status === "OK" ? 0 : -1));
+    }
+
+    // The report's PSI test settings as plain text (the caller escapes it).
+    function psiTestText(t) {
+      if (!t || t.method === "none") return "PSI test off: a PSI over its threshold alerts on its own.";
+      return "PSI test: " + String(t.method) + ", " + fmtNum(t.resamples, 0) + " resamples (seed " + fmtNum(t.seed, 0) + "); WARN needs PSI ≥ 0.10 and p < " +
+        fmtNum(t.alpha_warn, 2) + ", CRITICAL PSI ≥ 0.25 and p < " + fmtNum(t.alpha_critical, 2) + ".";
+    }
+
+    // Every question of the report, most severe first (then the report's order, by question id).
+    function driftQuestionsTable(d) {
+      const rows = (d.questions || []).map((q, i) => ({
+        i, severity: driftSeverity(q.status), status: q.status, question_id: q.question_id, primitive: q.primitive,
+        n_ref: q.n_ref, n_cur: q.n_cur, n_ref_answered: q.n_ref_answered, n_cur_answered: q.n_cur_answered,
+        psi: q.psi, psi_p_value: q.psi_p_value, js_divergence: q.js_divergence,
+        failure_rate_ref: q.failure_rate_ref, failure_rate_cur: q.failure_rate_cur,
+        escalation_rate_ref: q.escalation_rate_ref, escalation_rate_cur: q.escalation_rate_cur,
+        p50_ref: sideStat(q, "ref", q.quantiles_ref && q.quantiles_ref.p50),
+        p50_cur: sideStat(q, "cur", q.quantiles_cur && q.quantiles_cur.p50),
+        p95_ms_ref: q.latency_ref ? q.latency_ref.p95_ms : null, p95_ms_cur: q.latency_cur ? q.latency_cur.p95_ms : null,
+        model_changed: q.model_drift_detected ? "yes" : "no", model_mismatch_count_cur: q.model_mismatch_count_cur,
+        alerts: (q.alerts || []).length, notes: (q.notes || []).length,
+      })).sort((a, b) => b.severity - a.severity || a.i - b.i);
+      return {
+        spec: {id: "drift:questions", caption: "Questions, most severe first", file: "drift-questions", columns: [
+          {key: "status", name: "Status", kind: "text", sortBy: "severity"},
+          {key: "severity", name: "severity", kind: "num", digits: 0, exportOnly: true},
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "show", name: "Show", kind: "button", act: "drift-show", text: "Show", labelKey: "question_id", data: {qid: "question_id"}},
+          {key: "primitive", name: "Primitive", kind: "text"},
+          {key: "n_ref", name: "n ref", kind: "num", digits: 0},
+          {key: "n_cur", name: "n cur", kind: "num", digits: 0},
+          {key: "n_ref_answered", name: "Answered ref", kind: "num", digits: 0},
+          {key: "n_cur_answered", name: "Answered cur", kind: "num", digits: 0},
+          {key: "psi", name: "PSI", kind: "num", digits: 4},
+          {key: "psi_p_value", name: "p", kind: "num", digits: 3},
+          {key: "js_divergence", name: "JSD", kind: "num", digits: 4},
+          {key: "failure_rate_ref", name: "Failure ref", kind: "num", digits: 3},
+          {key: "failure_rate_cur", name: "Failure cur", kind: "num", digits: 3},
+          {key: "escalation_rate_ref", name: "Escalation ref", kind: "num", digits: 3},
+          {key: "escalation_rate_cur", name: "Escalation cur", kind: "num", digits: 3},
+          {key: "p50_ref", name: "p50 ref", kind: "num", digits: 3},
+          {key: "p50_cur", name: "p50 cur", kind: "num", digits: 3},
+          {key: "p95_ms_ref", name: "p95 ms ref", kind: "num", digits: 2},
+          {key: "p95_ms_cur", name: "p95 ms cur", kind: "num", digits: 2},
+          {key: "model_changed", name: "Model changed", kind: "text"},
+          {key: "model_mismatch_count_cur", name: "Requested ≠ served", kind: "num", digits: 0},
+          {key: "alerts", name: "Alerts", kind: "num", digits: 0},
+          {key: "notes", name: "Notes", kind: "num", digits: 0},
+        ]},
+        rows,
+      };
+    }
+
+    // The histogram of one question by id, or null.
+    function driftHistFor(hist, qid) {
+      const qs = hist && Array.isArray(hist.questions) ? hist.questions : [];
+      return qs.find(h => h.question_id === qid) || null;
+    }
+
+    // One row per bin: both sides' counts and shares (null for a side without answered records)
+    // and the bin's PSI term.
+    function driftBinRows(h) {
+      const edges = Array.isArray(h.edges) ? h.edges : [];
+      const side = s => (h[s] && Array.isArray(h[s].counts) ? h[s].counts : []);
+      const total = s => (h[s] && typeof h[s].n_answered === "number" ? h[s].n_answered : 0);
+      return edges.slice(0, -1).map((lo, i) => {
+        const rc = side("ref")[i], cc = side("cur")[i];
+        return {
+          bin: i + 1, lo, hi: edges[i + 1], closed: i === edges.length - 2,
+          ref_count: rc, ref_share: total("ref") > 0 ? rc / total("ref") : null,
+          cur_count: cc, cur_share: total("cur") > 0 ? cc / total("cur") : null,
+          psi_term: Array.isArray(h.psi_terms) ? h.psi_terms[i] : null,
+        };
+      });
+    }
+
+    function driftBinsTable(q, h) {
+      const ident = {question_id: q.question_id, primitive: q.primitive};
+      return {
+        spec: {id: "drift:bins:" + q.question_id, caption: "Score bins, reference and current", file: "drift-bins-" + fileSafe(q.question_id), columns: [
+          {key: "question_id", name: "question_id", kind: "text", exportOnly: true},
+          {key: "primitive", name: "primitive", kind: "text", exportOnly: true},
+          {key: "bin", name: "Bin", kind: "num", digits: 0},
+          {key: "lo", name: "Lo", kind: "num", digits: 1},
+          {key: "hi", name: "Hi", kind: "num", digits: 1},
+          {key: "ref_count", name: "Ref count", kind: "num", digits: 0},
+          {key: "ref_share", name: "Ref share", kind: "num", digits: 3},
+          {key: "cur_count", name: "Cur count", kind: "num", digits: 0},
+          {key: "cur_share", name: "Cur share", kind: "num", digits: 3},
+          {key: "psi_term", name: "PSI term", kind: "num", digits: 4},
+        ]},
+        rows: h ? driftBinRows(h).map(r => ({...ident, ...r})) : [],
+      };
+    }
+
+    // Reference against current for every per-side statistic the report serves.
+    function driftMetricsTable(q) {
+      const qr = q.quantiles_ref || {}, qc = q.quantiles_cur || {}, lr = q.latency_ref || {}, lc = q.latency_cur || {};
+      const diff = (a, b) => typeof a === "number" && typeof b === "number" ? b - a : null;
+      const row = (metric, ref, cur, digits, change) => ({question_id: q.question_id, metric, ref, cur, digits,
+        change: change === undefined ? diff(ref, cur) : change});
+      const both = (v1, v2) => [sideStat(q, "ref", v1), sideStat(q, "cur", v2)];
+      const [er, ec] = both(q.mean_entropy_ref, q.mean_entropy_cur);
+      const rows = [
+        row("records", q.n_ref, q.n_cur, 0),
+        row("answered", q.n_ref_answered, q.n_cur_answered, 0),
+        row("failure rate", q.failure_rate_ref, q.failure_rate_cur, 4),
+        row("escalation rate", q.escalation_rate_ref, q.escalation_rate_cur, 4),
+        ...["p10", "p50", "p90", "mean"].map(k => row("score " + k, ...both(qr[k], qc[k]), 4)),
+        row("mean entropy (bits)", er, ec, 4, er === null || ec === null ? null : q.entropy_delta),
+        row("latency p50 (ms)", lr.p50_ms, lc.p50_ms, 2),
+        row("latency p95 (ms)", lr.p95_ms, lc.p95_ms, 2),
+        row("latency mean (ms)", lr.mean_ms, lc.mean_ms, 2),
+      ];
+      return {
+        spec: {id: "drift:metrics:" + q.question_id, caption: "Reference and current", file: "drift-metrics-" + fileSafe(q.question_id), columns: [
+          {key: "question_id", name: "question_id", kind: "text", exportOnly: true},
+          {key: "metric", name: "Statistic", kind: "text"},
+          {key: "ref", name: "Reference", kind: "num", digitsKey: "digits"},
+          {key: "cur", name: "Current", kind: "num", digitsKey: "digits"},
+          {key: "change", name: "Change (cur − ref)", kind: "num", digitsKey: "digits"},
+          {key: "digits", name: "digits", kind: "num", digits: 0, exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    // Every table the drift view can show, by id, for what it holds.
+    function driftTables(d, opts) {
+      const report = d && d.report ? d.report : {};
+      const hist = driftOpts(d, opts).hist;
+      const out = {};
+      const add = t => { out[t.spec.id] = t; };
+      add(driftQuestionsTable(report));
+      (report.questions || []).forEach(q => {
+        add(driftBinsTable(q, driftHistFor(hist, q.question_id)));
+        add(driftMetricsTable(q));
+      });
+      return out;
+    }
+
+    function driftBinTip(side, r, n) {
+      // The edges as the PSI uses them (0.30000000000000004 is the third): a score of 0.3 is below it.
+      const range = `[${String(r.lo)}, ${String(r.hi)}${r.closed ? "]" : ")"}`;
+      const count = side === "reference" ? r.ref_count : r.cur_count;
+      const share = side === "reference" ? r.ref_share : r.cur_share;
+      return `${side}, bin ${range}\n${fmtNum(count, 0)} of ${fmtNum(n, 0)} answered (${fmtNum(share === null ? NaN : share * 100, 1)}%)\nPSI term ${fmtNum(r.psi_term, 4)}`;
+    }
+
+    // Both sides' share of answered records per bin, reference left and current right in each bin.
+    // A bin a side has no record in has no bar of that side (its row in the table says 0).
+    function driftHistogramHtml(q, h, details) {
+      const W = 460, ml = 52, mr = 14, mt = 12, ph = 200, H = mt + ph + 40;
+      const rows = driftBinRows(h);
+      const shares = rows.flatMap(r => [r.ref_share, r.cur_share]).filter(v => typeof v === "number" && Number.isFinite(v));
+      const top = niceMax(Math.max(0.05, ...shares), 5);
+      const x = scaleLinear(0, 1, ml, W - mr), y = scaleLinear(0, top, mt + ph, mt);
+      const noul = q.primitive === "noul";
+      let body = svgAxes({x, y, xTicks: niceTicks(0, 1, 5), yTicks: niceTicks(0, top, 5), left: ml, right: W - mr, top: mt, bottom: mt + ph,
+        digits: 1, yDigits: tickDigits(niceTicks(0, top, 5)), xName: noul ? "p (true)" : "top-class probability", yName: "share of answered"});
+      [["reference", "ref", "ser-1", 0], ["current", "cur", "ser-2", 1]].forEach(([side, key, cls, half]) => {
+        const n = h[key] ? h[key].n_answered : 0;
+        if (!(n > 0)) return;
+        body += svgBars(rows.filter(r => r[key + "_count"] > 0).map(r => {
+          const mid = (finite(r.lo) + finite(r.hi)) / 2;
+          return {x0: x(half ? mid : finite(r.lo)), x1: x(half ? finite(r.hi) : mid), y0: y(0), y1: y(r[key + "_share"]), tip: driftBinTip(side, r, n)};
+        }), cls);
+      });
+      return svgFrame({w: W, h: H, details, title: "Score distribution of " + q.question_id,
+        desc: `Share of each side's answered records in ${rows.length} equal-width bins of ${noul ? "p" : "the top-class probability"}, reference and current.`}, body);
+    }
+
+    // p10 to p90 as a bar, p50 as a tick and the mean as a diamond, one lane per side.
+    function driftQuantilesHtml(q, details) {
+      const W = 460, ml = 76, mr = 14, mt = 8, lane = 30, H = mt + lane * 2 + 40;
+      const x = scaleLinear(0, 1, ml, W - mr);
+      let body = svgAxes({x, y: () => 0, xTicks: niceTicks(0, 1, 5), yTicks: [], left: ml, right: W - mr, top: mt, bottom: mt + lane * 2,
+        digits: 1, xName: q.primitive === "noul" ? "p (true)" : "top-class probability", yName: ""});
+      [["reference", "ref", q.quantiles_ref, "ser-1"], ["current", "cur", q.quantiles_cur, "ser-2"]].forEach(([side, key, qs, cls], i) => {
+        const mid = mt + lane * i + lane / 2;
+        body += `<text x="${px(ml - 6)}" y="${px(mid + 3)}" text-anchor="end">${esc(side)}</text>`;
+        const v = k => sideStat(q, key, qs ? qs[k] : null);
+        if (v("p50") === null) {
+          body += `<text class="axis-name" x="${px(ml + 8)}" y="${px(mid + 3)}">No answered records</text>`;
+          return;
+        }
+        const tip = `${side}: p10 ${fmtNum(v("p10"))}, p50 ${fmtNum(v("p50"))}, p90 ${fmtNum(v("p90"))}, mean ${fmtNum(v("mean"))}`;
+        body += svgBars([{x0: x(finite(v("p10"))), x1: x(finite(v("p90"))), y0: mid + 6, y1: mid - 6, tip}], cls);
+        body += svgLine([{x: x(finite(v("p50"))), y: mid - 10}, {x: x(finite(v("p50"))), y: mid + 10}], cls, false);
+        body += svgDots([{x: x(finite(v("mean"))), y: mid, tip}], cls, "diamond");
+      });
+      return svgFrame({w: W, h: H, details, title: "Score quantiles of " + q.question_id,
+        desc: "The 10th to 90th percentile of each side's scores as a bar, the median as a tick and the mean as a diamond."}, body);
+    }
+
+    // The distribution section of a question's card: both charts, or why there are none.
+    function driftChartsHtml(q, h, ids) {
+      if (!h) return `<div class="sub">No distribution for this question in the response.</div>`;
+      if (!(q.n_ref_answered > 0) && !(q.n_cur_answered > 0)) return `<div class="sub">Neither side has an answered record.</div>`;
+      const choiceNote = q.primitive === "noul" ? "" : " The top-class probability of K options is at least 1/K, so the bins below it are empty by construction.";
+      const legend = svgLegend([
+        {name: "reference (left in each bin)", cls: "ser-1", shape: "square", noLine: true},
+        {name: "current (right in each bin)", cls: "ser-2", shape: "square", noLine: true},
+      ]);
+      const qLegend = svgLegend([
+        {name: "p10 to p90", cls: "ser-1", shape: "square", noLine: true},
+        {name: "p50", cls: "ser-1"},
+        {name: "mean", cls: "ser-1", shape: "diamond", noLine: true},
+      ]);
+      return `
+            <div class="grid-2">
+              <div>${chartFigure({legend, svg: driftHistogramHtml(q, h, ids.bins),
+                caption: `Share of each side's answered records per bin (half-open bins, the last one closed, as the PSI counts them); a bin a side has no record in has no bar of that side. The table rounds the edges to one place; tooltips and exports give them exactly. Models pooled per question, as the report.${choiceNote} The same values, with each bin's PSI term, are in the Score bins table.`})}</div>
+              <div>${chartFigure({legend: qLegend, svg: driftQuantilesHtml(q, ids.metrics),
+                caption: "The report's quantiles of each side's answered scores; the same values are in the Reference and current table."})}</div>
+            </div>`;
+    }
+
+    function renderDrift(d, dq, opts) {
       const all = d.questions || [];
       if (all.length === 0) {
         return `<div class="card">No canary drift records found.</div>`;
       }
+      const tstate = (opts && opts.tstate) || {};
+      const hist = opts ? opts.hist : undefined;
       const qs = dq ? all.filter(q => q.question_id === dq) : all;
       const sm = d.summary || {};
       const summary = `<div class="sub" style="margin:0 0 12px">Every question in the report: ${Number(sm.ok)} OK · ${Number(sm.warn)} WARN · ${Number(sm.critical)} CRITICAL.</div>`;
       const picker = questionPickerHtml("drift-question", all, dq, "All drift questions");
-      if (dq && !qs.length) return picker + summary + questionMissingHtml(dq, "drift report");
-      return picker + summary + qs.map(q => {
+      const qt = driftQuestionsTable(d);
+      const overview = `<div class="card">${tableHtml(qt.spec, qt.rows, tstate)}<div class="calib-note">${esc(psiTestText(d.psi_test))} Show opens one question; the picker above does the same.</div></div>`;
+      if (dq && !qs.length) return picker + summary + overview + questionMissingHtml(dq, "drift report");
+      return picker + summary + overview + qs.map((q, index) => {
         const badgeCls = q.status === 'CRITICAL' ? 'badge-err' : (q.status === 'WARN' ? 'badge-warn' : 'badge-ok');
         const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${esc(q.status)}</span> ${esc(a)}</div>`).join('')
           + (q.notes || []).map(n => `<div class="sub" style="margin:4px 0;">${esc(n)}</div>`).join('');
         const psiP = (q.psi_p_value === null || q.psi_p_value === undefined) ? 'N/A' : q.psi_p_value.toFixed(3);
+        const h = hist === undefined || hist === null ? undefined : driftHistFor(hist, q.question_id);
+        const ids = {bins: "drift-bins-table-" + index, metrics: "drift-metrics-table-" + index};
+        const bins = driftBinsTable(q, h || null), metrics = driftMetricsTable(q);
+        const charts = h === undefined ? `<div class="sub">Distribution not loaded.</div>` : driftChartsHtml(q, h, ids);
         return `
           <div class="card">
-            <h3>Drift Monitor: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, ref n=${q.n_ref} vs cur n=${q.n_cur})
+            <h3${dq ? ' tabindex="-1"' : ''}>Drift Monitor: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, ref n=${q.n_ref} vs cur n=${q.n_cur})
               · <span class="badge ${badgeCls}">${esc(q.status)}</span>
             </h3>
             <div style="margin-bottom:12px;">${alertsHtml}</div>
@@ -2393,8 +2655,8 @@
               </div>
               <div>
                 <div class="sub">Median Probability (p50) &amp; Latency Shift</div>
-                <div class="kpi">${q.quantiles_ref.p50.toFixed(3)} → ${q.quantiles_cur.p50.toFixed(3)}</div>
-                <span class="sub">p95 Latency: ${q.latency_ref.p95_ms || '-'} ms → ${q.latency_cur.p95_ms || '-'} ms</span>
+                <div class="kpi">${fmtNum(sideStat(q, "ref", q.quantiles_ref.p50), 3)} → ${fmtNum(sideStat(q, "cur", q.quantiles_cur.p50), 3)}</div>
+                <span class="sub">p95 Latency: ${esc(fmtMs(q.latency_ref.p95_ms))} → ${esc(fmtMs(q.latency_cur.p95_ms))}</span>
               </div>
             </div>
             <div class="grid-3">
@@ -2404,9 +2666,24 @@
                 <span class="sub">${q.escalation_rate_ref === null || q.escalation_rate_ref === undefined ? 'No policy for this group' : 'Share of answers the policy sends to System 2'}</span>
               </div>
             </div>
+            <div class="panel-block">${charts}</div>
+            <div class="panel-block">${tableHtml({...bins.spec, domId: ids.bins}, bins.rows, tstate)}</div>
+            <div class="panel-block">${tableHtml({...metrics.spec, domId: ids.metrics}, metrics.rows, tstate)}</div>
           </div>
         `;
       }).join('');
+    }
+
+    // After Show, the button that had the focus is re-rendered away: the chosen question's card
+    // takes it (its heading, focusable by script only) and is scrolled to just below the sticky
+    // filter bar, which would cover it at the top of the page.
+    function focusDriftCard() {
+      const h = document.querySelector("#drift-container .card h3[tabindex]");
+      if (!h) return;
+      h.focus({preventScroll: true});
+      const bar = document.getElementById("filter-bar");
+      const top = h.getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 12;
+      window.scrollTo({top: Math.max(0, top)});
     }
 
     // --- shell ------------------------------------------------------------------------------------
@@ -2559,7 +2836,7 @@
     function rerenderView(view) {
       const d = viewData[view];
       if (!d) return;
-      if (view === "drift") document.getElementById("drift-container").innerHTML = renderDrift(d, STATE.dq);
+      if (view === "drift") document.getElementById("drift-container").innerHTML = renderDrift(d.report, STATE.dq, driftOpts(d, viewOpts()));
       if (view === "compare") document.getElementById("compare-container").innerHTML = renderCompare(d, STATE.cq);
       if (view === "calib") document.getElementById("calib-container").innerHTML = renderCalib(d, viewOpts());
     }
@@ -2574,6 +2851,7 @@
       const d = viewData[STATE.view];
       if (STATE.view === "calib" && d) return calibTables(d, viewOpts());
       if (STATE.view === "policy" && d) return Object.fromEntries(Object.values(policyTables(d)).map(t => [t.spec.id, t]));
+      if (STATE.view === "drift" && d) return driftTables(d, viewOpts());
       return {};
     }
 
@@ -2780,6 +3058,10 @@
       const el = ev.target.closest("[data-act]");
       if (!el) return;
       if (el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
+      if (el.dataset.act === "drift-show") {
+        commit({...STATE, dq: el.dataset.qid}, "push");
+        focusDriftCard();
+      }
       if (el.dataset.act === "tk-sort") sortTable(el.dataset.table, el.dataset.col);
       if (el.dataset.act === "tk-csv") exportTable(el.dataset.table, "csv");
       if (el.dataset.act === "tk-json") exportTable(el.dataset.table, "json");

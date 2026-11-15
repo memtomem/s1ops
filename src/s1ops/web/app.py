@@ -49,7 +49,7 @@ from s1ops.improve.policy import (
 from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report, wilson
 from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
 from s1ops.lint.rules import RULES
-from s1ops.monitor.drift import DriftInputError, audit_drift, psi_test_info
+from s1ops.monitor.drift import DriftInputError, audit_drift, psi_test_info, score_histograms
 from s1ops.runtime.routing import RoutingInputError
 
 
@@ -626,11 +626,26 @@ def create_app(
             "judge": judge_out,
         }
 
-    @app.get("/api/drift")
-    def api_drift() -> dict[str, Any]:
+    def _drift_inputs() -> tuple[list[Record], list[Record], Any, Path] | None:
+        """Both record files and the policies, read as the drift report needs them, and the
+        canary's path (errors name it); None when either record file is missing."""
         canary_file = _resolve(None, "records_canary.jsonl")
         pol_file = _resolve(None, "policy.json")
         if not _present(rec_file) or not _present(canary_file):
+            return None
+        policies = _load_or_400(pol_file, load_policies, pol_file) if _present(pol_file) else None
+        # Read with use_calib so a malformed stored calib is a 400 naming its file; the report
+        # still compares raw probabilities, re-parsed by audit_drift.
+        refs = _load_or_400(rec_file, read_records, rec_file, require_answer=True, use_calib=True)
+        curs = _load_or_400(canary_file, read_records, canary_file, require_answer=True, use_calib=True)
+        return refs, curs, policies, canary_file
+
+    def _drift_400(e: RoutingInputError | DriftInputError, canary_file: Path) -> HTTPException:
+        path = rec_file if e.side == "reference" else canary_file
+        return HTTPException(status_code=400, detail=f"{path.name}: line {e.line}: {e.message}")
+
+    def _drift_report(inputs: tuple[list[Record], list[Record], Any, Path] | None) -> dict[str, Any]:
+        if inputs is None:
             return {
                 "schema": "s1-drift-report/1",
                 "distribution": "raw",
@@ -638,16 +653,30 @@ def create_app(
                 "summary": {"n_questions": 0, "ok": 0, "warn": 0, "critical": 0},
                 "questions": [],
             }
-        policies = _load_or_400(pol_file, load_policies, pol_file) if _present(pol_file) else None
-        # Read with use_calib so a malformed stored calib is a 400 naming its file; the report
-        # still compares raw probabilities, re-parsed by audit_drift.
-        refs = _load_or_400(rec_file, read_records, rec_file, require_answer=True, use_calib=True)
-        curs = _load_or_400(canary_file, read_records, canary_file, require_answer=True, use_calib=True)
+        refs, curs, policies, canary_file = inputs
         try:
             return audit_drift(refs, curs, policies=policies)
         except (RoutingInputError, DriftInputError) as e:
-            path = rec_file if e.side == "reference" else canary_file
-            raise HTTPException(status_code=400, detail=f"{path.name}: line {e.line}: {e.message}") from None
+            raise _drift_400(e, canary_file) from None
+
+    @app.get("/api/drift")
+    def api_drift() -> dict[str, Any]:
+        return _drift_report(_drift_inputs())
+
+    @app.get("/api/drift/histograms")
+    def api_drift_histograms() -> dict[str, Any]:
+        """The drift report (what /api/drift answers) and its binned scores, from one read of the
+        files, so the page never pairs a report with another version's distributions."""
+        inputs = _drift_inputs()
+        report = _drift_report(inputs)
+        if inputs is None:
+            return {"report": report, "histograms": {"schema": "s1-drift-histograms/1", "distribution": "raw", "bins": 10, "questions": []}}
+        refs, curs, _, canary_file = inputs
+        try:
+            histograms = score_histograms(refs, curs)
+        except DriftInputError as e:
+            raise _drift_400(e, canary_file) from None
+        return {"report": report, "histograms": histograms}
 
     return app
 

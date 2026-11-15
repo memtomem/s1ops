@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from s1ops.contracts.schemas import save_policies
 from s1ops.demo import generate_workspace
+from s1ops.eval.compare import compare_records
 from s1ops.improve.trainrun import load_trainrun
 from s1ops.web.app import STATIC_DIR, create_app
 from tests.test_checkpoints import build_workspace, policy_entry
@@ -181,6 +182,12 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
     for q in drift_filled["report"]["questions"]:
         q["notes"] = q["notes"] or ["a note"]
         q["alerts"] = q["alerts"] or ["an alert"]
+    # A file-level finding: no question, no evidence.
+    lint_file_level = copy.deepcopy(lint)
+    lint_file_level["findings"].append({
+        "rule": "JL000", "severity": "error", "question": None, "question_id": None,
+        "message": "m", "fix": "f", "evidence": None, "evidence_url": None,
+    })
     # Two checkpoints with manifests, run records, step metrics and trained items; the second's
     # manifest is exported again and its policy names the first's run, so every note is rendered.
     (root / "checkpoints").mkdir()
@@ -203,14 +210,30 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         "policy-score": {"/api/simulate-policy": get(cat, "/api/simulate-policy", primitive="score")},
         "lint": {"/api/lint": lint},
         "lint-filled": {"/api/lint": lint_filled},
+        "lint-file-level": {"/api/lint": lint_file_level},
         "slices": {"/api/slices": get(client, "/api/slices"), "/api/labelaudit": get(client, "/api/labelaudit")},
         "slices-categorical": {"/api/slices": get(cat, "/api/slices"), "/api/labelaudit": get(cat, "/api/labelaudit")},
         "compare": {"/api/compare": get(client, "/api/compare")},
+        "compare-categorical": {"/api/compare": {"shadow": _categorical_compare(), "judge": None}},
         "drift": {"/api/drift/histograms": drift},
         "drift-filled": {"/api/drift/histograms": drift_filled},
         "checkpoints": {"/api/checkpoints": checkpoints},
         "checkpoints-demo": {"/api/checkpoints": get(client, "/api/checkpoints")},
     }
+
+
+def _categorical_compare() -> dict:
+    """A comparison report whose flipped pairs hold option names (choice) and levels (score), which
+    the demo's noul question never does."""
+    def row(kind: str, qid: str, probs: dict[str, float], model: str, **extra: object) -> dict:
+        return {"schema": "s1-record/1", "primitive": kind, "question_id": qid, "dataset": "d", "item_id": "i0",
+                "model_served": model, "probabilities": probs, **extra}
+
+    primary = [row("choice", "q-choice", {"refund": 0.7, "other": 0.3}, "old", choice="refund", label="refund"),
+               row("score", "q-score", {"0": 0.1, "1": 0.9}, "old")]
+    shadow = [row("choice", "q-choice", {"refund": 0.2, "other": 0.8}, "new", choice="other", label="refund"),
+              row("score", "q-score", {"0": 0.8, "1": 0.2}, "new")]
+    return compare_records(primary, shadow)
 
 
 LOADERS = {
@@ -223,9 +246,11 @@ LOADERS = {
     "policy-score": "loadPolicy",
     "lint": "loadLint",
     "lint-filled": "loadLint",
+    "lint-file-level": "loadLint",
     "slices": "loadSlicesAndLabels",
     "slices-categorical": "loadSlicesAndLabels",
     "compare": "loadCompare",
+    "compare-categorical": "loadCompare",
     "drift": "loadDrift",
     "drift-filled": "loadDrift",
     "checkpoints": "loadCheckpoints",
@@ -263,15 +288,12 @@ def _mutated(old: str, new: str) -> str:
 @pytest.mark.parametrize(
     "case, old, new",
     [
-        # A criterion name is a mapping key: the extra hostile key is what catches it.
-        pytest.param("compare", "<td class=\"mono\">${esc(c)}</td>", "<td class=\"mono\">${c}</td>", id="mapping-key"),
         pytest.param("drift", "Drift Monitor: <span class=\"badge badge-info\">${esc(q.question_id)}</span>",
                      "Drift Monitor: <span class=\"badge badge-info\">${q.question_id}</span>", id="string-value"),
         pytest.param("policy-noul", "On ${esc(d.distribution || 'unknown')} probabilities",
                      "On ${d.distribution || 'unknown'} probabilities", id="policy-value"),
         # Empty or null in the demo: caught only by the filled cases.
         pytest.param("drift-filled", "margin:4px 0;\">${esc(n)}</div>", "margin:4px 0;\">${n}</div>", id="drift-note"),
-        pytest.param("lint-filled", "esc(p.inverse_source)", "p.inverse_source", id="probe-inverse-source"),
         # The calibration view's kits: a table cell (metric names are mapping keys), the chart's
         # title, and the warnings (empty in the demo).
         pytest.param("audit-noul", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="table-cell"),
@@ -296,6 +318,18 @@ def _mutated(old: str, new: str) -> str:
         pytest.param("slices-categorical", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="slices-table-cell"),
         pytest.param("slices", "Margins from ${esc(l.distribution)} probabilities.", "Margins from ${l.distribution} probabilities.", id="slices-ranking-distribution"),
         pytest.param("slices-categorical", "Predictions from ${esc(o.dist || 'unknown')} probabilities.", "Predictions from ${o.dist || 'unknown'} probabilities.", id="slices-distribution"),
+        # The compare view: a lane's name and a mark's tooltip (both hold a question id), a flipped
+        # pair's cell (an option name), and a model's name in a card.
+        pytest.param("compare", 'text-anchor="end">${esc(text)}</text>', 'text-anchor="end">${text}</text>', id="compare-lane-name"),
+        pytest.param("compare", 'r="10" data-tip="${esc(p.tip)}" />', 'r="10" data-tip="${p.tip}" />', id="compare-mark-tip"),
+        pytest.param("compare-categorical", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="compare-table-cell"),
+        pytest.param("compare", '<div class="sub">${esc(q.primary_model)} vs', '<div class="sub">${q.primary_model} vs', id="compare-model"),
+        # The lint view: a probe item's tooltip, a table cell, the questions file's path and a probe
+        # group's name in its block heading.
+        pytest.param("lint", 'r="10" data-tip="${esc(s.tip)}" />', 'r="10" data-tip="${s.tip}" />', id="lint-point-tip"),
+        pytest.param("lint-file-level", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="lint-table-cell"),
+        pytest.param("lint", 'File: <span class="mono">${esc(d.questions_file)}</span>', 'File: <span class="mono">${d.questions_file}</span>', id="lint-file-path"),
+        pytest.param("lint", "Group ${Number(index) + 1}: ${esc(p.probe_question)}", "Group ${Number(index) + 1}: ${p.probe_question}", id="lint-probe-name"),
         # The checkpoint view: a name in a card's heading, a note's item, a picker's option, a step
         # metric's name (a mapping key) as an axis name, and a table cell.
         pytest.param("checkpoints", 'Checkpoint: <span class="badge badge-info">${esc(c.checkpoint)}</span>',
@@ -311,6 +345,40 @@ def _mutated(old: str, new: str) -> str:
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:
     html = "".join(_render(LOADERS[case], _hostile_routes(payloads[case]), functions=_mutated(old, new)))
     assert "<img" in html
+
+
+def _column(html: str, caption: str, index: int) -> list[str]:
+    """The cells of one column of the table named `caption`, as written (still escaped)."""
+    table = re.search(rf'<table aria-label="{re.escape(caption)}">.*?</table>', html, re.S).group(0)
+    rows = re.findall(r"<tr>(.*?)</tr>", table.split("<tbody>")[1], re.S)
+    return [re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)[index] for row in rows]
+
+
+def _escaped_once(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;")
+
+
+@needs_node
+@pytest.mark.parametrize("case", ["criterion", "inverse-wording"])
+def test_one_hostile_value_reaches_its_own_cell_escaped_once(payloads, case) -> None:
+    # The two values the page once wrote by hand (a criterion name, which is a mapping key, and a
+    # probe group's inverse wording) now go through the table kit. Only that value is hostile here,
+    # so the check cannot pass on another cell's: it must be in its own column, escaped once, and
+    # the kit's cell escape must be what keeps it text.
+    if case == "criterion":
+        loader, route, caption, index = "loadCompare", "/api/compare", "Judge agreement by criterion", 0
+        body = copy.deepcopy(payloads["compare"][route])
+        name = next(iter(body["judge"]["by_criterion"]))
+        body["judge"]["by_criterion"] = {HOSTILE: body["judge"]["by_criterion"].pop(name), **body["judge"]["by_criterion"]}
+    else:
+        loader, route, caption, index = "loadLint", "/api/lint", "Probe groups", 9
+        body = copy.deepcopy(payloads["lint"][route])
+        body["probe_audit"][0]["inverse_source"] = HOSTILE
+    html = "".join(_render(loader, {route: body}))
+    assert "<img" not in html
+    assert _column(html, caption, index).count(_escaped_once(HOSTILE)) == 1
+    mutant = "".join(_render(loader, {route: body}, functions=_mutated("${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>")))
+    assert _column(mutant, caption, index).count(HOSTILE) == 1
 
 
 # --- hostile error messages --------------------------------------------------------------------

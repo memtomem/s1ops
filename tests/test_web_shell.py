@@ -44,11 +44,12 @@ def test_the_default_state_writes_no_hash() -> None:
 @needs_node
 def test_a_state_round_trips_through_the_hash_with_only_what_differs() -> None:
     state = {"view": "policy", "qid": "q-1", "model": "m/1 b", "prim": "choice", "dq": "q-1", "cq": "",
-             "dist": "true", "lo": 0.3, "hi": 0.75, "cs1": 0.0002, "cs2": 0.01, "budget": 0.05, "nboot": 1000, "cbins": "mass"}
+             "dist": "true", "lo": 0.3, "hi": 0.75, "cs1": 0.0002, "cs2": 0.01, "budget": 0.05, "nboot": 1000, "cbins": "mass",
+             "fdrq": 0.1, "topk": 15}
     hash_ = _js(f"formatHash({json.dumps(state)})")
     assert hash_.startswith("#/policy?")
     keys = [k for k, _ in (pair.split("=") for pair in hash_.split("?", 1)[1].split("&"))]
-    assert keys == ["qid", "model", "prim", "dq", "dist", "lo", "cs1", "cs2", "budget", "nboot"]  # cq, hi and cbins are defaults
+    assert keys == ["qid", "model", "prim", "dq", "dist", "lo", "cs1", "cs2", "budget", "nboot"]  # cq, hi, cbins, fdrq and topk are defaults
     assert _js(f"parseHash({json.dumps(hash_)})") == state
 
 
@@ -95,7 +96,8 @@ def test_the_hash_band_is_the_one_evaluated(hash_, band) -> None:
 def _from_inputs(**values) -> dict | None:
     base = {"dist": "", "lo": "0.25", "hi": "0.75", "cs1": "0.00004", "cs2": "0.004", "budget": "0.10", **values}
     st = {"view": "policy", "qid": "q", "model": "m", "prim": "noul", "dq": "q", "cq": "q",
-          "dist": "", "lo": 0.25, "hi": 0.75, "cs1": 0.00004, "cs2": 0.004, "budget": 0.1, "nboot": 200, "cbins": "mass"}
+          "dist": "", "lo": 0.25, "hi": 0.75, "cs1": 0.00004, "cs2": 0.004, "budget": 0.1, "nboot": 200, "cbins": "mass",
+          "fdrq": 0.1, "topk": 15}
     return _js(f"policyStateFromInputs({json.dumps(st)}, {json.dumps(base)})")
 
 
@@ -327,7 +329,7 @@ def test_label_audit_ranks_one_groups_records(cat) -> None:
 def test_label_audit_for_no_matching_group_is_empty_not_an_error(cat) -> None:
     r = cat.get("/api/labelaudit", params={"question_id": "q-none"})
     assert r.status_code == 200
-    assert r.json() == {"n_total_candidates": 0, "skipped": {"no_response": 0, "unlabeled": 0}, "top_flags": []}
+    assert r.json() == {"n_total_candidates": 0, "skipped": {"no_response": 0, "unlabeled": 0}, "distribution": "calibrated", "top_flags": []}
 
 
 def test_an_empty_filter_value_is_no_filter(ws) -> None:

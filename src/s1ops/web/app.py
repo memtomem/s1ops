@@ -56,6 +56,9 @@ from s1ops.runtime.routing import RoutingInputError
 STATIC_DIR = Path(__file__).parent / "static"
 SLICE_MIN_N = 10
 """Slices with fewer items are reported but never answerable (`/api/slices`, `s1 slice answerable --min-n`'s default is 10 too)."""
+
+SLICE_MIN_SUPPORT = 5
+"""A feature carried by fewer items is not tested (`/api/slices`, `s1 slice mine --min-support`'s default is 5 too)."""
 CURVE_COST_ERROR = float(inspect.signature(threshold_curve).parameters["c_error"].default)
 CURVE_DELEGATE_ACCURACY = float(inspect.signature(threshold_curve).parameters["delegate_accuracy"].default)
 """`threshold_curve`'s own error cost and System 2 accuracy: the simulator passes them and serves them
@@ -539,7 +542,7 @@ def create_app(
                 {
                     **g.header(),
                     "answerability": [s.as_dict() for s in slice_report(g.items, min_n=SLICE_MIN_N)],
-                    "error_slices": [e.as_dict() for e in mine_error_slices(g.rows, min_support=5, fdr_q=fdr_q)],
+                    "error_slices": [e.as_dict() for e in mine_error_slices(g.rows, min_support=SLICE_MIN_SUPPORT, fdr_q=fdr_q)],
                 }
                 for g in groups
             ],
@@ -575,6 +578,9 @@ def create_app(
         return {
             "n_total_candidates": len(flags),
             "skipped": {"no_response": skipped.no_response, "unlabeled": skipped.unlabeled},
+            # What the margins were computed from: the fit file's fits, or, with no fit file, the
+            # records' own probabilities.
+            "distribution": "calibrated" if fits is not None else "raw",
             "top_flags": [
                 {
                     "rank": i + 1,

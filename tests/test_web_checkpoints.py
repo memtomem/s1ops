@@ -332,6 +332,7 @@ def test_small_helpers() -> None:
         (1e308, 1e308),  # twice it is not a number
         (-1e308, -1e308),
         (-1e308, 1e308),  # a span that is not a number
+        (1e308, 1.7e308),  # its top end rounds up past the largest number
         (-2.5, 7.25),
         (0.999999999, 1.5),
         (5e-324, 1e-323),
@@ -352,6 +353,7 @@ def test_a_long_or_extreme_series_is_drawn_inside_its_plot(payloads) -> None:
         "narrow": [{"step": i, "loss": 1234567890126 + i} for i in range(3)],
         "jitter": [{"step": 0, "loss": 0.3}, {"step": 1, "loss": 0.30000000000000004}],
         "huge": [{"step": 0, "loss": 1e308}, {"step": 1, "loss": 1e308}],
+        "huge span": [{"step": 0, "loss": 1e308}, {"step": 1, "loss": 1.7e308}],
     }
     for name, steps in cases.items():
         svg = _js(f"stepChartHtml(c, 'loss', steps, ['loss'], 'details')", prelude=f"const c = {json.dumps(c)}; const steps = {json.dumps(steps)};")
@@ -360,6 +362,8 @@ def test_a_long_or_extreme_series_is_drawn_inside_its_plot(payloads) -> None:
         # Inside the plot box: x in [70, 440], y in [14, 184].
         assert all(70 <= float(x) <= 440 and 14 <= float(y) <= 184 for x, y in points), name
         assert "NaN" not in svg and "Infinity" not in svg, name
+        if name == "huge span":  # an axis ending on Infinity drew both at the bottom edge
+            assert len({y for _, y in points}) == 2, points
 
 
 @needs_node

@@ -3234,8 +3234,9 @@
       if (ticks.length < 2) return [lo, hi];
       const step = ticks[1] - ticks[0];
       const d0 = Number((Math.floor(lo / step + 1e-9) * step).toPrecision(12)), d1 = Number((Math.ceil(hi / step - 1e-9) * step).toPrecision(12));
-      // Ends are rounded to twelve digits: a pair that no longer holds both values is not used.
-      return d0 <= lo && hi <= d1 && d0 < d1 ? [d0, d1] : [lo, hi];
+      // Ends are rounded to twelve digits, and one rounded past the largest number is Infinity:
+      // a pair that is not finite or no longer holds both values is not used.
+      return Number.isFinite(d0) && Number.isFinite(d1) && d0 <= lo && hi <= d1 && d0 < d1 ? [d0, d1] : [lo, hi];
     }
 
     // The smallest and largest of `values`; [Infinity, -Infinity] for none. A loop, since a long

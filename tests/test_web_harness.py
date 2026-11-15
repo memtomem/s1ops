@@ -80,9 +80,9 @@ def test_every_extracted_function_is_whole() -> None:
 @needs_node
 def test_a_closing_line_inside_a_body_is_caught() -> None:
     script = _script()
-    old = "        return;\n      }\n      el.innerHTML = data.groups.map"
+    old = "        return;\n      }\n      const data = await fetchJson(apiUrl(\"/api/audit\""
     assert script.count(old) == 1
-    assert _whole_problems(script.replace(old, "        return;\n      }\n    }\n      el.innerHTML = data.groups.map")) == ["(top level)"]
+    assert _whole_problems(script.replace(old, "        return;\n      }\n    }\n      const data = await fetchJson(apiUrl(\"/api/audit\"")) == ["(top level)"]
 
 
 @needs_node
@@ -177,10 +177,14 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
     for q in drift_filled["questions"]:
         q["notes"] = q["notes"] or ["a note"]
         q["alerts"] = q["alerts"] or ["an alert"]
+    audit_filled = get(client, "/api/audit")
+    for g in audit_filled["groups"]:
+        g["warnings"] = g["warnings"] or ["a warning"]
     return {
         "overview": {"/api/overview": get(client, "/api/overview")},
         "audit-noul": {"/api/audit": get(client, "/api/audit")},
         "audit-categorical": {"/api/audit": get(cat, "/api/audit")},
+        "audit-filled": {"/api/audit": audit_filled},
         "policy-noul": {"/api/simulate-policy": get(client, "/api/simulate-policy")},
         "policy-choice": {"/api/simulate-policy": get(cat, "/api/simulate-policy", primitive="choice")},
         "policy-score": {"/api/simulate-policy": get(cat, "/api/simulate-policy", primitive="score")},
@@ -197,6 +201,7 @@ LOADERS = {
     "overview": "loadOverview",
     "audit-noul": "loadAudit",
     "audit-categorical": "loadAudit",
+    "audit-filled": "loadAudit",
     "policy-noul": "loadPolicy",
     "policy-choice": "loadPolicy",
     "policy-score": "loadPolicy",
@@ -248,6 +253,11 @@ def _mutated(old: str, new: str) -> str:
         # Empty or null in the demo: caught only by the filled cases.
         pytest.param("drift-filled", "margin:4px 0;\">${esc(n)}</div>", "margin:4px 0;\">${n}</div>", id="drift-note"),
         pytest.param("lint-filled", "esc(p.inverse_source)", "p.inverse_source", id="probe-inverse-source"),
+        # The calibration view's kits: a table cell (metric names are mapping keys), the chart's
+        # title, and the warnings (empty in the demo).
+        pytest.param("audit-noul", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="table-cell"),
+        pytest.param("audit-noul", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="chart-title"),
+        pytest.param("audit-filled", "WARN</span> ${esc(w)}</div>", "WARN</span> ${w}</div>", id="audit-warning"),
     ],
 )
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:

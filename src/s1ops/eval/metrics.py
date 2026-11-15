@@ -107,6 +107,16 @@ def reliability(score: np.ndarray, target: np.ndarray, bins: int = 10, strategy:
     return rows
 
 
+def reliability_counts(score: np.ndarray, target: np.ndarray, bins: int = 10, strategy: str = "width") -> list[tuple[int, int]]:
+    """`(n, successes)` of each bin `reliability` reports, in its order: the same members, the
+    successes counted from the 0/1 targets (never recovered from a rounded `observed * n`)."""
+    return [
+        (len(members), int(np.count_nonzero(target[members])))
+        for members in _bins(score, bins, strategy)
+        if len(members)
+    ]
+
+
 def brier(primitive: str, P: np.ndarray, y: np.ndarray) -> float:
     if primitive == "noul":
         return float(np.mean((P[:, 1] - y) ** 2))

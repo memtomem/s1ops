@@ -877,7 +877,7 @@
     function niceTicks(lo, hi, count) {
       if (![lo, hi, count].every(Number.isFinite) || count < 1) return [];
       if (hi <= lo) return [lo];
-      const raw = (hi - lo) / count;
+      const raw = hi / count - lo / count;  // (hi - lo) can overflow to Infinity
       const mag = Math.pow(10, Math.floor(Math.log10(raw)));
       const step = [1, 2, 5, 10].map(m => m * mag).find(s => s >= raw * (1 - 1e-9));
       if (!(step > 0) || !Number.isFinite(step) || step < Math.max(Math.abs(lo), Math.abs(hi)) * 1e-9) return [lo];
@@ -1116,7 +1116,8 @@
       document.body.appendChild(a);
       a.click();
       a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      // Late enough for every browser to have started the download (WebKit starts it asynchronously).
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
     }
 
     // What the fit did on these records: the bootstrap CI of ECE(after) - ECE(before), then
@@ -2068,10 +2069,11 @@
       }
       loadedSig[view] = sig;
       const seq = (viewSeq[view] = (viewSeq[view] || 0) + 1);
+      // A Refresh outdates every request, a hidden view's too: one answering after it neither
+      // keeps its payload, nor renders, nor sets the "Loaded" time.
+      const gen = generation;
       // What is kept belongs to the request it came from: a re-render until the new one answers
-      // would show the old parameters' results under the new controls. (A request a Refresh
-      // outdated may still keep its payload, but Refresh clears every signature, so the view's
-      // next run passes here and deletes it.)
+      // would show the old parameters' results under the new controls.
       delete viewData[view];
       const resolved = resolveGroup(STATE, GROUPS, groupsState);
       if (view === "policy") {
@@ -2099,11 +2101,11 @@
         nboot: STATE.nboot,
         opts: viewOpts,
         keep: d => { viewData[view] = d; },
-        isCurrent: () => viewSeq[view] === seq,
+        isCurrent: () => viewSeq[view] === seq && generation === gen,
       };
       showLoading(def.container);
       run(def.loader, def.container, ctx).finally(() => {
-        if (viewSeq[view] !== seq) return;
+        if (viewSeq[view] !== seq || generation !== gen) return;
         document.getElementById(def.container).removeAttribute("aria-busy");
         document.getElementById("loaded-at").textContent = "Loaded " + new Date().toLocaleTimeString();
       });

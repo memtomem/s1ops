@@ -128,6 +128,9 @@ def _js(expr: str, prelude: str = "") -> object:
         ((0.6, 0.6000000000000001, 5), [0.6]),
         # A narrow range near zero keeps distinct ticks.
         ((0, 1e-13, 5), [0, 2e-14, 4e-14, 6e-14, 8e-14, 1e-13]),
+        ((0.3, 0.1 + 0.2, 5), [0.3]),
+        ((1, 1 + 2**-52, 5), [1]),
+        ((-1e308, 1e308, 5), [-1e308, -5e307, 0, 5e307, 1e308]),  # hi - lo overflows
         ((0, 1, float("inf")), []),
         ((0, 1, 0.5), []),
     ],
@@ -415,3 +418,30 @@ def test_each_chart_names_the_table_holding_its_values(payloads) -> None:
     assert len(ids) == len(set(ids)) == 2
     # No mark takes focus: the table is the keyboard path.
     assert "tabindex" not in html
+
+
+REFRESH_STEPS = """
+  runView("calib");
+  // A Refresh while the request is out, as refresh() does it (a hidden view is not run again).
+  generation += 1;
+  loadedSig = {};
+  viewData = {};
+  pending.shift().resolve(payload);
+  await tick(); await tick();
+  out.kept = "calib" in viewData;
+  out.rendered = el("calib-container").innerHTML.includes('<svg class="chart"');
+  out.loadedAt = el("loaded-at").textContent;
+"""
+
+
+@needs_node
+def test_a_request_a_refresh_outdated_keeps_and_renders_nothing(payloads) -> None:
+    assert _shell_run(REFRESH_STEPS, payloads["noul"]) == {"kept": False, "rendered": False, "loadedAt": ""}
+
+
+@needs_node
+def test_the_refresh_check_catches_a_missing_generation_guard(payloads) -> None:
+    functions = _mutated("isCurrent: () => viewSeq[view] === seq && generation === gen,", "isCurrent: () => viewSeq[view] === seq,")
+    functions = functions.replace("if (viewSeq[view] !== seq || generation !== gen) return;", "if (viewSeq[view] !== seq) return;")
+    out = _shell_run(REFRESH_STEPS, payloads["noul"], functions=functions)
+    assert out["kept"] is True and out["rendered"] is True and out["loadedAt"].startswith("Loaded ")

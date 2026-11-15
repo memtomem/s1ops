@@ -192,6 +192,7 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         "lint": {"/api/lint": lint},
         "lint-filled": {"/api/lint": lint_filled},
         "slices": {"/api/slices": get(client, "/api/slices"), "/api/labelaudit": get(client, "/api/labelaudit")},
+        "slices-categorical": {"/api/slices": get(cat, "/api/slices"), "/api/labelaudit": get(cat, "/api/labelaudit")},
         "compare": {"/api/compare": get(client, "/api/compare")},
         "drift": {"/api/drift/histograms": drift},
         "drift-filled": {"/api/drift/histograms": drift_filled},
@@ -209,6 +210,7 @@ LOADERS = {
     "lint": "loadLint",
     "lint-filled": "loadLint",
     "slices": "loadSlicesAndLabels",
+    "slices-categorical": "loadSlicesAndLabels",
     "compare": "loadCompare",
     "drift": "loadDrift",
     "drift-filled": "loadDrift",
@@ -270,6 +272,14 @@ def _mutated(old: str, new: str) -> str:
         pytest.param("drift", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="drift-table-cell"),
         pytest.param("drift", 'aria-label="${esc(c.text + ": " + r[c.labelKey])}"', 'aria-label="${c.text + ": " + r[c.labelKey]}"', id="drift-show-name"),
         pytest.param("drift", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="drift-chart-title"),
+        # The slices view: a lane's name, a mark's tooltip (both hold a slice or feature name), the
+        # chart's title, a table cell (the ranking's ids), and the two served distributions.
+        pytest.param("slices", 'text-anchor="end">${esc(text)}</text>', 'text-anchor="end">${text}</text>', id="slices-lane-name"),
+        pytest.param("slices", 'r="10" data-tip="${esc(p.tip)}" />', 'r="10" data-tip="${p.tip}" />', id="slices-mark-tip"),
+        pytest.param("slices", "<title>${esc(spec.title)}</title>", "<title>${spec.title}</title>", id="slices-chart-title"),
+        pytest.param("slices-categorical", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="slices-table-cell"),
+        pytest.param("slices", "Margins from ${esc(l.distribution)} probabilities.", "Margins from ${l.distribution} probabilities.", id="slices-ranking-distribution"),
+        pytest.param("slices-categorical", "Predictions from ${esc(o.dist || 'unknown')} probabilities.", "Predictions from ${o.dist || 'unknown'} probabilities.", id="slices-distribution"),
     ],
 )
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:

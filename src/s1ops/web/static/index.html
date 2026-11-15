@@ -378,6 +378,8 @@
     .viz .dot.mark, .legend .mark.fill { fill: var(--text); stroke: var(--panel); }
     .viz .dot.ctx, .legend .ctx.fill { fill: var(--muted); stroke: none; fill-opacity: 0.6; }
     .viz .cross { stroke: var(--muted); stroke-width: 1; pointer-events: none; }
+    /* The neutral connector between a lane's two marks. */
+    .viz .link { stroke: var(--axis); stroke-width: 2; }
     #chart-tip {
       position: fixed;
       z-index: 10;
@@ -390,6 +392,8 @@
       font-family: var(--mono);
       font-size: 11px;
       white-space: pre-line;
+      /* A name without a space to break at still stays inside the box. */
+      overflow-wrap: anywhere;
     }
     /* Table kit. */
     .tk { margin-top: 8px; }
@@ -420,6 +424,8 @@
     .tk-body { overflow-x: auto; position: relative; }
     td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
     .tk th { white-space: nowrap; }
+    /* A long identifier wraps inside its cell instead of pushing the other columns out of view. */
+    .tk td.mono:not(.num) { max-width: 44ch; overflow-wrap: break-word; }
     .warn-row { margin: 0 0 6px; font-size: 13px; }
     .panel-block { margin-top: 12px; }
     .calib-note { font-size: 12px; color: var(--muted); }
@@ -551,6 +557,26 @@
     </section>
 
     <section id="tab-slices" class="tab-pane" role="tabpanel" aria-labelledby="nav-slices">
+      <div class="controls">
+        <div class="control-group">
+          <label for="inp-fdrq">False discovery rate (q, for the error slices)</label>
+          <select id="inp-fdrq" data-act="slices-fdrq">
+            <option value="0.01">0.01</option>
+            <option value="0.05">0.05</option>
+            <option value="0.1" selected>0.10</option>
+            <option value="0.2">0.20</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="inp-topk">Label audit candidates (top_k)</label>
+          <select id="inp-topk" data-act="slices-topk">
+            <option value="15" selected>15</option>
+            <option value="30">30</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+      </div>
       <div id="slices-container">Loading slice discovery and blind label audit...</div>
     </section>
 
@@ -593,10 +619,16 @@
       return k === null || k === undefined ? "N/A" : k.toFixed(3);
     }
 
-    // A p- or q-value to four places; under 0.0001 as "< 0.0001", never as an exact zero.
+    // A p- or q-value to four places as plain text; under 0.0001 as "< 0.0001", never as an exact
+    // zero; "N/A" for anything that is not a number.
+    function pText(p) {
+      if (typeof p !== "number" || !Number.isFinite(p)) return "N/A";
+      return p < 0.0001 ? "< 0.0001" : p.toFixed(4);
+    }
+
+    // The same, for markup.
     function fmtP(p) {
-      if (p === null || p === undefined) return "N/A";
-      return p < 0.0001 ? "&lt; 0.0001" : p.toFixed(4);
+      return esc(pText(p));
     }
 
     // A rate in [0, 1] as a percentage; null (no policy for the group) as "N/A".
@@ -607,13 +639,16 @@
     // A slice's answerability: `improve/slices.py` marks it answerable when n >= min_n and the
     // accuracy CI's lower end is above the null CI's upper end. Every other case is worded for what
     // decided it, since "below" was false for a slice above the null whose CIs overlap.
+    function answerabilityVerdict(m, minN) {
+      if (m.answerable) return {cls: "badge-ok", text: "ANSWERABLE"};
+      if (m.n < minN) return {cls: "badge-info", text: "TOO FEW (n < " + Number(minN) + ")"};
+      if (m.ci[1] < m.null_ci[0]) return {cls: "badge-err", text: "BELOW NULL"};
+      return {cls: "badge-warn", text: "NOT DISTINGUISHABLE FROM NULL"};
+    }
+
     function answerabilityBadge(m, minN) {
-      let cls, text;
-      if (m.answerable) [cls, text] = ["badge-ok", "ANSWERABLE"];
-      else if (m.n < minN) [cls, text] = ["badge-info", `TOO FEW (n &lt; ${Number(minN)})`];
-      else if (m.ci[1] < m.null_ci[0]) [cls, text] = ["badge-err", "BELOW NULL"];
-      else [cls, text] = ["badge-warn", "NOT DISTINGUISHABLE FROM NULL"];
-      return `<span class="badge ${cls}">${text}</span>`;
+      const v = answerabilityVerdict(m, minN);
+      return `<span class="badge ${v.cls}">${esc(v.text)}</span>`;
     }
 
     // The band's handles cannot cross: moving one past the other pushes the other along, so the
@@ -691,7 +726,17 @@
     }
 
     function defaultState() {
-      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs1: 0.00004, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass"};
+      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs1: 0.00004, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass", fdrq: 0.1, topk: 15};
+    }
+
+    // The slices view's pickers: the false discovery rates (inside /api/slices' 0.001..0.50) and
+    // the ranking sizes (inside /api/labelaudit's 1..100) it offers.
+    function fdrChoices() {
+      return [0.01, 0.05, 0.1, 0.2];
+    }
+
+    function topkChoices() {
+      return [15, 30, 50, 100];
     }
 
     // The calibration view's bootstrap sizes: its picker's options, all inside /api/audit's 20..2000.
@@ -741,13 +786,17 @@
       const nboot = Number(params.get("nboot"));
       if (nbootChoices().includes(nboot)) st.nboot = nboot;
       if (params.get("cbins") === "width") st.cbins = "width";
+      const fdrq = Number(params.get("fdrq"));
+      if (fdrChoices().includes(fdrq)) st.fdrq = fdrq;
+      const topk = Number(params.get("topk"));
+      if (topkChoices().includes(topk)) st.topk = topk;
       return st;
     }
 
     function formatHash(st) {
       const d = defaultState();
       const params = new URLSearchParams();
-      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs1", "cs2", "budget", "nboot", "cbins"].forEach(k => {
+      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs1", "cs2", "budget", "nboot", "cbins", "fdrq", "topk"].forEach(k => {
         if (st[k] !== d[k]) params.set(k, String(st[k]));
       });
       const query = params.toString();
@@ -1041,6 +1090,13 @@
       ).join("");
     }
 
+    // Horizontal intervals ({y, x0, x1} in pixels) with short caps.
+    function svgWhiskersH(items, cls) {
+      return items.filter(w => [w.y, w.x0, w.x1].every(Number.isFinite)).map(w =>
+        `<path class="whisker ${esc(cls)}" d="M${px(w.x0)} ${px(w.y)}H${px(w.x1)}M${px(w.x0)} ${px(w.y - 3)}V${px(w.y + 3)}M${px(w.x1)} ${px(w.y - 3)}V${px(w.y + 3)}" />`
+      ).join("");
+    }
+
     // Bars ({x0, x1, y0 (baseline), y1, tip} in pixels), inset 1px a side so touching bars keep a
     // 2px surface gap, and never under 2px wide (a bin whose scores are all one value).
     function svgBars(items, cls) {
@@ -1078,10 +1134,12 @@
 
     // --- table kit ------------------------------------------------------------------------------
     // A spec is {id, caption, file, columns}; a column is {key, name, kind, digits, exportOnly} with
-    // kind "text" (escaped), "num" (fmtNum), "range" (a [lo, hi] pair) or "button" ({act, text,
-    // data: {attribute: key}, labelKey: the key whose value completes its accessible name; never
-    // exported). `digitsKey` takes a row's places from that row, `sortBy` sorts the column by
-    // another (numeric) key. The view state of a table (sort column, direction, filter text) is
+    // kind "text" (escaped), "num" (fmtNum), "p" (a p- or q-value, pText), "range" (a [lo, hi]
+    // pair) or "button" ({act, text, data: {attribute: key}, labelKey: the key whose value
+    // completes its accessible name; never exported). `digitsKey` takes a row's places from that
+    // row, `sortBy` sorts the column by another (numeric) key, and `showOnly` is a column of text
+    // the page made from served values: shown and filtered, never exported (the values it was made
+    // from are export-only columns). The view state of a table (sort column, direction, filter text) is
     // kept by the shell per table id; the renderers only read it.
 
     // A number to `digits` places; anything that is not a finite number as "N/A".
@@ -1099,6 +1157,7 @@
       const v = r[c.key];
       const digits = c.digitsKey ? r[c.digitsKey] : c.digits;
       if (c.kind === "num") return fmtNum(v, digits);
+      if (c.kind === "p") return pText(v);
       if (c.kind === "range") return Array.isArray(v) ? "[" + fmtNum(v[0], digits) + ", " + fmtNum(v[1], digits) + "]" : "N/A";
       return v === null || v === undefined ? "" : String(v);
     }
@@ -1108,7 +1167,7 @@
     }
 
     function dataColumns(spec) {
-      return spec.columns.filter(c => c.kind !== "button");
+      return spec.columns.filter(c => c.kind !== "button" && !c.showOnly);
     }
 
     // Rows any shown cell of which contains the filter text, ignoring case.
@@ -2173,91 +2232,329 @@
       `;
     }
 
+    // --- slices and blind label audit ---------------------------------------------------------------
+    // Two independent reports in one view: /api/slices (per group: answerability and error slices)
+    // and /api/labelaudit (a ranking of label disagreements). Nothing here is computed from both.
+    // The settings a response was asked with (fdrq, topk) are kept with it, so a title never shows
+    // a q the server did not use.
     async function loadSlicesAndLabels(ctx = {}) {
-      const [sData, lData] = await Promise.all([fetchJson(apiUrl("/api/slices", ctx.params)), fetchJson(apiUrl("/api/labelaudit", ctx.params))]);
+      const params = ctx.params || {};
+      const [slices, labels] = await Promise.all([
+        fetchJson(apiUrl("/api/slices", {...params, fdr_q: ctx.fdrq})),
+        fetchJson(apiUrl("/api/labelaudit", {...params, top_k: ctx.topk})),
+      ]);
       if (isStale(ctx)) return;
-      const groups = sData.groups || [];
-      // `/api/slices` predicts from raw probabilities unless asked for `use_calib`.
-      const dist = esc(sData.distribution || 'unknown');
-      const minN = sData.min_n;
+      const d = {slices, labels, fdrq: ctx.fdrq, topk: ctx.topk, grouped: Boolean(params.question_id)};
+      // Kept only once it is on screen: a payload the renderer throws on leaves nothing behind the
+      // error card for a later re-render or table action to read.
+      document.getElementById("slices-container").innerHTML = renderSlices(d, ctx.opts ? ctx.opts() : {});
+      if (ctx.keep) ctx.keep(d);
+    }
 
-      document.getElementById("slices-container").innerHTML = `
-        ${groups.length ? '' : '<div class="card">No labeled groups found in workspace.</div>'}
-        ${groups.map(g => {
-          const slices = g.answerability || [];
-          const errSlices = g.error_slices || [];
-          return `
-        <h3>Group: <span class="badge badge-info">${esc(g.question_id)}</span> ·
-          <span class="badge badge-info">${esc(g.model_served)}</span> ·
-          <span class="badge badge-ok">${esc(g.primitive)}</span> (n=${g.n})
-        </h3>
-        <div class="grid-2">
-          <div class="card">
-            <h3>Answerability Pre-Flight (Wilson 95% CI vs Null Baseline)</h3>
-            <div class="sub">Predictions from ${dist} probabilities. Answerable: n ≥ ${Number(minN)} and the accuracy CI's lower end above the null CI's upper end.</div>
-            <table>
-              <thead>
-                <tr><th>Slice</th><th>n</th><th>Accuracy (95% CI)</th><th>Null Baseline (${esc(slices[0] ? slices[0].null_kind : 'majority')}, 95% CI)</th><th>Answerable</th></tr>
-              </thead>
-              <tbody>
-                ${slices.map(m => `
-                  <tr>
-                    <td class="mono">${esc(m.slice)}</td>
-                    <td class="mono">${m.n}</td>
-                    <td class="mono">${(m.accuracy * 100).toFixed(1)}% [${(m.ci[0]*100).toFixed(1)}%, ${(m.ci[1]*100).toFixed(1)}%]</td>
-                    <td class="mono">${(m.null_accuracy * 100).toFixed(1)}% [${(m.null_ci[0]*100).toFixed(1)}%, ${(m.null_ci[1]*100).toFixed(1)}%]</td>
-                    <td>${answerabilityBadge(m, minN)}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+    // Lanes a lane chart draws at most; the table under it holds every row.
+    function laneLimit() {
+      return 30;
+    }
+
+    // How many monospace cells a grapheme cluster takes beside an axis: two for the East Asian wide
+    // and fullwidth ranges (Hangul, kana, CJK ideographs, fullwidth forms) and emoji, else one.
+    function clusterCells(cluster) {
+      const c = cluster.codePointAt(0);
+      const wide = (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
+        (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) ||
+        (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1faff) || (c >= 0x20000 && c <= 0x3fffd);
+      return wide ? 2 : 1;
+    }
+
+    // A lane's name within `cells` monospace cells: whole when it fits, else its leading grapheme
+    // clusters and an ellipsis (clusters from Intl.Segmenter, so a combining mark stays on its
+    // base; code points where there is none, so a surrogate pair is never split).
+    function laneName(name, cells) {
+      const text = String(name ?? "");
+      const parts = typeof Intl !== "undefined" && Intl.Segmenter
+        ? Array.from(new Intl.Segmenter(undefined, {granularity: "grapheme"}).segment(text), part => part.segment)
+        : Array.from(text);
+      const widths = parts.map(clusterCells);
+      if (widths.reduce((a, b) => a + b, 0) <= cells) return text;
+      let used = 0, kept = 0;
+      while (kept < parts.length && used + widths[kept] <= cells - 1) {
+        used += widths[kept];
+        kept += 1;
+      }
+      return parts.slice(0, kept).join("") + "…";
+    }
+
+    // What both lane charts share: names in the left margin (18 cells of 10px monospace), one lane
+    // per row on a 24px pitch, x = a rate in [0, 1]. A lane's two marks sit 4px above and below its
+    // middle or on it, so marks of neighbouring lanes are at least 8px apart.
+    function laneFrame(count) {
+      const W = 460, ml = 126, mr = 14, mt = 12, pitch = 24;
+      const bottom = mt + pitch * count;
+      return {W, H: bottom + 40, ml, mr, mt, bottom, x: scaleLinear(0, 1, ml, W - mr), mid: i => mt + pitch * i + pitch / 2};
+    }
+
+    function laneAxes(f, xName) {
+      return svgAxes({x: f.x, y: () => 0, xTicks: niceTicks(0, 1, 5), yTicks: [], left: f.ml, right: f.W - f.mr, top: f.mt, bottom: f.bottom,
+        digits: 1, xName, yName: ""});
+    }
+
+    function laneLabel(f, i, text) {
+      return `<text x="${px(f.ml - 8)}" y="${px(f.mid(i) + 3)}" text-anchor="end">${esc(text)}</text>`;
+    }
+
+    // What a lane chart says when it draws fewer rows than its table holds (plain text).
+    function laneLimitNote(total, what) {
+      return total > laneLimit() ? " The first " + laneLimit() + " of " + total + " " + what + " are drawn; every one is in the table." : "";
+    }
+
+    // A proportion with its interval as percentages ("85.0% [64.0%, 94.8%]"); "N/A" for a non-number.
+    function pctCi(v, ci) {
+      const pct = n => typeof n === "number" && Number.isFinite(n) ? (n * 100).toFixed(1) + "%" : "N/A";
+      const pair = Array.isArray(ci) ? ci : [null, null];
+      return pct(v) + " [" + pct(pair[0]) + ", " + pct(pair[1]) + "]";
+    }
+
+    // The false discovery rate a response was asked with, as plain text. A request that named none
+    // ran at the server's default, which the page does not know.
+    function fdrText(fdrq) {
+      return typeof fdrq === "number" && Number.isFinite(fdrq) ? "q ≤ " + fdrq.toFixed(2) : "q ≤ the server's default";
+    }
+
+    // When /api/slices tests a feature (its min_support and the one-item rest), as plain text.
+    function testedRuleText() {
+      return "A feature is tested when at least 5 of the group's items carry it and at least one does not.";
+    }
+
+    // A slice's tooltip (plain text: the chart kit escapes it).
+    function sliceTip(m, minN) {
+      return String(m.slice) + "\nn = " + fmtNum(m.n, 0) + "\naccuracy " + pctCi(m.accuracy, m.ci) +
+        "\nnull (" + String(m.null_kind) + ") " + pctCi(m.null_accuracy, m.null_ci) + "\n" + answerabilityVerdict(m, minN).text;
+    }
+
+    // One lane per slice: its accuracy (circle) and its null baseline (square), each with its 95%
+    // Wilson interval. A slice is answerable when the upper lane's interval lies wholly right of
+    // the lower one's and it has enough items.
+    function slicesForestHtml(g, minN, details) {
+      const rows = (g.answerability || []).slice(0, laneLimit());
+      const f = laneFrame(rows.length);
+      let body = laneAxes(f, "accuracy");
+      rows.forEach((m, i) => {
+        const mid = f.mid(i), tip = sliceTip(m, minN);
+        const ci = Array.isArray(m.ci) ? m.ci : [], nullCi = Array.isArray(m.null_ci) ? m.null_ci : [];
+        body += laneLabel(f, i, laneName(m.slice, 18));
+        body += svgWhiskersH([{y: mid - 4, x0: f.x(finite(ci[0])), x1: f.x(finite(ci[1]))}], "ser-1");
+        body += svgWhiskersH([{y: mid + 4, x0: f.x(finite(nullCi[0])), x1: f.x(finite(nullCi[1]))}], "ser-2");
+        body += svgDots([{x: f.x(finite(m.accuracy)), y: mid - 4, tip}], "ser-1", "circle");
+        body += svgDots([{x: f.x(finite(m.null_accuracy)), y: mid + 4, tip}], "ser-2", "square");
+      });
+      // Plain text: svgFrame escapes the title and description.
+      return svgFrame({w: f.W, h: f.H, details, title: "Answerability of " + [g.question_id, g.model_served, g.primitive].join(" · "),
+        desc: "Per slice, the accuracy and the null baseline, each with its 95% Wilson interval."}, body);
+    }
+
+    // An error slice's tooltip (plain text: the chart kit escapes it).
+    function errorSliceTip(e, fdrq) {
+      const rate = (errors, n, r) => fmtNum(errors, 0) + " of " + fmtNum(n, 0) + " wrong (" + fmtRate(r) + ")";
+      const odds = `${e.odds_ratio !== null ? e.odds_ratio.toFixed(2) : 'N/A'}`;
+      return String(e.feature) + "\ninside: " + rate(e.slice_errors, e.slice_n, e.slice_error_rate) +
+        "\noutside: " + rate(e.rest_errors, e.rest_n, e.rest_error_rate) + "\nodds ratio " + odds +
+        "\np = " + pText(e.p_value) + ", q = " + pText(e.q_value) + "\n" + (e.significant ? "significant" : "not significant") + " at " + fdrText(fdrq);
+    }
+
+    // One lane per tested feature, in the served order: the error rate of the items that carry it
+    // (circle) and of the rest (square), joined. " *" after a name is the server's `significant`.
+    function slicesDumbbellHtml(g, fdrq, details) {
+      const rows = (g.error_slices || []).slice(0, laneLimit());
+      const f = laneFrame(rows.length);
+      let body = laneAxes(f, "error rate");
+      rows.forEach((e, i) => {
+        const mid = f.mid(i), tip = errorSliceTip(e, fdrq);
+        const inside = f.x(finite(e.slice_error_rate)), outside = f.x(finite(e.rest_error_rate));
+        body += laneLabel(f, i, laneName(e.feature, 16) + (e.significant ? " *" : ""));
+        if (Number.isFinite(inside) && Number.isFinite(outside)) {
+          body += `<line class="link" x1="${px(inside)}" y1="${px(mid)}" x2="${px(outside)}" y2="${px(mid)}" />`;
+        }
+        body += svgDots([{x: outside, y: mid, tip}], "ser-2", "square");
+        body += svgDots([{x: inside, y: mid, tip}], "ser-1", "circle");
+      });
+      return svgFrame({w: f.W, h: f.H, details, title: "Error slices of " + [g.question_id, g.model_served, g.primitive].join(" · "),
+        desc: "Per tested feature, the error rate of the items that carry it and of the rest."}, body);
+    }
+
+    // A group's two tables, keyed by table id (the view, the table and the group key, so a sort or
+    // filter survives a refetch). The percent and verdict columns are the page's text over the
+    // served numbers, which are the export.
+    function slicesGroupTables(g, minN, fdrq) {
+      const key = JSON.stringify([g.question_id, g.model_served, g.primitive]);
+      const groupCols = [
+        {key: "question_id", name: "question_id", kind: "text", exportOnly: true},
+        {key: "model_served", name: "model_served", kind: "text", exportOnly: true},
+        {key: "primitive", name: "primitive", kind: "text", exportOnly: true},
+      ];
+      const ident = {question_id: g.question_id, model_served: g.model_served, primitive: g.primitive};
+      const file = fileSafe([g.question_id, g.model_served, g.primitive].join("-"));
+      const answerability = (g.answerability || []).map(m => ({
+        ...ident, slice: m.slice, n: m.n, accuracy_text: pctCi(m.accuracy, m.ci), null_text: pctCi(m.null_accuracy, m.null_ci),
+        null_kind: m.null_kind, verdict: answerabilityVerdict(m, minN).text,
+        accuracy: m.accuracy, ci: m.ci, null_accuracy: m.null_accuracy, null_ci: m.null_ci, answerable: m.answerable,
+      }));
+      const errors = (g.error_slices || []).map(e => ({
+        ...ident, feature: e.feature, slice_n: e.slice_n, slice_errors: e.slice_errors, slice_error_rate: e.slice_error_rate,
+        rest_n: e.rest_n, rest_errors: e.rest_errors, rest_error_rate: e.rest_error_rate, odds_ratio: e.odds_ratio,
+        p_value: e.p_value, q_value: e.q_value, significant_text: e.significant ? "yes" : "no", significant: e.significant,
+      }));
+      return {
+        answerability: {
+          spec: {id: "slices:answerability:" + key, caption: "Answerability by slice", file: `slices-answerability-${file}`, columns: [
+            ...groupCols,
+            {key: "slice", name: "Slice", kind: "text"},
+            {key: "n", name: "n", kind: "num", digits: 0},
+            {key: "accuracy_text", name: "Accuracy (95% CI)", kind: "text", sortBy: "accuracy", showOnly: true},
+            {key: "null_text", name: "Null baseline (95% CI)", kind: "text", sortBy: "null_accuracy", showOnly: true},
+            {key: "null_kind", name: "Baseline kind", kind: "text"},
+            {key: "verdict", name: "Verdict", kind: "text", showOnly: true},
+            {key: "accuracy", name: "accuracy", kind: "num", exportOnly: true},
+            {key: "ci", name: "ci", kind: "range", exportOnly: true},
+            {key: "null_accuracy", name: "null_accuracy", kind: "num", exportOnly: true},
+            {key: "null_ci", name: "null_ci", kind: "range", exportOnly: true},
+            {key: "answerable", name: "answerable", kind: "text", exportOnly: true},
+          ]},
+          rows: answerability,
+        },
+        errors: {
+          spec: {id: "slices:errors:" + key, caption: "Error slices (Benjamini-Hochberg, " + fdrText(fdrq) + ")", file: `slices-errors-${file}`, columns: [
+            ...groupCols,
+            {key: "feature", name: "Feature", kind: "text"},
+            {key: "slice_n", name: "Slice n", kind: "num", digits: 0},
+            {key: "slice_errors", name: "Slice errors", kind: "num", digits: 0},
+            {key: "slice_error_rate", name: "Slice error rate", kind: "num", digits: 3},
+            {key: "rest_n", name: "Rest n", kind: "num", digits: 0},
+            {key: "rest_errors", name: "Rest errors", kind: "num", digits: 0},
+            {key: "rest_error_rate", name: "Rest error rate", kind: "num", digits: 3},
+            {key: "odds_ratio", name: "Odds ratio", kind: "num", digits: 2},
+            {key: "p_value", name: "p-value", kind: "p"},
+            {key: "q_value", name: "q-value", kind: "p"},
+            {key: "significant_text", name: "Significant", kind: "text", showOnly: true},
+            {key: "significant", name: "significant", kind: "text", exportOnly: true},
+          ]},
+          rows: errors,
+        },
+      };
+    }
+
+    // The ranking's rows as served.
+    function flagsTable(labels) {
+      return {
+        spec: {id: "slices:flags", caption: "Disagreement candidates", file: "label-audit-candidates", columns: [
+          {key: "rank", name: "Rank", kind: "num", digits: 0},
+          {key: "dataset", name: "Dataset", kind: "text"},
+          {key: "item_id", name: "Item ID", kind: "text"},
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "label", name: "Given label", kind: "text"},
+          {key: "predicted", name: "Model answer", kind: "text"},
+          {key: "score", name: "Margin", kind: "num", digits: 4},
+        ]},
+        rows: labels && Array.isArray(labels.top_flags) ? labels.top_flags : [],
+      };
+    }
+
+    // Every table the slices view shows for what it holds, by id.
+    function slicesTables(d) {
+      const out = {};
+      const add = t => { out[t.spec.id] = t; };
+      const s = (d && d.slices) || {};
+      (s.groups || []).forEach(g => Object.values(slicesGroupTables(g, s.min_n, d.fdrq)).forEach(add));
+      add(flagsTable(d && d.labels));
+      return out;
+    }
+
+    // How many slices got each verdict, in the order the verdicts first appear.
+    function answerabilitySummaryHtml(slices, minN) {
+      const seen = [];
+      slices.forEach(m => {
+        const text = answerabilityVerdict(m, minN).text;
+        const hit = seen.find(e => e.text === text);
+        if (hit) hit.count += 1;
+        else seen.push({text, count: 1, sample: m});
+      });
+      return seen.map(e => `${e.count} × ${answerabilityBadge(e.sample, minN)}`).join(" · ");
+    }
+
+    // `o.index` makes the DOM ids of the card unique within the view.
+    function sliceCardHtml(g, o) {
+      const slices = g.answerability || [], errors = g.error_slices || [];
+      const tables = slicesGroupTables(g, o.minN, o.fdrq);
+      const ids = {answerability: "slices-answerability-table-" + Number(o.index || 0), errors: "slices-errors-table-" + Number(o.index || 0)};
+      const forest = chartFigure({
+        legend: svgLegend([
+          {name: "accuracy (95% Wilson CI)", cls: "ser-1", shape: "circle"},
+          {name: "null baseline (95% Wilson CI)", cls: "ser-2", shape: "square"},
+        ]),
+        svg: slicesForestHtml(g, o.minN, ids.answerability),
+        caption: "One lane per slice. The null baseline is what always answering the slice's most common label would score (majority; the Baseline kind column names it). " +
+          "A slice is answerable when its accuracy interval lies wholly right of its null interval and it has enough items." +
+          laneLimitNote(slices.length, "slices") + " Hover a mark for its numbers; the same values are in the Answerability by slice table.",
+      });
+      const dumbbell = errors.length ? chartFigure({
+        legend: svgLegend([
+          {name: "error rate inside the feature", cls: "ser-1", shape: "circle", noLine: true},
+          {name: "error rate outside it", cls: "ser-2", shape: "square", noLine: true},
+        ]),
+        svg: slicesDumbbellHtml(g, o.fdrq, ids.errors),
+        caption: "One lane per tested feature, significant ones first, then by q. Fisher's exact test, one-sided (more errors inside the feature than outside), " +
+          "Benjamini-Hochberg over the features tested in this group; * marks a feature significant at " + fdrText(o.fdrq) + ". " + testedRuleText() +
+          laneLimitNote(errors.length, "features") + " The same values are in the Error slices table.",
+      }) : `<div class="sub">No feature was tested in this group. ${esc(testedRuleText())}</div>`;
+      return `
+        <div class="card">
+          <h3>Group: <span class="badge badge-info">${esc(g.question_id)}</span> ·
+            <span class="badge badge-info">${esc(g.model_served)}</span> ·
+            <span class="badge badge-none">${esc(g.primitive)}</span> (n=${g.n})
+          </h3>
+          <div class="sub">Predictions from ${esc(o.dist || 'unknown')} probabilities. Answerable: n ≥ ${Number(o.minN)} and the accuracy CI's lower end above the null CI's upper end.</div>
+          <div class="sub" style="margin:6px 0 12px">${slices.length} ${slices.length === 1 ? "slice" : "slices"}: ${answerabilitySummaryHtml(slices, o.minN)}</div>
+          <div class="grid-2">
+            <div>${forest}</div>
+            <div>${dumbbell}</div>
           </div>
-          <div class="card">
-            <h3>Benjamini-Hochberg FDR Error Slices (q ≤ 0.10)</h3>
-            <div class="sub">Errors of predictions from ${dist} probabilities</div>
-            <table>
-              <thead>
-                <tr><th>Feature</th><th>Slice n</th><th>Slice Err</th><th>Rest Err</th><th>Odds Ratio</th><th>q-value</th><th>Verdict</th></tr>
-              </thead>
-              <tbody>
-                ${errSlices.map(e => `
-                  <tr>
-                    <td class="mono">${esc(e.feature)}</td>
-                    <td class="mono">${e.slice_n}</td>
-                    <td class="mono">${(e.slice_error_rate * 100).toFixed(1)}%</td>
-                    <td class="mono">${(e.rest_error_rate * 100).toFixed(1)}%</td>
-                    <td class="mono">${e.odds_ratio !== null ? e.odds_ratio.toFixed(2) : 'N/A'}</td>
-                    <td class="mono">${fmtP(e.q_value)}</td>
-                    <td><span class="badge ${e.significant ? 'badge-err' : 'badge-ok'}">${e.significant ? 'SIGNIFICANT' : 'ns'}</span></td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+          <div class="panel-block scroll-table">${tableHtml({...tables.answerability.spec, domId: ids.answerability}, tables.answerability.rows, o.tstate)}</div>
+          <div class="panel-block scroll-table">${tableHtml({...tables.errors.spec, domId: ids.errors}, tables.errors.rows, o.tstate)}</div>
+        </div>`;
+    }
+
+    // The ranking's card. A response without `distribution` ranked nothing (no records).
+    function labelAuditCardHtml(d, tstate) {
+      const l = d.labels || {};
+      const head = `<h3>Blind Label Audit: disagreement candidates (safe-v1: ids only, no state text)</h3>`;
+      if (typeof l.distribution !== "string") {
+        return `<div class="card">${head}<div class="sub">The workspace has no records to rank.</div></div>`;
+      }
+      const t = flagsTable(l);
+      const sk = l.skipped || {};
+      let from = `Margins from ${esc(l.distribution)} probabilities.`;
+      if (l.distribution === "calibrated") from = "Margins from calibrated probabilities (the fit file's fits).";
+      if (l.distribution === "raw") from = "Margins from raw probabilities (no fit file was read).";
+      const topk = typeof d.topk === "number" ? "top_k " + d.topk : "the server's default top_k";
+      const left = d.grouped
+        ? `Left out: ${fmtNum(sk.unlabeled, 0)} unlabeled. Records without a response have no served model, so they belong to no group and are not counted here.`
+        : `Left out: ${fmtNum(sk.no_response, 0)} without a response, ${fmtNum(sk.unlabeled, 0)} unlabeled. Every group's records are ranked together, as <code>s1 labelaudit rank</code> without <code>--question</code>; choose a group to rank one.`;
+      return `
+        <div class="card">
+          ${head}
+          <div class="sub">${from} Showing ${t.rows.length} of ${fmtNum(l.n_total_candidates, 0)} labeled, answered records (${topk}). ${left}</div>
+          <div class="panel-block scroll-table">
+            ${tableHtml(t.spec, t.rows, tstate)}
+            <div class="calib-note">Order: the given labels take turns, each label's records by margin, highest first, so rank is not margin order. Margin = p(model's answer) − p(given label) under those probabilities, never below 0, and 0 when the answer is the label.</div>
           </div>
         </div>`;
-        }).join('')}
-        <div class="card">
-          <h3>Blind Label Audit: Top Calibrated Disagreement Candidates (Safe-v1 Body-Free)</h3>
-          <table>
-            <thead>
-              <tr><th>Rank</th><th>Dataset</th><th>Item ID</th><th>Question ID</th><th>Given Label</th><th>Model Predicted</th><th>Disagreement Margin</th></tr>
-            </thead>
-            <tbody>
-              ${(lData.top_flags || []).map(f => `
-                <tr>
-                  <td class="mono">#${f.rank}</td>
-                  <td class="mono">${esc(f.dataset || '-')}</td>
-                  <td class="mono">${esc(f.item_id)}</td>
-                  <td class="mono">${esc(f.question_id)}</td>
-                  <td class="mono"><span class="badge badge-warn">${esc(f.label)}</span></td>
-                  <td class="mono"><span class="badge badge-ok">${esc(f.predicted)}</span></td>
-                  <td class="mono">${f.score.toFixed(4)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `;
+    }
+
+    function renderSlices(d, opts) {
+      const tstate = (opts && opts.tstate) || {};
+      const s = d.slices || {};
+      const groups = s.groups || [];
+      const cards = groups.map((g, index) => sliceCardHtml(g, {minN: s.min_n, dist: s.distribution, fdrq: d.fdrq, tstate, index})).join("");
+      return (groups.length ? cards : '<div class="card">No labeled groups found in workspace.</div>') + labelAuditCardHtml(d, tstate);
     }
 
     async function loadCompare(ctx = {}) {
@@ -2710,6 +3007,7 @@
         const mode = auditMode(resolved, GROUPS, groupsState);
         extra = [st.nboot, mode, mode === "list" ? GROUPS : null];
       }
+      if (view === "slices") extra = [st.fdrq, st.topk];
       return JSON.stringify([params, extra, generation]);
     }
 
@@ -2783,6 +3081,7 @@
     function runView(view) {
       const def = viewDefs()[view];
       if (view === "calib") applyCalibInputs(STATE);
+      if (view === "slices") applySlicesInputs(STATE);
       const sig = viewSig(view, STATE);
       if (loadedSig[view] === sig) {
         rerenderView(view);
@@ -2820,6 +3119,8 @@
         mode,
         groups: GROUPS,
         nboot: STATE.nboot,
+        fdrq: STATE.fdrq,
+        topk: STATE.topk,
         opts: viewOpts,
         keep: d => { viewData[view] = d; },
         isCurrent: () => viewSeq[view] === seq && generation === gen,
@@ -2839,11 +3140,17 @@
       if (view === "drift") document.getElementById("drift-container").innerHTML = renderDrift(d.report, STATE.dq, driftOpts(d, viewOpts()));
       if (view === "compare") document.getElementById("compare-container").innerHTML = renderCompare(d, STATE.cq);
       if (view === "calib") document.getElementById("calib-container").innerHTML = renderCalib(d, viewOpts());
+      if (view === "slices") document.getElementById("slices-container").innerHTML = renderSlices(d, viewOpts());
     }
 
     function applyCalibInputs(st) {
       document.getElementById("inp-nboot").value = String(st.nboot);
       document.getElementById("inp-cbins").value = st.cbins;
+    }
+
+    function applySlicesInputs(st) {
+      document.getElementById("inp-fdrq").value = String(st.fdrq);
+      document.getElementById("inp-topk").value = String(st.topk);
     }
 
     // The tables the view in force shows, by id, from the payload it holds.
@@ -2852,6 +3159,7 @@
       if (STATE.view === "calib" && d) return calibTables(d, viewOpts());
       if (STATE.view === "policy" && d) return Object.fromEntries(Object.values(policyTables(d)).map(t => [t.spec.id, t]));
       if (STATE.view === "drift" && d) return driftTables(d, viewOpts());
+      if (STATE.view === "slices" && d) return slicesTables(d);
       return {};
     }
 
@@ -3074,6 +3382,8 @@
       // hash's own rule.
       if (el && el.dataset.act === "calib-nboot") commit(parseHash(formatHash({...STATE, nboot: Number(el.value)})), "replace");
       if (el && el.dataset.act === "calib-cbins") commit(parseHash(formatHash({...STATE, cbins: el.value})), "replace");
+      if (el && el.dataset.act === "slices-fdrq") commit(parseHash(formatHash({...STATE, fdrq: Number(el.value)})), "replace");
+      if (el && el.dataset.act === "slices-topk") commit(parseHash(formatHash({...STATE, topk: Number(el.value)})), "replace");
     });
     // A table's filter box: one listener for every table.
     document.addEventListener("input", ev => {

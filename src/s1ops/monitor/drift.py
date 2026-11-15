@@ -141,12 +141,17 @@ def _bin_counts(scores: Sequence[float], bins: int) -> np.ndarray:
     return counts
 
 
+def _psi_terms(r_counts: np.ndarray, n_ref: int, c_counts: np.ndarray, n_cur: int) -> np.ndarray:
+    """Each bin's term of PSI (`score_histograms` serves them)."""
+    r_prop = np.clip(r_counts / n_ref, PSI_EPS, 1.0)
+    c_prop = np.clip(c_counts / n_cur, PSI_EPS, 1.0)
+    return (c_prop - r_prop) * np.log(c_prop / r_prop)
+
+
 def _psi_from_counts(r_counts: np.ndarray, n_ref: int, c_counts: np.ndarray, n_cur: int) -> np.ndarray:
     """PSI of bin counts; rows of a 2-D array are separate samples. The one formula `psi` and the
     permutation test share, so the observed value and every resample are computed alike."""
-    r_prop = np.clip(r_counts / n_ref, PSI_EPS, 1.0)
-    c_prop = np.clip(c_counts / n_cur, PSI_EPS, 1.0)
-    return np.sum((c_prop - r_prop) * np.log(c_prop / r_prop), axis=-1)
+    return np.sum(_psi_terms(r_counts, n_ref, c_counts, n_cur), axis=-1)
 
 
 def psi(
@@ -351,6 +356,35 @@ def psi_test_info(resamples: int = PSI_RESAMPLES) -> dict[str, Any]:
     }
 
 
+def _prepared(
+    ref_records: str | Path | Iterable[Record],
+    cur_records: str | Path | Iterable[Record],
+    use_calib: bool,
+) -> tuple[dict[str, list[Record]], dict[str, list[Record]], list[str]]:
+    """Both sides read, re-parsed and checked as every drift statistic needs them, by question,
+    and the questions both sides answer, sorted: the one preparation `audit_drift` and
+    `score_histograms` share, so they refuse the same inputs and see the same records."""
+    # Path reads validate a stored `calib` while reading, so its error names the file; the result
+    # is the same, since `_compared` re-parses every answered record from `raw`.
+    if isinstance(ref_records, (str, Path)):
+        ref_records = read_records(ref_records, require_answer=True, use_calib=True)
+    if isinstance(cur_records, (str, Path)):
+        cur_records = read_records(cur_records, require_answer=True, use_calib=True)
+    refs = _compared(list(ref_records), use_calib, "reference")
+    curs = _compared(list(cur_records), use_calib, "current")
+    if use_calib:
+        _one_fit(refs, curs)
+    _one_primitive_per_question(refs, curs)
+
+    ref_by_q: dict[str, list[Record]] = defaultdict(list)
+    cur_by_q: dict[str, list[Record]] = defaultdict(list)
+    for r in refs:
+        ref_by_q[r.question_id].append(r)
+    for r in curs:
+        cur_by_q[r.question_id].append(r)
+    return ref_by_q, cur_by_q, sorted(ref_by_q.keys() & cur_by_q.keys())
+
+
 def audit_drift(
     ref_records: str | Path | Iterable[Record],
     cur_records: str | Path | Iterable[Record],
@@ -378,28 +412,8 @@ def audit_drift(
     tolerance can raise `RecordError` here.
     """
     psi_resamples = _check_resamples(psi_resamples)
-    # Path reads validate a stored `calib` while reading, so its error names the file; the result
-    # is the same, since `_compared` re-parses every answered record from `raw`.
-    if isinstance(ref_records, (str, Path)):
-        ref_records = read_records(ref_records, require_answer=True, use_calib=True)
-    if isinstance(cur_records, (str, Path)):
-        cur_records = read_records(cur_records, require_answer=True, use_calib=True)
-    refs = _compared(list(ref_records), use_calib, "reference")
-    curs = _compared(list(cur_records), use_calib, "current")
-    if use_calib:
-        _one_fit(refs, curs)
-
-    _one_primitive_per_question(refs, curs)
+    ref_by_q, cur_by_q, shared_qids = _prepared(ref_records, cur_records, use_calib)
     pol_by_key: dict[GroupKey, PolicyEntry] = {(p.question_id, p.model_served, p.primitive): p for p in policies or ()}
-
-    ref_by_q: dict[str, list[Record]] = defaultdict(list)
-    cur_by_q: dict[str, list[Record]] = defaultdict(list)
-    for r in refs:
-        ref_by_q[r.question_id].append(r)
-    for r in curs:
-        cur_by_q[r.question_id].append(r)
-
-    shared_qids = sorted(ref_by_q.keys() & cur_by_q.keys())
     reports: list[DriftReport] = []
 
     for qid in shared_qids:
@@ -527,4 +541,52 @@ def audit_drift(
             "critical": counts["CRITICAL"],
         },
         "questions": [r.as_dict() for r in reports],
+    }
+
+
+def score_histograms(
+    ref_records: str | Path | Iterable[Record],
+    cur_records: str | Path | Iterable[Record],
+    *,
+    bins: int = 10,
+    use_calib: bool = False,
+) -> dict[str, Any]:
+    """The binned scores `audit_drift`'s PSI is computed from, per question: the same inputs,
+    refused alike, the same answered records with their models pooled, the same score (`p` for
+    noul, the top-class probability otherwise) and the same `bins` equal-width bins over [0, 1]
+    (half-open, the last one closed, as `np.histogram` counts).
+
+    Each question's `psi` is the report's `psi` for the same arguments, and `psi_terms` are the
+    per-bin terms of that sum, rounded one by one (so they need not add up to the rounded `psi`);
+    both are 0.0 / null when a side has no answered record.
+    """
+    ref_by_q, cur_by_q, shared_qids = _prepared(ref_records, cur_records, use_calib)
+    edges = [float(e) for e in np.linspace(0.0, 1.0, bins + 1)]
+    questions: list[dict[str, Any]] = []
+    for qid in shared_qids:
+        prim = ref_by_q[qid][0].primitive
+        r_scores = [_primary_score(r) for r in ref_by_q[qid] if _answered(r)]
+        c_scores = [_primary_score(r) for r in cur_by_q[qid] if _answered(r)]
+        r_counts, c_counts = _bin_counts(r_scores, bins), _bin_counts(c_scores, bins)
+        if r_scores and c_scores:
+            full = _psi_terms(r_counts, len(r_scores), c_counts, len(c_scores))
+            terms: list[float] | None = [round(float(t), 6) for t in full]
+            value = round(float(np.sum(full, axis=-1)), 6)
+        else:
+            terms, value = None, 0.0
+        questions.append({
+            "question_id": qid,
+            "primitive": prim,
+            "score": "p" if prim == "noul" else "top_probability",
+            "edges": edges,
+            "ref": {"n_answered": len(r_scores), "counts": [int(n) for n in r_counts]},
+            "cur": {"n_answered": len(c_scores), "counts": [int(n) for n in c_counts]},
+            "psi": value,
+            "psi_terms": terms,
+        })
+    return {
+        "schema": "s1-drift-histograms/1",
+        "distribution": "calibrated" if use_calib else "raw",
+        "bins": bins,
+        "questions": questions,
     }

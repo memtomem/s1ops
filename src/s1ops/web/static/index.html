@@ -955,8 +955,13 @@
       return Number.isFinite(v) ? v.toFixed(1) : "0";
     }
 
-    // The linear map of [d0, d1] onto [r0, r1].
+    // The linear map of [d0, d1] onto [r0, r1]. Two finite ends whose span overflows to Infinity
+    // (-1e308..1e308) are mapped at half scale, so a value at the top end is not Infinity/Infinity.
     function scaleLinear(d0, d1, r0, r1) {
+      if (!Number.isFinite(d1 - d0) && Number.isFinite(d0) && Number.isFinite(d1)) {
+        const half = d1 / 2 - d0 / 2;
+        return v => r0 + (v / 2 - d0 / 2) / half * (r1 - r0);
+      }
       const span = d1 - d0 || 1;
       return v => r0 + (v - d0) / span * (r1 - r0);
     }
@@ -973,7 +978,9 @@
       if (!(step > 0) || !Number.isFinite(step) || step < Math.max(Math.abs(lo), Math.abs(hi)) * 1e-9) return [lo];
       const first = Math.ceil(lo / step - 1e-9);
       const ticks = [];
-      for (let k = 0; (first + k) * step <= hi + step * 1e-9; k++) ticks.push(Number(((first + k) * step).toPrecision(12)));
+      // Bounded in steps: `hi + step * 1e-9` near the largest number is Infinity, and so is the
+      // last tick, so a bound in values never ended (`hi / step` cannot overflow, by the check above).
+      for (let k = 0; first + k <= hi / step + 1e-9; k++) ticks.push(Number(((first + k) * step).toPrecision(12)));
       return ticks;
     }
 
@@ -982,7 +989,10 @@
       const ticks = niceTicks(0, v, count);
       if (ticks.length < 2) return v;
       const step = ticks[1] - ticks[0];
-      return Number((Math.ceil(v / step - 1e-9) * step).toPrecision(12));
+      // A rounded end past the largest number is Infinity: `v` itself is the end then. (One a
+      // twelfth digit below `v` is kept, as before: the axis is drawn to it.)
+      const end = Number((Math.ceil(v / step - 1e-9) * step).toPrecision(12));
+      return Number.isFinite(end) ? end : v;
     }
 
     // An SVG chart: its viewBox, and a title and description (its accessible name and summary).
@@ -3694,7 +3704,8 @@
       const size = Math.max(Math.abs(lo), Math.abs(hi));
       // One value, or a span too narrow for float64 to tick (niceTicks' own limit), is drawn as a
       // constant; twice a value near the largest number is not one, so the axis then ends on it.
-      if (hi / 4 - lo / 4 <= size * 1e-9) {
+      // Values of opposite signs are never one value, though the quarters of two subnormals are 0.
+      if (!(lo < 0 && hi > 0) && hi / 4 - lo / 4 <= size * 1e-9) {
         if (size === 0) return [0, 1];
         const twice = niceMax(2 * size, 4);
         const far = Number.isFinite(twice) ? twice : size;
@@ -3706,8 +3717,9 @@
       if (ticks.length < 2) return [lo, hi];
       const step = ticks[1] - ticks[0];
       const d0 = Number((Math.floor(lo / step + 1e-9) * step).toPrecision(12)), d1 = Number((Math.ceil(hi / step - 1e-9) * step).toPrecision(12));
-      // Ends are rounded to twelve digits: a pair that no longer holds both values is not used.
-      return d0 <= lo && hi <= d1 && d0 < d1 ? [d0, d1] : [lo, hi];
+      // Ends are rounded to twelve digits, and one rounded past the largest number is Infinity:
+      // a pair that is not finite or no longer holds both values is not used.
+      return Number.isFinite(d0) && Number.isFinite(d1) && d0 <= lo && hi <= d1 && d0 < d1 ? [d0, d1] : [lo, hi];
     }
 
     // The smallest and largest of `values`; [Infinity, -Infinity] for none. A loop, since a long

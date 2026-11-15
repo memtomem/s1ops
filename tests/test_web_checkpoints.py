@@ -332,6 +332,11 @@ def test_small_helpers() -> None:
         (1e308, 1e308),  # twice it is not a number
         (-1e308, -1e308),
         (-1e308, 1e308),  # a span that is not a number
+        (1e308, 1.7e308),  # its top end rounds up past the largest number
+        (0, 1.79769313486e308),  # niceTicks' last tick is Infinity: its loop never ended
+        (8.988465674311578e307, 8.988465674311578e307),  # twice it is a number, its rounded end is not
+        (-1.5e308, 1e307),  # rounded ends whose span is not a number
+        (-5e-324, 5e-324),  # opposite signs whose quarters are both 0, not one value
         (-2.5, 7.25),
         (0.999999999, 1.5),
         (5e-324, 1e-323),
@@ -352,6 +357,12 @@ def test_a_long_or_extreme_series_is_drawn_inside_its_plot(payloads) -> None:
         "narrow": [{"step": i, "loss": 1234567890126 + i} for i in range(3)],
         "jitter": [{"step": 0, "loss": 0.3}, {"step": 1, "loss": 0.30000000000000004}],
         "huge": [{"step": 0, "loss": 1e308}, {"step": 1, "loss": 1e308}],
+        "huge span": [{"step": 0, "loss": 1e308}, {"step": 1, "loss": 1.7e308}],
+        "near the largest": [{"step": 0, "loss": 1e308}, {"step": 1, "loss": 1.79769313486e308}],
+        "span not a number": [{"step": 0, "loss": -1e308}, {"step": 1, "loss": 1e308}],
+        "rounded span not a number": [{"step": 0, "loss": -1.5e308}, {"step": 1, "loss": 1e307}],
+        "opposite subnormals": [{"step": 0, "loss": -5e-324}, {"step": 1, "loss": 5e-324}],
+        "constant near half the largest": [{"step": 0, "loss": 8.5e307}, {"step": 1, "loss": 8.5e307}],
     }
     for name, steps in cases.items():
         svg = _js(f"stepChartHtml(c, 'loss', steps, ['loss'], 'details')", prelude=f"const c = {json.dumps(c)}; const steps = {json.dumps(steps)};")
@@ -360,6 +371,14 @@ def test_a_long_or_extreme_series_is_drawn_inside_its_plot(payloads) -> None:
         # Inside the plot box: x in [70, 440], y in [14, 184].
         assert all(70 <= float(x) <= 440 and 14 <= float(y) <= 184 for x, y in points), name
         assert "NaN" not in svg and "Infinity" not in svg, name
+        # Every y gridline is inside the plot too (a NaN position once drew one at y = 0).
+        grid = [float(y) for y in re.findall(r'<line class="grid" x1="70(?:\.0)?" y1="([^"]+)"', svg)]
+        assert grid and all(14 <= y <= 184 for y in grid), (name, grid)
+        if name in ("huge span", "near the largest", "span not a number", "rounded span not a number", "opposite subnormals"):
+            # Two values, two heights: an axis ending on Infinity, or a span that is, drew both at the bottom edge.
+            assert len({y for _, y in points}) == 2, (name, points)
+        if name == "constant near half the largest":  # a constant runs through the middle, not along the top
+            assert {y for _, y in points} == {"99.0"}, points
 
 
 @needs_node

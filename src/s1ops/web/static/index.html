@@ -481,6 +481,7 @@
       <button type="button" role="tab" id="nav-slices" data-view="slices" aria-controls="tab-slices" aria-selected="false" tabindex="-1"><span class="nav-step">4</span>Slices &amp; Blind Label Audit</button>
       <button type="button" role="tab" id="nav-compare" data-view="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1"><span class="nav-step">5</span>Shadow Compare &amp; Judge Audit</button>
       <button type="button" role="tab" id="nav-drift" data-view="drift" aria-controls="tab-drift" aria-selected="false" tabindex="-1"><span class="nav-step">6</span>Drift &amp; Canary Monitor</button>
+      <button type="button" role="tab" id="nav-checkpoints" data-view="checkpoints" aria-controls="tab-checkpoints" aria-selected="false" tabindex="-1"><span class="nav-step">7</span>Checkpoints &amp; Training Runs</button>
     </nav>
     <div class="content">
       <div class="filter-bar" id="filter-bar">
@@ -591,6 +592,10 @@
 
     <section id="tab-drift" class="tab-pane" role="tabpanel" aria-labelledby="nav-drift">
       <div id="drift-container">Loading production canary drift monitor...</div>
+    </section>
+
+    <section id="tab-checkpoints" class="tab-pane" role="tabpanel" aria-labelledby="nav-checkpoints">
+      <div id="checkpoints-container">Loading checkpoints and training runs...</div>
     </section>
   </main>
     </div>
@@ -714,7 +719,7 @@
     // where are derived from it.
 
     function viewNames() {
-      return ["overview", "calib", "policy", "lint", "slices", "compare", "drift"];
+      return ["overview", "calib", "policy", "lint", "slices", "compare", "drift", "checkpoints"];
     }
 
     // Each view's loader and container, whether the group filter applies, and why not when it does not.
@@ -727,11 +732,12 @@
         slices: {loader: loadSlicesAndLabels, container: "slices-container", group: true, note: ""},
         compare: {loader: loadCompare, container: "compare-container", group: false, note: "pick a question in the view; p_holm is adjusted across every question"},
         drift: {loader: loadDrift, container: "drift-container", group: false, note: "pick a question in the view; the summary counts every question, labeled or not"},
+        checkpoints: {loader: loadCheckpoints, container: "checkpoints-container", group: false, note: "pick a checkpoint in the view; a checkpoint is a model name across every records file"},
       };
     }
 
     function defaultState() {
-      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", dist: "", lo: 0.25, hi: 0.75, cs1: 0.00004, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass", fdrq: 0.1, topk: 15};
+      return {view: "overview", qid: "", model: "", prim: "", dq: "", cq: "", ck: "", dist: "", lo: 0.25, hi: 0.75, cs1: 0.00004, cs2: 0.004, budget: 0.10, nboot: 200, cbins: "mass", fdrq: 0.1, topk: 15};
     }
 
     // The slices view's pickers: the false discovery rates (inside /api/slices' 0.001..0.50) and
@@ -775,7 +781,7 @@
       const view = cut < 0 ? text : text.slice(0, cut);
       const params = new URLSearchParams(cut < 0 ? "" : text.slice(cut + 1));
       if (viewNames().includes(view)) st.view = view;
-      ["qid", "model", "prim", "dq", "cq"].forEach(k => { st[k] = params.get(k) || ""; });
+      ["qid", "model", "prim", "dq", "cq", "ck"].forEach(k => { st[k] = params.get(k) || ""; });
       const dist = params.get("dist");
       st.dist = dist === "true" || dist === "false" ? dist : "";
       // The simulator's own input ranges and step, and a band whose ends do not cross (the server
@@ -801,7 +807,7 @@
     function formatHash(st) {
       const d = defaultState();
       const params = new URLSearchParams();
-      ["qid", "model", "prim", "dq", "cq", "dist", "lo", "hi", "cs1", "cs2", "budget", "nboot", "cbins", "fdrq", "topk"].forEach(k => {
+      ["qid", "model", "prim", "dq", "cq", "ck", "dist", "lo", "hi", "cs1", "cs2", "budget", "nboot", "cbins", "fdrq", "topk"].forEach(k => {
         if (st[k] !== d[k]) params.set(k, String(st[k]));
       });
       const query = params.toString();
@@ -2803,23 +2809,28 @@
       if (ctx.keep) ctx.keep(d);
     }
 
-    // A view's own question picker: every question its report holds, the chosen one selected. A
-    // chosen question the report does not hold gets an entry of its own, so the picker never shows
-    // "all" beside a page that says the question is unknown.
-    function questionPickerHtml(act, questions, chosen, allLabel) {
-      const options = questions.map(q => {
-        const selected = q.question_id === chosen ? " selected" : "";
-        return `<option value="${esc(q.question_id)}"${selected}>${esc(q.question_id)}</option>`;
+    // A view's own picker over the names its report holds (`label` and `allLabel` are the page's
+    // words), the chosen one selected. A chosen name the report does not hold gets an entry of its
+    // own, so the picker never shows "all" as chosen while a card says the name is missing, and
+    // choosing "all" is then a change.
+    function pickerHtml(act, label, names, chosen, allLabel) {
+      const missing = chosen && !names.includes(chosen) ? `<option value="${esc(chosen)}" selected>Not found: ${esc(chosen)}</option>` : "";
+      const options = names.map(name => {
+        const selected = name === chosen ? " selected" : "";
+        return `<option value="${esc(name)}"${selected}>${esc(name)}</option>`;
       }).join("");
-      const known = !chosen || questions.some(q => q.question_id === chosen);
-      const unresolved = known ? "" : `<option value="${esc(chosen)}" selected>Unresolved: ${esc(chosen)}</option>`;
       return `
         <div class="controls">
           <div class="control-group">
-            <label>Question</label>
-            <select data-act="${act}" aria-label="Question"><option value="">${allLabel} (${questions.length})</option>${options}${unresolved}</select>
+            <label>${label}</label>
+            <select data-act="${act}" aria-label="${label}"><option value="">${allLabel} (${names.length})</option>${options}${missing}</select>
           </div>
         </div>`;
+    }
+
+    // A view's own question picker: every question its report holds.
+    function questionPickerHtml(act, questions, chosen, allLabel) {
+      return pickerHtml(act, "Question", questions.map(q => q.question_id), chosen, allLabel);
     }
 
     // The question a link chose but the report does not hold is said so, never swapped for another.
@@ -3451,15 +3462,407 @@
 
     // After Show, the button that had the focus is re-rendered away: the chosen question's card
     // takes it (its heading, focusable by script only) and is scrolled to just below the sticky
-    // filter bar, which would cover it at the top of the page. `containerId` is the view's own.
-    function focusCard(containerId) {
-      const box = document.getElementById(containerId);
-      const h = box ? box.querySelector(".card h3[tabindex]") : null;
+    // filter bar, which would cover it at the top of the page.
+    function focusDriftCard() {
+      focusChosenCard("drift-container");
+    }
+
+    // The same for any view whose Show opens one card (`containerId` is the page's own id).
+    function focusChosenCard(containerId) {
+      const h = document.querySelector("#" + containerId + " .card h3[tabindex]");
       if (!h) return;
       h.focus({preventScroll: true});
       const bar = document.getElementById("filter-bar");
       const top = h.getBoundingClientRect().top + window.scrollY - (bar ? bar.offsetHeight : 0) - 12;
       window.scrollTo({top: Math.max(0, top)});
+    }
+
+    // --- checkpoints ------------------------------------------------------------------------------
+    // What the workspace knows about each checkpoint (/api/checkpoints). Read-only: every count and
+    // every yes or no here is the server's; the page words them and draws the recorded step metrics.
+
+    async function loadCheckpoints(ctx = {}) {
+      const d = await fetchJson("/api/checkpoints");
+      if (isStale(ctx)) return;
+      // Kept only once it is on screen, as the drift view's payload.
+      document.getElementById("checkpoints-container").innerHTML = renderCheckpoints(d, ctx.ck ? ctx.ck() : "", ctx.opts ? ctx.opts() : {});
+      if (ctx.keep) ctx.keep(d);
+    }
+
+    // A path's own name: the page shows file names, exports keep the path.
+    function baseName(path) {
+      return path === null || path === undefined ? "" : String(path).split(/[\\/]/).pop();
+    }
+
+    // An item as text: "dataset / item_id", or the item id alone without a dataset; "" for none.
+    function itemText(item) {
+      if (!Array.isArray(item)) return "";
+      return (item[0] === null || item[0] === undefined ? "" : String(item[0]) + " / ") + String(item[1]);
+    }
+
+    // The served counts of a checkpoint as one status, most pressing first (`rank` sorts it): records
+    // on items it trained on, a training set unknown here (no manifest), no answered record, or
+    // every answered record held out.
+    function checkpointStatus(c) {
+      if (typeof c.n_trained_hits === "number" && c.n_trained_hits > 0) return {rank: 3, cls: "badge-err", text: "ON TRAINED ITEMS"};
+      if (typeof c.n_trained !== "number") return {rank: 1, cls: "badge-none", text: "TRAINING SET UNKNOWN"};
+      if (!(c.n_records > 0)) return {rank: 2, cls: "badge-warn", text: "NO RECORDS"};
+      return {rank: 0, cls: "badge-ok", text: "HELD OUT"};
+    }
+
+    // The run record of a checkpoint as served, or an empty object.
+    function runRecord(c) {
+      return c && c.run && c.run.record && typeof c.run.record === "object" ? c.run.record : {};
+    }
+
+    // Every name of the report, in its order (checkpoints with a manifest or a run first).
+    function checkpointsTable(d) {
+      const rows = (Array.isArray(d.checkpoints) ? d.checkpoints : []).map(c => {
+        const st = checkpointStatus(c), rec = runRecord(c);
+        return {
+          checkpoint: c.checkpoint, status: st.text, rank: st.rank, n_records: c.n_records, n_trained: c.n_trained, n_trained_hits: c.n_trained_hits,
+          manifests: (c.manifests || []).length, trainrun_id: c.run ? c.run.trainrun_id : null, parent: rec.parent ? rec.parent.checkpoint : null,
+          steps: Array.isArray(rec.steps) ? rec.steps.length : null, policies: (c.policies || []).length,
+        };
+      });
+      return {
+        spec: {id: "checkpoints:all", caption: "Checkpoints and served models", file: "checkpoints", columns: [
+          {key: "checkpoint", name: "Checkpoint", kind: "text"},
+          {key: "show", name: "Show", kind: "button", act: "checkpoint-show", text: "Show", labelKey: "checkpoint", data: {ck: "checkpoint"}},
+          {key: "status", name: "Status", kind: "text", sortBy: "rank", showOnly: true},
+          {key: "n_records", name: "Answered records", kind: "num", digits: 0},
+          {key: "n_trained_hits", name: "Items trained on, among them", kind: "num", digits: 0},
+          {key: "n_trained", name: "Training set (items)", kind: "num", digits: 0},
+          {key: "manifests", name: "Manifests", kind: "num", digits: 0},
+          {key: "trainrun_id", name: "Training run", kind: "text"},
+          {key: "parent", name: "Started from", kind: "text"},
+          {key: "steps", name: "Steps", kind: "num", digits: 0},
+          {key: "policies", name: "Policies", kind: "num", digits: 0},
+        ]},
+        rows,
+      };
+    }
+
+    // The checkpoint's answered records per file, question and primitive.
+    function checkpointGroupsTable(c) {
+      const rows = (c.groups || []).map(g => ({
+        checkpoint: c.checkpoint, file: baseName(g.file), path: g.file, question_id: g.question_id, primitive: g.primitive,
+        n_records: g.n_records, n_items: g.n_items, n_trained_hits: g.n_trained_hits, first_trained_text: itemText(g.first_trained_hit),
+        first_trained_dataset: Array.isArray(g.first_trained_hit) ? g.first_trained_hit[0] : null,
+        first_trained_item_id: Array.isArray(g.first_trained_hit) ? g.first_trained_hit[1] : null,
+      }));
+      return {
+        spec: {id: "checkpoints:groups:" + c.checkpoint, caption: "Answered records, by file and question", file: "checkpoint-records-" + fileSafe(c.checkpoint), columns: [
+          {key: "checkpoint", name: "checkpoint", kind: "text", exportOnly: true},
+          {key: "file", name: "Records file", kind: "text"},
+          {key: "path", name: "path", kind: "text", exportOnly: true},
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "primitive", name: "Primitive", kind: "text"},
+          {key: "n_records", name: "Records", kind: "num", digits: 0},
+          {key: "n_items", name: "Items", kind: "num", digits: 0},
+          {key: "n_trained_hits", name: "Items trained on", kind: "num", digits: 0},
+          {key: "first_trained_text", name: "First trained item", kind: "text", showOnly: true},
+          {key: "first_trained_dataset", name: "first_trained_dataset", kind: "text", exportOnly: true},
+          {key: "first_trained_item_id", name: "first_trained_item_id", kind: "text", exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    function checkpointManifestsTable(c) {
+      const rows = (c.manifests || []).map(m => ({
+        checkpoint: c.checkpoint, file: baseName(m.path), path: m.path, split: m.split, n_rows: m.n_rows, n_items: m.n_items, n_inherited: m.n_inherited,
+        questions: Array.isArray(m.questions) ? m.questions.length : null, sha256: m.sha256, source_sha256: m.source_sha256, created_at: m.created_at,
+      }));
+      return {
+        spec: {id: "checkpoints:manifests:" + c.checkpoint, caption: "Training manifests", file: "checkpoint-manifests-" + fileSafe(c.checkpoint), columns: [
+          {key: "checkpoint", name: "checkpoint", kind: "text", exportOnly: true},
+          {key: "file", name: "Manifest", kind: "text"},
+          {key: "path", name: "path", kind: "text", exportOnly: true},
+          {key: "split", name: "Split", kind: "text"},
+          {key: "n_rows", name: "Rows (item × question)", kind: "num", digits: 0},
+          {key: "n_items", name: "Items", kind: "num", digits: 0},
+          {key: "n_inherited", name: "Inherited items", kind: "num", digits: 0},
+          {key: "questions", name: "Questions", kind: "num", digits: 0},
+          {key: "created_at", name: "Created", kind: "text"},
+          {key: "sha256", name: "SHA-256 of the file", kind: "text"},
+          {key: "source_sha256", name: "source_sha256", kind: "text", exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    // Everything the run record holds besides its steps, one row per value, as it is on disk.
+    function checkpointRunTable(c) {
+      const rec = runRecord(c);
+      const ident = {checkpoint: c.checkpoint, trainrun_id: c.run ? c.run.trainrun_id : null};
+      const part = (section, values) => Object.entries(values && typeof values === "object" ? values : {}).map(([name, value]) => ({...ident, section, name, value}));
+      const rows = [
+        ...part("trainer setting", rec.trainer),
+        ...part("summary metric", rec.summary),
+        ...part("weights file (SHA-256)", rec.weights_sha256),
+        ...part("data file", rec.data),
+        ...part("manifest recorded", rec.manifest),
+      ];
+      return {
+        spec: {id: "checkpoints:run:" + c.checkpoint, caption: "Training-run record", file: "checkpoint-run-" + fileSafe(c.checkpoint), columns: [
+          {key: "checkpoint", name: "checkpoint", kind: "text", exportOnly: true},
+          {key: "trainrun_id", name: "trainrun_id", kind: "text", exportOnly: true},
+          {key: "section", name: "Part", kind: "text"},
+          {key: "name", name: "Name", kind: "text"},
+          {key: "value", name: "Value", kind: "text"},
+        ]},
+        rows,
+      };
+    }
+
+    // The metrics the steps name, in first-seen order (`step` is the row's place, not a metric).
+    function stepMetrics(steps) {
+      const names = [];
+      (Array.isArray(steps) ? steps : []).forEach(s => {
+        Object.keys(s && typeof s === "object" ? s : {}).forEach(k => {
+          if (k !== "step" && !names.includes(k)) names.push(k);
+        });
+      });
+      return names;
+    }
+
+    // The places that show a column of numbers apart: 0 for whole numbers, else two past the
+    // smallest magnitude's leading digit, 2 to 8 (a learning rate of 0.0002 reads "0.000200").
+    function metricDigits(values) {
+      const nums = values.filter(v => typeof v === "number" && Number.isFinite(v));
+      if (nums.every(Number.isInteger)) return 0;
+      const small = nums.reduce((m, v) => (v !== 0 && Math.abs(v) < m ? Math.abs(v) : m), Infinity);
+      if (!Number.isFinite(small)) return 2;
+      return Math.min(8, Math.max(2, Math.ceil(-Math.log10(small)) + 2));
+    }
+
+    // The recorded steps, one row each, one column per metric. A metric named as an identifying
+    // column takes that column's place: the record's own values are never renamed.
+    function checkpointStepsTable(c) {
+      const rec = runRecord(c);
+      const steps = Array.isArray(rec.steps) ? rec.steps : [];
+      const metrics = stepMetrics(steps);
+      // Only the identifying columns no metric is named as: a step without that metric must not
+      // show the identifier in the metric's column.
+      const identKeys = ["checkpoint", "trainrun_id"].filter(k => !metrics.includes(k));
+      const values = {checkpoint: c.checkpoint, trainrun_id: c.run ? c.run.trainrun_id : null};
+      const ident = Object.fromEntries(identKeys.map(k => [k, values[k]]));
+      return {
+        spec: {id: "checkpoints:steps:" + c.checkpoint, caption: "Recorded steps", file: "checkpoint-steps-" + fileSafe(c.checkpoint), columns: [
+          ...identKeys.map(k => ({key: k, name: k, kind: "text", exportOnly: true})),
+          {key: "step", name: "Step", kind: "num", digits: 0},
+          ...metrics.map(m => ({key: m, name: m, kind: "num", digits: metricDigits(steps.map(s => s[m]))})),
+        ]},
+        rows: steps.map(s => ({...ident, ...s})),
+      };
+    }
+
+    function checkpointPoliciesTable(c) {
+      const names = {true: "the run recorded here", false: "another run"};
+      const rows = (c.policies || []).map(p => ({
+        checkpoint: c.checkpoint, question_id: p.question_id, primitive: p.primitive, trainrun_id: p.trainrun_id,
+        names: typeof p.run_matches === "boolean" ? names[p.run_matches] : "", run_matches: p.run_matches,
+      }));
+      return {
+        spec: {id: "checkpoints:policies:" + c.checkpoint, caption: "Policies for this model", file: "checkpoint-policies-" + fileSafe(c.checkpoint), columns: [
+          {key: "checkpoint", name: "checkpoint", kind: "text", exportOnly: true},
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "primitive", name: "Primitive", kind: "text"},
+          {key: "trainrun_id", name: "Training run it names", kind: "text"},
+          {key: "names", name: "Which is", kind: "text", showOnly: true},
+          {key: "run_matches", name: "run_matches", kind: "text", exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    // Every table the checkpoint view can show, by id, for what it holds.
+    function checkpointTables(d) {
+      const out = {};
+      const add = t => { out[t.spec.id] = t; };
+      add(checkpointsTable(d || {}));
+      (d && Array.isArray(d.checkpoints) ? d.checkpoints : []).forEach(c => {
+        [checkpointGroupsTable, checkpointManifestsTable, checkpointRunTable, checkpointStepsTable, checkpointPoliciesTable].forEach(build => add(build(c)));
+      });
+      return out;
+    }
+
+    // A value axis that covers [lo, hi] and ends on its own ticks. A constant series gets the
+    // range from zero to twice its value, so its line runs through the middle of the plot and
+    // not along an edge.
+    function niceDomain(lo, hi) {
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) return [0, 1];
+      const size = Math.max(Math.abs(lo), Math.abs(hi));
+      // One value, or a span too narrow for float64 to tick (niceTicks' own limit), is drawn as a
+      // constant; twice a value near the largest number is not one, so the axis then ends on it.
+      if (hi / 4 - lo / 4 <= size * 1e-9) {
+        if (size === 0) return [0, 1];
+        const twice = niceMax(2 * size, 4);
+        const far = Number.isFinite(twice) ? twice : size;
+        return hi > 0 ? [0, far] : [-far, 0];
+      }
+      // The tick step of a range this wide, read off a range that starts on a tick (one starting
+      // elsewhere may hold a single tick, and no step to read).
+      const ticks = niceTicks(0, hi - lo, 4);
+      if (ticks.length < 2) return [lo, hi];
+      const step = ticks[1] - ticks[0];
+      const d0 = Number((Math.floor(lo / step + 1e-9) * step).toPrecision(12)), d1 = Number((Math.ceil(hi / step - 1e-9) * step).toPrecision(12));
+      // Ends are rounded to twelve digits: a pair that no longer holds both values is not used.
+      return d0 <= lo && hi <= d1 && d0 < d1 ? [d0, d1] : [lo, hi];
+    }
+
+    // The smallest and largest of `values`; [Infinity, -Infinity] for none. A loop, since a long
+    // series spread into Math.min overflows the call stack.
+    function extent(values) {
+      return values.reduce((m, v) => [v < m[0] ? v : m[0], v > m[1] ? v : m[1]], [Infinity, -Infinity]);
+    }
+
+    // How many step metrics get a chart; the steps table holds every one.
+    function stepChartLimit() {
+      return 6;
+    }
+
+    // A step's values as a tooltip: the step, then each metric as the record holds it.
+    function stepTip(s, metrics) {
+      return "step " + String(s.step) + metrics.filter(m => typeof s[m] === "number").map(m => "\n" + m + " " + String(s[m])).join("");
+    }
+
+    // One metric against the step: a line through the steps that record it, each on its own value
+    // axis (a loss and a learning rate share no scale, so they share no chart).
+    function stepChartHtml(c, metric, steps, metrics, details) {
+      const W = 460, ml = 70, mr = 20, mt = 14, ph = 170;
+      const rows = steps.filter(s => typeof s.step === "number" && Number.isFinite(s.step) && typeof s[metric] === "number" && Number.isFinite(s[metric]));
+      const [x0, x1] = extent(rows.map(s => s.step));
+      const x = scaleLinear(x0, x1 > x0 ? x1 : x0 + 1, ml, W - mr);
+      const [y0, y1] = niceDomain(...extent(rows.map(s => s[metric])));
+      const y = scaleLinear(y0, y1, mt + ph, mt);
+      const xTicks = niceTicks(x0, x1 > x0 ? x1 : x0 + 1, 5).filter(Number.isInteger), yTicks = niceTicks(y0, y1, 4);
+      let body = svgAxes({x, y, xTicks, yTicks, left: ml, right: W - mr, top: mt, bottom: mt + ph, digits: 0, yDigits: tickDigits(yTicks), nameGap: 46, xName: "step", yName: metric});
+      const pts = rows.map(s => ({x: x(s.step), y: y(s[metric])}));
+      body += svgLine(pts, "ser-1", false);
+      if (rows.length <= curveDotLimit()) body += svgDots(pts, "ser-1", "circle");
+      body += svgHoverPlot(thinned(rows, curveHoverLimit(), -1).map(s => ({x: x(s.step), tip: stepTip(s, metrics)})), {left: ml, right: W - mr, top: mt, bottom: mt + ph});
+      return svgFrame({w: W, h: mt + ph + 40, details, title: metric + " by step, training run of " + c.checkpoint,
+        desc: `${metric} at ${rows.length} recorded steps, from step ${fmtNum(x0, 0)} to ${fmtNum(x1, 0)}.`}, body);
+    }
+
+    // The run's step metrics as small multiples, or why there is none.
+    function stepChartsHtml(c, details) {
+      const rec = runRecord(c);
+      const steps = Array.isArray(rec.steps) ? rec.steps : [];
+      const metrics = stepMetrics(steps);
+      if (!c.run) return "";
+      if (!steps.length || !metrics.length) return `<div class="sub">The run record holds no step metrics (<code>s1 trainset record --steps</code>).</div>`;
+      const drawn = metrics.slice(0, stepChartLimit());
+      const more = metrics.length > drawn.length ? ` ${metrics.length - drawn.length} more metrics are in the table only.` : "";
+      const hover = steps.length > curveHoverLimit() ? `Hover reads ${curveHoverLimit()} evenly spaced steps` : "Hover a step for its values";
+      return `
+            <div class="grid-2">${drawn.map(m => `
+              <div>${chartFigure({svg: stepChartHtml(c, m, steps, metrics, details), caption: m + " at each step that records it."})}</div>`).join("")}
+            </div>
+            <div class="calib-note">One chart per metric, each on its own value axis, as the trainer reported them (s1ops parses no trainer log). ${hover}; the Recorded steps table holds every value.${more}</div>`;
+    }
+
+    // What the served facts of a checkpoint mean, most pressing first. Every yes or no is the
+    // response's (`n_trained_hits`, `manifest_loaded`, `parent_loaded`, `run_matches`).
+    function checkpointNotesHtml(c) {
+      const rec = runRecord(c);
+      const notes = [];
+      const warn = (cls, label, html) => notes.push(`<div style="margin:4px 0;"><span class="badge ${cls}">${label}</span> ${html}</div>`);
+      const hit = (c.groups || []).find(g => g.first_trained_hit);
+      if (typeof c.n_trained_hits === "number" && c.n_trained_hits > 0) {
+        warn("badge-err", "ON TRAINED ITEMS", `${Number(c.n_trained_hits)} item(s) among its answered records are in its training set` +
+          (hit ? `, first <span class="mono">${esc(itemText(hit.first_trained_hit))}</span> in ${esc(baseName(hit.file))}` : "") +
+          `. With <code>--training-manifest</code>, <code>s1 fit</code>, <code>audit</code>, <code>policy</code> and <code>compare</code> refuse them (exit 2); this workbench's other views read the records without a manifest.`);
+      }
+      if (typeof c.n_trained !== "number") {
+        warn("badge-none", "TRAINING SET UNKNOWN", `No training manifest names this model here, so none of its records can be called held out.` +
+          (c.run ? " Its run record is shown below without one." : ""));
+      } else if (!(c.n_records > 0)) {
+        warn("badge-warn", "NO RECORDS", `It answered no record in this workspace's record files. <code>--training-manifest</code> and <code>--training-run</code> exit 1 on a file that holds no answer under this name: probe it under exactly this name.`);
+      }
+      if (c.run && c.run.manifest_loaded === false) {
+        warn("badge-warn", "MANIFEST DIFFERS", `The run was recorded against a manifest file with SHA-256 <span class="mono">${esc(rec.manifest ? rec.manifest.sha256 : "")}</span>, which none of this checkpoint's manifests here is: exported again since, or not in this workspace.`);
+      }
+      if (c.run && c.run.parent_loaded === false && rec.parent) {
+        warn("badge-info", "PARENT NOT HERE", `It started from <span class="mono">${esc(rec.parent.checkpoint)}</span> (${esc(rec.parent.trainrun_id)}), whose run record is not in this workspace.`);
+      }
+      (c.policies || []).filter(p => p.run_matches === false).forEach(p => {
+        warn("badge-err", "POLICY NAMES ANOTHER RUN", `The policy for ${esc(p.question_id)} names ${esc(p.trainrun_id)}, and the record here is ${esc(c.run ? c.run.trainrun_id : "")}: two sets of weights under one name. <code>s1 export langfuse --policy</code> refuses the pair.`);
+      });
+      return notes.join("");
+    }
+
+    function checkpointCardHtml(c, index, tstate, chosen) {
+      const st = checkpointStatus(c), rec = runRecord(c);
+      const manifests = c.manifests || [];
+      const ids = {steps: "ckpt-steps-table-" + index};
+      const sum = key => manifests.reduce((n, m) => n + (typeof m[key] === "number" ? m[key] : 0), 0);
+      const trained = typeof c.n_trained === "number";
+      const trainedSub = manifests.length
+        ? `${manifests.length} manifest(s): ${sum("n_rows")} rows (item × question), ${sum("n_inherited")} inherited items`
+        : "no manifest in this workspace";
+      const hitsSub = !trained ? "trained items unknown" : (c.n_trained_hits > 0 ? `${Number(c.n_trained_hits)} of their items trained on` : "none on a trained item");
+      const data = rec.data || {};
+      const runSub = c.run
+        ? `${esc(baseName(c.run.path))} · data ${esc(fmtNum(data.rows, 0))} rows, ${esc(fmtNum(data.items, 0))} items · ${esc(rec.created_at)}` +
+          (rec.parent ? ` · started from <span class="mono">${esc(rec.parent.checkpoint)}</span>` : "")
+        : `none in this workspace (<code>s1 trainset record</code>)`;
+      const tables = [checkpointGroupsTable(c), checkpointManifestsTable(c)];
+      if (c.run) tables.push(checkpointRunTable(c), {...checkpointStepsTable(c), domId: ids.steps});
+      if ((c.policies || []).length) tables.push(checkpointPoliciesTable(c));
+      return `
+          <div class="card">
+            <h3${chosen ? ' tabindex="-1"' : ''}>Checkpoint: <span class="badge badge-info">${esc(c.checkpoint)}</span>
+              · <span class="badge ${st.cls}">${st.text}</span>
+            </h3>
+            <div style="margin-bottom:12px;">${checkpointNotesHtml(c)}</div>
+            <div class="grid-3">
+              <div>
+                <div class="sub">Training set (distinct items, inherited included)</div>
+                <div class="kpi">${trained ? esc(fmtNum(c.n_trained, 0)) : "unknown"}</div>
+                <span class="sub">${trainedSub}</span>
+              </div>
+              <div>
+                <div class="sub">Answered records in this workspace</div>
+                <div class="kpi">${esc(fmtNum(c.n_records, 0))}</div>
+                <span class="sub">${hitsSub}</span>
+              </div>
+              <div>
+                <div class="sub">Training run</div>
+                <div class="kpi">${c.run ? esc(c.run.trainrun_id) : "no record"}</div>
+                <span class="sub">${runSub}</span>
+              </div>
+            </div>
+            <div class="panel-block">${stepChartsHtml(c, ids.steps)}</div>
+            ${tables.map(t => `<div class="panel-block${/^checkpoints:(steps|run):/.test(t.spec.id) ? " scroll-table" : ""}">${tableHtml(t.domId ? {...t.spec, domId: t.domId} : t.spec, t.rows, tstate)}</div>`).join("")}
+          </div>`;
+    }
+
+    function renderCheckpoints(d, ck, opts) {
+      const all = Array.isArray(d.checkpoints) ? d.checkpoints : [];
+      const display = d.display || {};
+      const patterns = display.patterns || {};
+      const files = display.files || {};
+      const reads = `<code>${esc(patterns.training_manifests)}</code> (written by <code>s1 trainset export</code>) and <code>${esc(patterns.training_runs)}</code> (<code>s1 trainset record</code>)`;
+      if (!all.length) {
+        return `<div class="card state-card"><strong>No checkpoint in this workspace.</strong> No record names a served model, and the workspace folder holds no ${reads}.</div>`;
+      }
+      const tstate = (opts && opts.tstate) || {};
+      const sm = d.summary || {};
+      const read = [...(files.records || []), ...(files.training_manifests || []), ...(files.training_runs || []), files.policy].filter(Boolean).map(baseName);
+      const summary = `<div class="sub" style="margin:0 0 12px">${Number(sm.n_checkpoints)} names · ${Number(sm.n_manifests)} training manifests · ${Number(sm.n_training_runs)} training-run records. Read: ${esc(read.join(", "))}.</div>`;
+      const none = Number(sm.n_manifests) + Number(sm.n_training_runs) > 0 ? "" :
+        `<div class="card state-card"><strong>No training manifest or training-run record found.</strong> This view reads ${reads} in the workspace folder. The names below are the models that answered its records; what they trained on is unknown here.</div>`;
+      const picker = pickerHtml("checkpoint-pick", "Checkpoint", all.map(c => c.checkpoint), ck, "All checkpoints");
+      const ct = checkpointsTable(d);
+      const overview = `<div class="card">${tableHtml(ct.spec, ct.rows, tstate)}<div class="calib-note">A checkpoint is a name: <code>model_served</code> in records, <code>checkpoint</code> in a manifest or a run record. An item trained on is counted as <code>--training-manifest</code> refuses it: by (dataset, item_id) across questions, inherited items included. This view is read-only; s1ops starts no training. Show opens one checkpoint; the picker above does the same.</div></div>`;
+      const shown = ck ? all.filter(c => c.checkpoint === ck) : all;
+      if (ck && !shown.length) {
+        return picker + summary + none + overview + `<div class="card state-card"><strong>No checkpoint ${esc(ck)} in this workspace.</strong> Choose another checkpoint, or all checkpoints.</div>`;
+      }
+      return picker + summary + none + overview + shown.map(c => checkpointCardHtml(c, all.indexOf(c), tstate, Boolean(ck))).join("");
     }
 
     // --- shell ------------------------------------------------------------------------------------
@@ -3595,6 +3998,7 @@
         params: def.group ? groupParams(STATE, resolved) : {},
         dq: () => STATE.dq,
         cq: () => STATE.cq,
+        ck: () => STATE.ck,
         mode,
         groups: GROUPS,
         nboot: STATE.nboot,
@@ -3621,6 +4025,7 @@
       if (view === "lint") document.getElementById("lint-container").innerHTML = renderLint(d, viewOpts());
       if (view === "calib") document.getElementById("calib-container").innerHTML = renderCalib(d, viewOpts());
       if (view === "slices") document.getElementById("slices-container").innerHTML = renderSlices(d, viewOpts());
+      if (view === "checkpoints") document.getElementById("checkpoints-container").innerHTML = renderCheckpoints(d, STATE.ck, viewOpts());
     }
 
     function applyCalibInputs(st) {
@@ -3642,6 +4047,7 @@
       if (STATE.view === "slices" && d) return slicesTables(d);
       if (STATE.view === "compare" && d) return compareTables(d);
       if (STATE.view === "lint" && d) return lintTables(d);
+      if (STATE.view === "checkpoints" && d) return checkpointTables(d);
       return {};
     }
 
@@ -3850,11 +4256,15 @@
       if (el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
       if (el.dataset.act === "drift-show") {
         commit({...STATE, dq: el.dataset.qid}, "push");
-        focusCard("drift-container");
+        focusDriftCard();
       }
       if (el.dataset.act === "compare-show") {
         commit({...STATE, cq: el.dataset.qid}, "push");
-        focusCard("compare-container");
+        focusChosenCard("compare-container");
+      }
+      if (el.dataset.act === "checkpoint-show") {
+        commit({...STATE, ck: el.dataset.ck}, "push");
+        focusChosenCard("checkpoints-container");
       }
       if (el.dataset.act === "tk-sort") sortTable(el.dataset.table, el.dataset.col);
       if (el.dataset.act === "tk-csv") exportTable(el.dataset.table, "csv");
@@ -3864,6 +4274,7 @@
       const el = ev.target.closest("[data-act]");
       if (el && el.dataset.act === "drift-question") commit({...STATE, dq: el.value}, "push");
       if (el && el.dataset.act === "compare-question") commit({...STATE, cq: el.value}, "push");
+      if (el && el.dataset.act === "checkpoint-pick") commit({...STATE, ck: el.value}, "push");
       // Settings of the view, not places: they rewrite the current history entry, through the
       // hash's own rule.
       if (el && el.dataset.act === "calib-nboot") commit(parseHash(formatHash({...STATE, nboot: Number(el.value)})), "replace");

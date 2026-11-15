@@ -450,19 +450,17 @@ def test_every_table_of_the_page_is_named_by_its_caption() -> None:
 
 
 @needs_node
-def test_a_question_the_report_lacks_gets_its_own_picker_entry(ws) -> None:
+def test_a_question_the_report_lacks_gets_its_own_picker_entry() -> None:
     qs = [{"question_id": "q-a"}, {"question_id": "q-b"}]
     known = _js(f'questionPickerHtml("compare-question", {json.dumps(qs)}, "q-b", "All")')
-    assert '<option value="q-b" selected>q-b</option>' in known and "Unresolved" not in known
-    assert "Unresolved" not in _js(f'questionPickerHtml("compare-question", {json.dumps(qs)}, "", "All")')
+    assert '<option value="q-b" selected>q-b</option>' in known and "Not found" not in known
+    assert "Not found" not in _js(f'questionPickerHtml("compare-question", {json.dumps(qs)}, "", "All")')
     unknown = _js(f'questionPickerHtml("compare-question", {json.dumps(qs)}, {json.dumps("q-<none>")}, "All")')
-    assert unknown.count(" selected") == 1 and '<option value="q-&lt;none&gt;" selected>Unresolved: q-&lt;none&gt;</option>' in unknown
-    # Both views that have a question of their own use it: an edited link with many questions.
+    assert unknown.count(" selected") == 1 and '<option value="q-&lt;none&gt;" selected>Not found: q-&lt;none&gt;</option>' in unknown
+    # An edited link with many questions: the picker's own entry, the card saying so, and no card opened.
     seven = _render(_questions(7), cq="q-none")
-    assert '<option value="q-none" selected>Unresolved: q-none</option>' in seven and "No question q-none in the shadow comparison." in seven
+    assert '<option value="q-none" selected>Not found: q-none</option>' in seven and "No question q-none in the shadow comparison." in seven
     assert _cards(seven) == [] and len(_cells(_table(seven, "Compared questions"))) == 7
-    drift = TestClient(create_app(Path(ws["records"]).parent)).get("/api/drift/histograms").json()
-    assert '<option value="q-none" selected>Unresolved: q-none</option>' in _js(f'renderDrift({json.dumps(drift["report"])}, "q-none", {{}})')
 
 
 def _event(kind: str, dataset: dict, value: str = "") -> list:
@@ -477,7 +475,8 @@ const calls = [];
 {_all_functions()}
 STATE = {{...defaultState(), view: "compare", cq: "q-old", dq: "d-old"}};
 commit = (next, mode) => calls.push(["commit", next.view, next.cq, next.dq, mode]);
-focusCard = id => calls.push(["focus", id]);
+focusChosenCard = id => calls.push(["focus", id]);
+focusDriftCard = () => calls.push(["focus", "drift-container"]);
 {listener}
 const el = {{dataset: {json.dumps(dataset)}, value: {json.dumps(value)}}};
 handlers[{json.dumps(kind)}]({{target: {{closest: () => el}}}});
@@ -499,16 +498,18 @@ def test_the_shown_cards_heading_takes_the_focus_below_the_filter_bar(demo) -> N
     qid = demo["shadow"]["questions"][0]["question_id"]
     assert '<h3 tabindex="-1">Shadow Comparison:' in _render(demo, cq=qid) and "tabindex" not in "".join(_cards(_render(demo)))
     out = _js(
-        "(() => { focusCard('compare-container'); focusCard('absent'); return calls; })()",
+        "(() => { focusChosenCard('compare-container'); focusChosenCard('absent'); return calls; })()",
         prelude="""
 const calls = [];
 const heading = {focus: o => calls.push(["focus", o.preventScroll]), getBoundingClientRect: () => ({top: 300})};
-const boxes = {"compare-container": {querySelector: sel => (calls.push(["query", sel]), heading)}, "filter-bar": {offsetHeight: 40}};
-const document = {getElementById: id => boxes[id] || null};
+const document = {
+  querySelector: sel => (calls.push(["query", sel]), sel.startsWith("#compare-container ") ? heading : null),
+  getElementById: id => (id === "filter-bar" ? {offsetHeight: 40} : null),
+};
 const window = {scrollY: 100, scrollTo: o => calls.push(["scroll", o.top])};
 """,
     )
-    assert out == [["query", ".card h3[tabindex]"], ["focus", True], ["scroll", 300 + 100 - 40 - 12]]
+    assert out == [["query", "#compare-container .card h3[tabindex]"], ["focus", True], ["scroll", 300 + 100 - 40 - 12], ["query", "#absent .card h3[tabindex]"]]
 
 
 # --- what the shell keeps -----------------------------------------------------------------------------

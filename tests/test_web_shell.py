@@ -43,7 +43,7 @@ def test_the_default_state_writes_no_hash() -> None:
 
 @needs_node
 def test_a_state_round_trips_through_the_hash_with_only_what_differs() -> None:
-    state = {"view": "policy", "qid": "q-1", "model": "m/1 b", "prim": "choice", "dq": "q-1", "cq": "",
+    state = {"view": "policy", "qid": "q-1", "model": "m/1 b", "prim": "choice", "dq": "q-1", "cq": "", "ck": "",
              "dist": "true", "lo": 0.3, "hi": 0.75, "cs1": 0.0002, "cs2": 0.01, "budget": 0.05, "nboot": 1000, "cbins": "mass",
              "fdrq": 0.1, "topk": 15}
     hash_ = _js(f"formatHash({json.dumps(state)})")
@@ -60,6 +60,9 @@ def test_a_state_round_trips_through_the_hash_with_only_what_differs() -> None:
         ("#/nowhere", "view", "overview"),
         ("#/drift", "view", "drift"),
         ("drift", "view", "drift"),
+        ("#/checkpoints?ck=tickets-r1", "view", "checkpoints"),
+        ("#/checkpoints?ck=tickets-r1", "ck", "tickets-r1"),
+        ("#/checkpoints", "ck", ""),
         ("#/policy?lo=0", "lo", 0.05),
         ("#/policy?hi=7", "hi", 0.95),
         ("#/policy?lo=NaN", "lo", 0.25),
@@ -95,7 +98,7 @@ def test_the_hash_band_is_the_one_evaluated(hash_, band) -> None:
 
 def _from_inputs(**values) -> dict | None:
     base = {"dist": "", "lo": "0.25", "hi": "0.75", "cs1": "0.00004", "cs2": "0.004", "budget": "0.10", **values}
-    st = {"view": "policy", "qid": "q", "model": "m", "prim": "noul", "dq": "q", "cq": "q",
+    st = {"view": "policy", "qid": "q", "model": "m", "prim": "noul", "dq": "q", "cq": "q", "ck": "tickets-r1",
           "dist": "", "lo": 0.25, "hi": 0.75, "cs1": 0.00004, "cs2": 0.004, "budget": 0.1, "nboot": 200, "cbins": "mass",
           "fdrq": 0.1, "topk": 15}
     return _js(f"policyStateFromInputs({json.dumps(st)}, {json.dumps(base)})")
@@ -176,7 +179,7 @@ def test_api_urls_carry_only_set_parameters() -> None:
 @needs_node
 def test_the_note_says_why_the_group_filter_does_not_apply() -> None:
     st = {"qid": "", "model": "", "prim": ""}
-    for view in ("overview", "lint", "compare", "drift"):
+    for view in ("overview", "lint", "compare", "drift", "checkpoints"):
         assert _js(f'filterNote({json.dumps(view)}, {{status: "none"}}, {json.dumps(st)})').startswith("The group filter does not apply here:")
     assert "default group (first noul, else first)" in _js(f'filterNote("policy", {{status: "none"}}, {json.dumps(st)})')
     assert _js(f'filterNote("calib", {{status: "none"}}, {json.dumps(st)})') == "All labeled groups."

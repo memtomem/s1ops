@@ -1,27 +1,31 @@
 """FastAPI Local Web Workbench for s1ops.
 
-Serves a 6-tab interactive System 1 LLMOps console on `127.0.0.1`:
+Serves a 7-tab interactive System 1 LLMOps console on `127.0.0.1`:
 1. Calibration & Noise Floor Explorer (Reliability SVG + ECE Floor + Tie-Mass)
 2. Threshold & Escalation Band Simulator (Interactive band_lo / band_hi sliders + Pareto)
 3. Question Lint & Probe Coherence Inspector (JL000-JL060 + Noul/Choice & Inverse gap)
 4. Slice & Blind Label Audit Studio (BH-FDR error slices + Disagreement ranker)
 5. Multi-Backend Shadow Compare & Judge Audit (McNemar-Holm + Weighted Kappa)
 6. Distribution & Model Drift Monitor (PSI + JSD + silent `model_served` upgrade)
+7. Checkpoints & Training Runs (manifests, `s1-trainrun/1` records, trained items among the records)
 """
 
 from __future__ import annotations
 
+import fnmatch
 import inspect
 import json
 import os
 import stat
 from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from s1ops import __version__
+from s1ops.contracts._validation import UNDECODABLE
 from s1ops.contracts.records import GroupKey, Record, has_calib, read_records, select
 from s1ops.contracts.schemas import load_policies
 from s1ops.eval.audit import audit_group
@@ -30,6 +34,7 @@ from s1ops.eval.judge import agreement as judge_agreement
 from s1ops.eval.judge import by_criterion as judge_by_criterion
 from s1ops.eval.metrics import reliability_counts, reliability_points, routed_confidence
 from s1ops.improve.calibrate import Fit, fit_for, fitted_items, load_fits, transform
+from s1ops.improve.checkpoints import checkpoints_report
 from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
 from s1ops.improve.policy import (
     Band,
@@ -47,6 +52,8 @@ from s1ops.improve.policy import (
     tuned_rows,
 )
 from s1ops.improve.slices import mine_error_slices, parse_feature_rows, slice_inputs_by_group, slice_report, wilson
+from s1ops.improve.trainrun import TrainRunError, load_trainrun, runs_by_checkpoint
+from s1ops.improve.trainset import load_manifest_hashed
 from s1ops.lint.lint import ProbeInputError, audit_probe, lint_path
 from s1ops.lint.rules import RULES
 from s1ops.monitor.drift import DriftInputError, audit_drift, psi_test_info, score_histograms
@@ -66,6 +73,10 @@ CURVE_COST_ERROR = float(inspect.signature(threshold_curve).parameters["c_error"
 CURVE_DELEGATE_ACCURACY = float(inspect.signature(threshold_curve).parameters["delegate_accuracy"].default)
 """`threshold_curve`'s own error cost and System 2 accuracy: the simulator passes them and serves them
 (`display.costs`), so the page states the numbers `cost_per_1k_usd` was computed with."""
+MANIFEST_PATTERN = "training_manifest*.json"
+TRAINRUN_PATTERN = "trainrun*.json"
+"""The workspace files the checkpoint view reads: README's `training_manifest.json` and `trainrun.json`,
+and, for more than one checkpoint, any name that starts and ends the same (`trainrun-tickets-r2.json`)."""
 
 def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Run one input-reading or input-validation call; a malformed or unreadable input becomes
@@ -185,6 +196,8 @@ def create_app(
     probe_records_path: str | Path | None = None,
     features_path: str | Path | None = None,
     judge_path: str | Path | None = None,
+    training_manifest_paths: Sequence[str | Path] | None = None,
+    training_run_paths: Sequence[str | Path] | None = None,
 ) -> FastAPI:
     """Create the s1ops FastAPI application bound to a local workspace."""
     base = Path(workspace_dir) if workspace_dir else Path.cwd()
@@ -208,6 +221,27 @@ def create_app(
     probe_file = _resolve(probe_records_path, "probe_records.jsonl")
     feat_file = _resolve(features_path, "features.jsonl")
     judge_file = _resolve(judge_path, "judge_grades.jsonl")
+
+    def _matching(explicit: Sequence[str | Path] | None, pattern: str) -> list[Path]:
+        """The files of one kind there are to read, per request, so a file written since the server
+        started shows on Refresh: the paths given, else the workspace's names matching `pattern`
+        (sorted), else those of `examples/data`, the fallback `_resolve` has."""
+        if explicit is not None:
+            return [Path(p) for p in explicit if _present(Path(p))]
+        for folder in (base, base / "examples" / "data"):
+            try:
+                names = sorted(n for n in os.listdir(folder) if fnmatch.fnmatchcase(n, pattern))
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError as e:
+                raise HTTPException(status_code=400, detail=f"{folder}: cannot read: {e.strerror or e}") from None
+            if any(not n.isascii() and UNDECODABLE.search(n) for n in names):
+                # Listed with surrogateescape: neither the response nor an error could name it.
+                raise HTTPException(status_code=400, detail=f"{folder}: a file matching {pattern} has a name that is not UTF-8")
+            found = [folder / n for n in names if _present(folder / n)]
+            if found:
+                return found
+        return []
 
     app = FastAPI(
         title="s1ops Workbench",
@@ -686,6 +720,39 @@ def create_app(
         except DriftInputError as e:
             raise _drift_400(e, canary_file) from None
         return {"report": report, "histograms": histograms}
+
+    @app.get("/api/checkpoints")
+    def api_checkpoints() -> dict[str, Any]:
+        """Every checkpoint the workspace names: in a training manifest, in a training-run record, or
+        as the `model_served` of a record. Nothing here refuses a trained item; it counts them."""
+        manifest_files = _matching(training_manifest_paths, MANIFEST_PATTERN)
+        run_files = _matching(training_run_paths, TRAINRUN_PATTERN)
+        manifests = [_load_or_400(path, load_manifest_hashed, path) for path in manifest_files]
+        loaded = [_load_or_400(path, load_trainrun, path) for path in run_files]
+        try:
+            # The CLI's rule for the records taken (one run per checkpoint, each re-checked), without
+            # its refusal of a checkpoint that answered nothing: the view shows that one as it is.
+            runs = runs_by_checkpoint(loaded, [run.checkpoint for run in loaded], "the workspace")
+        except TrainRunError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from None
+        pol_file = _resolve(None, "policy.json")
+        record_files = [f for f in (rec_file, cmp_file, _resolve(None, "records_canary.jsonl")) if _present(f)]
+        # One entry per path: two of the workspace's record files may be one file.
+        records = {str(f): _load_or_400(f, read_records, f) for f in dict.fromkeys(record_files)}
+        policies = _load_or_400(pol_file, load_policies, pol_file) if _present(pol_file) else []
+        return {
+            **checkpoints_report(manifests, runs, records, policies),
+            # For the page only: what was read, and the names the workspace is searched for.
+            "display": {
+                "files": {
+                    "training_manifests": [str(f) for f in manifest_files],
+                    "training_runs": [str(f) for f in run_files],
+                    "records": list(records),
+                    "policy": str(pol_file) if _present(pol_file) else None,
+                },
+                "patterns": {"training_manifests": MANIFEST_PATTERN, "training_runs": TRAINRUN_PATTERN},
+            },
+        }
 
     return app
 

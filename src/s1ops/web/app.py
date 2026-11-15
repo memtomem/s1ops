@@ -8,21 +8,26 @@ Serves a 7-tab interactive System 1 LLMOps console on `127.0.0.1`:
 5. Multi-Backend Shadow Compare & Judge Audit (McNemar-Holm + Weighted Kappa)
 6. Distribution & Model Drift Monitor (PSI + JSD + silent `model_served` upgrade)
 7. Checkpoints & Training Runs (manifests, `s1-trainrun/1` records, trained items among the records)
+8. Review (answering a blind review sheet from `s1 labelaudit sheet`, given as `s1 web --sheet`)
+
+`GET /api/sheet` is the one response that carries state text, so it answers loopback requests only.
 """
 
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import inspect
 import json
 import os
+import re
 import stat
 from pathlib import Path
 from collections.abc import Sequence
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from s1ops import __version__
 from s1ops.contracts._validation import UNDECODABLE
@@ -35,7 +40,7 @@ from s1ops.eval.judge import by_criterion as judge_by_criterion
 from s1ops.eval.metrics import reliability_counts, reliability_points, routed_confidence
 from s1ops.improve.calibrate import Fit, fit_for, fitted_items, load_fits, transform
 from s1ops.improve.checkpoints import checkpoints_report
-from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips
+from s1ops.improve.labelaudit import LabelAuditInputError, rank_with_skips, read_sheet
 from s1ops.improve.policy import (
     Band,
     CalibInputError,
@@ -77,6 +82,47 @@ MANIFEST_PATTERN = "training_manifest*.json"
 TRAINRUN_PATTERN = "trainrun*.json"
 """The workspace files the checkpoint view reads: README's `training_manifest.json` and `trainrun.json`,
 and, for more than one checkpoint, any name that starts and ends the same (`trainrun-tickets-r2.json`)."""
+
+LOOPBACK_CLIENTS = ("127.0.0.1", "::1")
+_LOOPBACK_HOST = re.compile(r"(?:127\.0\.0\.1|localhost)(?::([0-9]{1,5}))?", re.ASCII | re.IGNORECASE)
+SHEET_REFUSED = (
+    "the review sheet is served to this computer only: a loopback client address, a Host of "
+    "127.0.0.1 or localhost, and no proxy headers"
+)
+NO_STORE = {"Cache-Control": "no-store"}
+
+
+def _proxied(name: str) -> bool:
+    return name in ("forwarded", "via", "x-real-ip") or name.startswith("x-forwarded-")
+
+
+def sheet_request_allowed(request: Request) -> bool:
+    """Whether a request may read the review sheet, which holds state text: from a loopback address,
+    with exactly one Host header naming 127.0.0.1 or localhost (a DNS-rebound name does not; an IPv6
+    authority is refused too), and no header a proxy adds. A local proxy that strips every such header
+    and rewrites Host cannot be told from a local client: the app has no authentication."""
+    if request.client is None or request.client.host not in LOOPBACK_CLIENTS:
+        return False
+    hosts = request.headers.getlist("host")
+    if len(hosts) != 1:
+        return False
+    found = _LOOPBACK_HOST.fullmatch(hosts[0])
+    if found is None or (found.group(1) is not None and not 1 <= int(found.group(1)) <= 65535):
+        return False
+    return not any(_proxied(name.lower()) for name in request.headers.keys())
+
+
+def _decoded(raw: bytes) -> str:
+    """A review sheet's bytes as `Path.read_text(encoding="utf-8")` reads them (the CLI's reader):
+    universal newlines, and invalid UTF-8 a `ValueError` with the CLI's wording. A leading byte-order
+    mark, which an editor may add on saving, is dropped: `estimate` reads past it (its answers are
+    under `## <n>`), while the title must be the sheet's first line."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"not valid UTF-8: {e}") from None
+    return text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+
 
 def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Run one input-reading or input-validation call; a malformed or unreadable input becomes
@@ -198,8 +244,14 @@ def create_app(
     judge_path: str | Path | None = None,
     training_manifest_paths: Sequence[str | Path] | None = None,
     training_run_paths: Sequence[str | Path] | None = None,
+    sheet_path: str | Path | None = None,
 ) -> FastAPI:
-    """Create the s1ops FastAPI application bound to a local workspace."""
+    """Create the s1ops FastAPI application bound to a local workspace.
+
+    `sheet_path` is a review sheet from `s1 labelaudit sheet` for the Review view; it is never looked
+    for in the workspace, since the sheet holds state text. `GET /api/sheet` answers only loopback
+    requests (`sheet_request_allowed`), but the address the app is served on is the caller's: `s1 web
+    --sheet` refuses any but 127.0.0.1 and localhost."""
     base = Path(workspace_dir) if workspace_dir else Path.cwd()
     if not base.is_dir():
         raise FileNotFoundError(f"workspace directory not found: {base}")
@@ -221,6 +273,7 @@ def create_app(
     probe_file = _resolve(probe_records_path, "probe_records.jsonl")
     feat_file = _resolve(features_path, "features.jsonl")
     judge_file = _resolve(judge_path, "judge_grades.jsonl")
+    sheet_file = Path(sheet_path) if sheet_path is not None else None
 
     def _matching(explicit: Sequence[str | Path] | None, pattern: str) -> list[Path]:
         """The files of one kind there are to read, per request, so a file written since the server
@@ -753,6 +806,35 @@ def create_app(
                 "patterns": {"training_manifests": MANIFEST_PATTERN, "training_runs": TRAINRUN_PATTERN},
             },
         }
+
+    @app.get("/api/sheet")
+    def api_sheet(request: Request) -> JSONResponse:
+        """The review sheet to answer, as `read_sheet` reads it: its items' state text, the options, and
+        the pieces the page joins with the answers into the completed sheet (`SheetForm.fill`). The
+        secret key is never read, so nothing here says which items are flags or what they are labeled."""
+        if not sheet_request_allowed(request):
+            raise HTTPException(status_code=403, detail=SHEET_REFUSED, headers=NO_STORE)
+        if sheet_file is None:
+            return JSONResponse({"sheet": None}, headers=NO_STORE)
+        if not _present(sheet_file):
+            raise HTTPException(status_code=400, detail=f"{sheet_file}: not found", headers=NO_STORE)
+        # One read: the hash and the items are of the same bytes.
+        raw = _load_or_400(sheet_file, sheet_file.read_bytes)
+        form = _load_or_400(sheet_file, read_sheet, _load_or_400(sheet_file, _decoded, raw))
+        return JSONResponse(
+            {
+                "sheet": {
+                    "file_name": sheet_file.name,
+                    "sheet_sha256": hashlib.sha256(raw).hexdigest(),
+                    "question_id": form.question_id,
+                    "header": form.header,
+                    "options": list(form.options),
+                    "items": [{"n": it.n, "state": it.state, "answer": it.answer} for it in form.items],
+                    "pieces": list(form.pieces),
+                }
+            },
+            headers=NO_STORE,
+        )
 
     return app
 

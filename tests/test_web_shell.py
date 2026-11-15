@@ -45,11 +45,11 @@ def test_the_default_state_writes_no_hash() -> None:
 def test_a_state_round_trips_through_the_hash_with_only_what_differs() -> None:
     state = {"view": "policy", "qid": "q-1", "model": "m/1 b", "prim": "choice", "dq": "q-1", "cq": "", "ck": "",
              "dist": "true", "lo": 0.3, "hi": 0.75, "cs1": 0.0002, "cs2": 0.01, "budget": 0.05, "nboot": 1000, "cbins": "mass",
-             "fdrq": 0.1, "topk": 15}
+             "fdrq": 0.1, "topk": 15, "item": 3}
     hash_ = _js(f"formatHash({json.dumps(state)})")
     assert hash_.startswith("#/policy?")
     keys = [k for k, _ in (pair.split("=") for pair in hash_.split("?", 1)[1].split("&"))]
-    assert keys == ["qid", "model", "prim", "dq", "dist", "lo", "cs1", "cs2", "budget", "nboot"]  # cq, hi, cbins, fdrq and topk are defaults
+    assert keys == ["qid", "model", "prim", "dq", "dist", "lo", "cs1", "cs2", "budget", "nboot", "item"]  # cq, hi, cbins, fdrq and topk are defaults
     assert _js(f"parseHash({json.dumps(hash_)})") == state
 
 
@@ -100,7 +100,7 @@ def _from_inputs(**values) -> dict | None:
     base = {"dist": "", "lo": "0.25", "hi": "0.75", "cs1": "0.00004", "cs2": "0.004", "budget": "0.10", **values}
     st = {"view": "policy", "qid": "q", "model": "m", "prim": "noul", "dq": "q", "cq": "q", "ck": "tickets-r1",
           "dist": "", "lo": 0.25, "hi": 0.75, "cs1": 0.00004, "cs2": 0.004, "budget": 0.1, "nboot": 200, "cbins": "mass",
-          "fdrq": 0.1, "topk": 15}
+          "fdrq": 0.1, "topk": 15, "item": 1}
     return _js(f"policyStateFromInputs({json.dumps(st)}, {json.dumps(base)})")
 
 

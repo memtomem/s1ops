@@ -14,8 +14,11 @@ import shutil
 import pytest
 from fastapi.testclient import TestClient
 
+from s1ops.contracts.schemas import save_policies
 from s1ops.demo import generate_workspace
+from s1ops.improve.trainrun import load_trainrun
 from s1ops.web.app import STATIC_DIR, create_app
+from tests.test_checkpoints import build_workspace, policy_entry
 from tests.test_web_render import DECLARATION, _all_functions, _declarations, _node, _script
 
 HTML = (STATIC_DIR / "index.html").read_text()
@@ -178,6 +181,15 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
     for q in drift_filled["report"]["questions"]:
         q["notes"] = q["notes"] or ["a note"]
         q["alerts"] = q["alerts"] or ["an alert"]
+    # Two checkpoints with manifests, run records, step metrics and trained items; the second's
+    # manifest is exported again and its policy names the first's run, so every note is rendered.
+    (root / "checkpoints").mkdir()
+    ck = build_workspace(root / "checkpoints")
+    save_policies([policy_entry("tickets-r2", load_trainrun(ck / "trainrun.json").trainrun_id)], ck / "policy.json")
+    r2_manifest = ck / "training_manifest-r2.json"
+    r2_manifest.write_text(r2_manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    (ck / "trainrun-r2.json").rename(root / "trainrun-r2.json")
+    checkpoints = get(TestClient(create_app(workspace_dir=ck, training_run_paths=[root / "trainrun-r2.json"])), "/api/checkpoints")
     audit_filled = get(client, "/api/audit")
     for g in audit_filled["groups"]:
         g["warnings"] = g["warnings"] or ["a warning"]
@@ -196,6 +208,8 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         "compare": {"/api/compare": get(client, "/api/compare")},
         "drift": {"/api/drift/histograms": drift},
         "drift-filled": {"/api/drift/histograms": drift_filled},
+        "checkpoints": {"/api/checkpoints": checkpoints},
+        "checkpoints-demo": {"/api/checkpoints": get(client, "/api/checkpoints")},
     }
 
 
@@ -214,6 +228,8 @@ LOADERS = {
     "compare": "loadCompare",
     "drift": "loadDrift",
     "drift-filled": "loadDrift",
+    "checkpoints": "loadCheckpoints",
+    "checkpoints-demo": "loadCheckpoints",
 }
 
 
@@ -280,6 +296,16 @@ def _mutated(old: str, new: str) -> str:
         pytest.param("slices-categorical", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="slices-table-cell"),
         pytest.param("slices", "Margins from ${esc(l.distribution)} probabilities.", "Margins from ${l.distribution} probabilities.", id="slices-ranking-distribution"),
         pytest.param("slices-categorical", "Predictions from ${esc(o.dist || 'unknown')} probabilities.", "Predictions from ${o.dist || 'unknown'} probabilities.", id="slices-distribution"),
+        # The checkpoint view: a name in a card's heading, a note's item, a picker's option, a step
+        # metric's name (a mapping key) as an axis name, and a table cell.
+        pytest.param("checkpoints", 'Checkpoint: <span class="badge badge-info">${esc(c.checkpoint)}</span>',
+                     'Checkpoint: <span class="badge badge-info">${c.checkpoint}</span>', id="checkpoint-name"),
+        pytest.param("checkpoints", "first <span class=\"mono\">${esc(itemText(hit.first_trained_hit))}</span>",
+                     "first <span class=\"mono\">${itemText(hit.first_trained_hit)}</span>", id="checkpoint-trained-item"),
+        pytest.param("checkpoints", "${selected}>${esc(name)}</option>", "${selected}>${name}</option>", id="checkpoint-picker"),
+        pytest.param("checkpoints", 'text-anchor="middle">${esc(ax.yName)}</text>', 'text-anchor="middle">${ax.yName}</text>', id="checkpoint-metric-name"),
+        pytest.param("checkpoints", "names ${esc(p.trainrun_id)}, and", "names ${p.trainrun_id}, and", id="checkpoint-policy-run"),
+        pytest.param("checkpoints-demo", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="checkpoint-table-cell"),
     ],
 )
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:
@@ -299,13 +325,14 @@ CONTAINERS = {
     "loadSlicesAndLabels": "slices-container",
     "loadCompare": "compare-container",
     "loadDrift": "drift-container",
+    "loadCheckpoints": "checkpoints-container",
 }
 
 
 def test_the_error_containers_are_the_pages_own() -> None:
     # The views' table in the page (`viewDefs`), which the shell runs each loader from.
     defs = re.findall(r'^        \w+: \{loader: (\w+), container: "([^"]+)"', _script(), re.M)
-    assert len(defs) == 7
+    assert len(defs) == 8
     assert CONTAINERS == dict(defs)
     assert set(CONTAINERS) == set(LOADERS.values())
 

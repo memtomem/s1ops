@@ -22,6 +22,7 @@ _TEXT_FIELDS = (
     "slice", "feature", "message", "fix", "rule", "question", "probe_question", "band",
     "primary_model", "shadow_model", "status", "method", "direction", "null_kind",
     "inverse_source", "direction_after", "metric", "series", "lane", "caption",
+    "checkpoint", "trainrun_id", "path", "file", "split", "created_at", "sha256", "first_trained_hit",
 )
 _SAFE_INTERPOLATIONS = {
     "res.status",  # numeric HTTP status, only ever reaches the page via showError's esc()

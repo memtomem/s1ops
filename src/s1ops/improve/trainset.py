@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from s1ops.contracts._validation import pydantic_errors, read_json_bytes, read_json_file
-from s1ops.contracts.records import MODEL_NAME, GroupKey, ItemKey, Record, RecordError
+from s1ops.contracts.records import MODEL_NAME, GroupKey, ItemKey, Record, RecordError, _row_surrogate_problem
 
 MANIFEST_SCHEMA = "s1-training-manifest/1"
 
@@ -202,6 +202,12 @@ def load_manifest_hashed(path: str | Path) -> tuple[TrainingManifest, str]:
 def _manifest_from_doc(doc: object, path: str | Path) -> TrainingManifest:
     if not isinstance(doc, dict) or doc.get("schema") != MANIFEST_SCHEMA:
         raise ManifestError(f"{path}: not a {MANIFEST_SCHEMA} file")
+    # First, and by code point, as a run record is checked: an escaped lone surrogate passes an
+    # unconstrained field (`created_at`), and whatever copies the manifest's strings out (the
+    # workbench's response, an error naming the checkpoint) then fails to encode.
+    problem = _row_surrogate_problem(doc)
+    if problem is not None:
+        raise ManifestError(f"{path}: {problem}")
     try:
         parsed = _Manifest.model_validate(doc)
     except ValidationError as e:
@@ -245,14 +251,19 @@ def load_trained(paths: Sequence[str | Path], served: Iterable[str | None], wher
     return {checkpoint: frozenset(items) for checkpoint, items in trained.items()}
 
 
-def check_not_trained(key: GroupKey, items: Iterable[ItemKey], trained: Trained, where: str) -> None:
-    """Refuse the items of group `key` that its model was trained on. Identity is `(dataset, item_id)`
-    across questions: the model saw the state, and rewording a question changes its `question_id`.
-    A group of another model passes, since that model never saw these items."""
+def trained_hits(key: GroupKey, items: Iterable[ItemKey], trained: Trained) -> list[ItemKey]:
+    """The items of group `key` that its model was trained on, each once, in item order. Identity is
+    `(dataset, item_id)` across questions: the model saw the state, and rewording a question changes
+    its `question_id`. A group of another model has none, since that model never saw these items."""
     known = trained.get(key[1])
     if not known:
-        return
-    hits = sorted({i for i in items if i in known}, key=_item_order)
+        return []
+    return sorted({i for i in items if i in known}, key=_item_order)
+
+
+def check_not_trained(key: GroupKey, items: Iterable[ItemKey], trained: Trained, where: str) -> None:
+    """Refuse the items of group `key` that its model was trained on (`trained_hits`)."""
+    hits = trained_hits(key, items, trained)
     if hits:
         raise TrainedItemError(
             f"{where}: {len(hits)} item(s) of group {key} are in the training set of {key[1]!r}, first {hits[0]}; "

@@ -1,7 +1,7 @@
 name: Release
 
 # Manual only: dispatching this workflow is the release gate. Run it on a tag,
-# e.g. `gh workflow run release.yml --ref v0.12.0 -f index=testpypi`; the guard
+# e.g. `gh workflow run release.yml --ref v0.13.0 -f index=testpypi`; the guard
 # rejects any other ref.
 on:
   workflow_dispatch:

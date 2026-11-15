@@ -494,6 +494,7 @@
       </div>
   <main>
     <section id="tab-overview" class="tab-pane active" role="tabpanel" aria-labelledby="nav-overview">
+      <div id="overview-status"></div>
       <div id="overview-container">Loading overview...</div>
     </section>
 
@@ -1157,7 +1158,8 @@
     // A spec is {id, caption, file, columns}; a column is {key, name, kind, digits, exportOnly} with
     // kind "text" (escaped), "num" (fmtNum), "p" (a p- or q-value, pText), "range" (a [lo, hi]
     // pair) or "button" ({act, text, data: {attribute: key}, labelKey: the key whose value
-    // completes its accessible name; never exported). `digitsKey` takes a row's places from that
+    // completes its accessible name, whenKey: a key whose falsy value leaves the cell empty; never
+    // exported). `digitsKey` takes a row's places from that
     // row, `sortBy` sorts the column by another (numeric) key of the row (which need not be a
     // column), `wide` marks a column of prose (it keeps a readable width when the table is wider
     // than its card and scrolls), and `showOnly` is a column of text
@@ -1231,6 +1233,7 @@
 
     function cellHtml(c, r) {
       if (c.kind === "button") {
+        if (c.whenKey && !r[c.whenKey]) return "<td></td>";
         const data = Object.entries(c.data || {}).map(([attr, key]) => `data-${esc(attr)}="${esc(r[key])}"`).join(" ");
         const label = c.labelKey ? ` aria-label="${esc(c.text + ": " + r[c.labelKey])}"` : "";
         return `<td><button type="button" class="tool" data-act="${esc(c.act)}" ${data}${label}>${esc(c.text)}</button></td>`;
@@ -1323,17 +1326,48 @@
     }
 
     // What the fit did on these records: the bootstrap CI of ECE(after) - ECE(before), then
-    // where the fitted ECE sits against its own noise floor. The fit's NLL is on its own records.
-    function fitVerdictHtml(g) {
+    // where the fitted ECE sits against its own noise floor; null without a complete verdict (no
+    // fit, or no interval or floor for it). The card's fit badges and the overview both read it.
+    function fitVerdict(g) {
       const delta = g.delta_ci && g.delta_ci.ece_mass;
       const floor = g.ece_floor_after && g.ece_floor_after.mass;
-      if (!g.after || !delta || !floor) return '';
-      const signed = v => `${v >= 0 ? '+' : ''}${v.toFixed(3)}`;
+      if (!g.after || !delta || !floor) return null;
       const [cls, text] = delta[0] > 0 ? ['badge-err', 'Fit worsened ECE']
         : delta[1] < 0 ? ['badge-ok', 'Fit improved ECE']
         : ['badge-info', 'No clear ECE change'];
       const above = g.after.ece_mass > floor.p95;
       const inSample = g.fit ? g.fit.n_in_sample : 0;
+      return {delta, floor, cls, text, above, inSample};
+    }
+
+    // The raw distribution against its noise floor: the card's first badge.
+    function rawFloorVerdict(g) {
+      const floor = g.ece_floor && g.ece_floor.mass ? g.ece_floor.mass : {mean: 0, p95: 0};
+      return {floor, above: g.before.ece_mass > floor.p95};
+    }
+
+    // The status badges a calibration card shows for a group, as classes and names. With a
+    // complete fit verdict its after-fit floor badge stands for the group, not the raw one (the
+    // raw distribution's miscalibration is what a fit is for).
+    function calibStatusBadges(g) {
+      const out = (g.warnings || []).map(() => ({cls: "badge-warn", name: "warning"}));
+      const v = fitVerdict(g);
+      if (!v) {
+        const raw = rawFloorVerdict(g);
+        out.push(raw.above ? {cls: "badge-warn", name: "miscalibrated"} : {cls: "badge-ok", name: "within floor"});
+        return out;
+      }
+      if (v.inSample) out.push({cls: "badge-warn", name: "not held out"});
+      out.push({cls: v.cls, name: v.text});
+      out.push(v.above ? {cls: "badge-warn", name: "miscalibrated after fit"} : {cls: "badge-ok", name: "within floor after fit"});
+      return out;
+    }
+
+    function fitVerdictHtml(g) {
+      const v = fitVerdict(g);
+      if (!v) return '';
+      const {delta, floor, cls, text, above, inSample} = v;
+      const signed = x => `${x >= 0 ? '+' : ''}${x.toFixed(3)}`;
       return `
         <div>
           ${inSample ? `<span class="badge badge-warn">Not held out: ${inSample} of ${g.n} records were in the fit's sample</span>` : ''}
@@ -1467,6 +1501,279 @@
       const data = await fetchJson("/api/overview");
       if (isStale(ctx)) return;
       document.getElementById("overview-container").innerHTML = renderOverview(data);
+    }
+
+    // --- overview: each view's status -------------------------------------------------------------
+    // The overview counts only what it requested itself: one request per route, on Check or Check
+    // all, never on landing. Each item of a row's unit is counted once, at the worst status badge
+    // its view shows for it (the view's own helper). Nothing is pooled across groups or questions.
+    // The store lives in viewData, so a Refresh empties it with every other payload.
+
+    function overviewStore() {
+      return viewData._overview || (viewData._overview = {seq: {}, entries: {}});
+    }
+
+    // The rows in the views' order: id, the view Open shows, the unit counted, and the route that
+    // fills it (null: the view has no status to count). Compare and its judge audit share a request.
+    function overviewRows() {
+      return [
+        {row: "calib", view: "calib", name: "Calibration", unit: "groups", route: "audit"},
+        {row: "policy", view: "policy", name: "Simulator", unit: null, route: null},
+        {row: "lint", view: "lint", name: "Lint", unit: "findings", route: "lint"},
+        {row: "slices", view: "slices", name: "Slices", unit: "groups", route: "slices"},
+        {row: "compare", view: "compare", name: "Compare", unit: "questions", route: "compare"},
+        {row: "judge", view: "compare", name: "Judge audit", unit: "audit", route: "compare"},
+        {row: "drift", view: "drift", name: "Drift", unit: "questions", route: "drift"},
+        {row: "checkpoints", view: "checkpoints", name: "Checkpoints", unit: "checkpoints", route: "checkpoints"},
+      ];
+    }
+
+    // An item's bucket: its worst status badge, err > warn > info / none > ok; no badge is other.
+    function badgeBucket(classes) {
+      if (classes.includes("badge-err")) return "attention";
+      if (classes.includes("badge-warn")) return "warnings";
+      if (classes.includes("badge-info") || classes.includes("badge-none")) return "other";
+      return classes.includes("badge-ok") ? "ok" : "other";
+    }
+
+    // A counted row from each item's status badges ({cls, name}): the four buckets, which add up
+    // to the items, and a sentence naming how many items carry each badge.
+    function countedSummary(items, unit) {
+      const counts = {attention: 0, warnings: 0, ok: 0, other: 0};
+      items.forEach(badges => { counts[badgeBucket(badges.map(b => b.cls))] += 1; });
+      const names = [];
+      items.forEach(badges => badges.forEach(b => { if (!names.includes(b.name)) names.push(b.name); }));
+      const parts = names.map(name => `${items.filter(badges => badges.some(b => b.name === name)).length} of ${items.length} ${unit}: ${name}`);
+      return {state: "counted", ...counts, n_items: items.length, detail: parts.join("; ")};
+    }
+
+    function calibSummary(d) {
+      const groups = d.groups || [];
+      if (!groups.length) return {state: "nodata", detail: "No labeled, answered records."};
+      return countedSummary(groups.map(calibStatusBadges), "groups");
+    }
+
+    // The served counts as served: error, warning and info are the lint view's err, warn and info
+    // badges; no finding is not an OK thing, so OK is null.
+    function lintSummary(d) {
+      const c = d.counts || {};
+      const n = v => typeof v === "number" && Number.isFinite(v) ? v : null;
+      const probes = (d.probe_audit || []).length;
+      const probeText = probes ? ` ${probes} probe group(s) are in the lint view.` : "";
+      if (d.questions_file === null || d.questions_file === undefined) return {state: "nodata", detail: "No questions file." + probeText};
+      const total = [c.error, c.warning, c.info].every(v => n(v) !== null) ? c.error + c.warning + c.info : null;
+      return {
+        state: "counted", attention: n(c.error), warnings: n(c.warning), ok: null, other: n(c.info), n_items: total,
+        detail: `${fmtNum(n(d.n_findings), 0)} unsuppressed findings; ${fmtNum(n(c.suppressed), 0)} suppressed.` + probeText,
+      };
+    }
+
+    function slicesSummary(d) {
+      const groups = d.groups || [];
+      if (!groups.length) return {state: "nodata", detail: "No labeled, answered records."};
+      const out = countedSummary(groups.map(g => (g.answerability || []).map(m => {
+        const v = answerabilityVerdict(m, d.min_n);
+        return {cls: v.cls, name: v.text};
+      })), "groups");
+      const sig = groups.filter(g => (g.error_slices || []).some(e => e.significant === true)).length;
+      out.detail = (out.detail ? out.detail + "; " : "") + `${sig} of ${groups.length} groups have a significant error slice`;
+      return out;
+    }
+
+    // Compare and its judge audit, from one response.
+    function compareSummaries(d) {
+      const sh = d.shadow || {};
+      const qs = sh.questions || [];
+      let compare;
+      if (!Object.prototype.hasOwnProperty.call(sh, "shared_pairs")) compare = {state: "nodata", detail: "The primary or the shadow records file is missing."};
+      else if (!qs.length) compare = {state: "nodata", detail: "The two record files share no answered (item, question) pair."};
+      else compare = countedSummary(qs.map(q => [{cls: compareBadge(q).cls, name: compareBadge(q).text}]), "questions");
+      const judge = d.judge ? countedSummary([[{cls: judgeBadge(d.judge.overall || {}).cls, name: judgeBadge(d.judge.overall || {}).text}]], "audit")
+        : {state: "nodata", detail: "No judge grades (no file, or an empty one)."};
+      return {compare, judge};
+    }
+
+    // The served summary as served; drift's statuses are CRITICAL, WARN and OK only.
+    function driftSummary(d) {
+      const s = d.summary || {};
+      const n = v => typeof v === "number" && Number.isFinite(v) ? v : null;
+      if (!(n(s.n_questions) > 0)) return {state: "nodata", detail: "The reference or the canary records file is missing, or they share no question."};
+      return {
+        state: "counted", attention: n(s.critical), warnings: n(s.warn), ok: n(s.ok), other: null, n_items: n(s.n_questions),
+        detail: `${fmtNum(n(s.n_questions), 0)} questions: ${fmtNum(n(s.critical), 0)} CRITICAL, ${fmtNum(n(s.warn), 0)} WARN, ${fmtNum(n(s.ok), 0)} OK`,
+      };
+    }
+
+    function checkpointsSummary(d) {
+      const cks = d.checkpoints || [];
+      if (!cks.length) return {state: "nodata", detail: "No training manifest, run record or answered record."};
+      return countedSummary(cks.map(c => {
+        const st = checkpointStatus(c);
+        return [{cls: st.cls, name: st.text}, ...checkpointNotes(c).map(x => ({cls: x.cls, name: x.name}))];
+      }), "checkpoints");
+    }
+
+    // Each route: the rows it fills, its URL and the view setting it is computed under (kept with
+    // the answer and printed from there), and the summaries by row.
+    function overviewRoutes() {
+      return {
+        audit: {rows: ["calib"], url: st => apiUrl("/api/audit", {n_boot: st.nboot}), setting: st => st.nboot, summarize: d => ({calib: calibSummary(d)})},
+        lint: {rows: ["lint"], url: () => "/api/lint", setting: () => null, summarize: d => ({lint: lintSummary(d)})},
+        slices: {rows: ["slices"], url: st => apiUrl("/api/slices", {fdr_q: st.fdrq}), setting: st => st.fdrq, summarize: d => ({slices: slicesSummary(d)})},
+        compare: {rows: ["compare", "judge"], url: () => "/api/compare", setting: () => null, summarize: compareSummaries},
+        drift: {rows: ["drift"], url: () => "/api/drift", setting: () => null, summarize: d => ({drift: driftSummary(d)})},
+        checkpoints: {rows: ["checkpoints"], url: () => "/api/checkpoints", setting: () => null, summarize: d => ({checkpoints: checkpointsSummary(d)})},
+      };
+    }
+
+    // Whether the calibration row can be checked: "" when it can, else why not. Past
+    // auditListLimit() groups it is not, as the calibration view lists them instead of auditing.
+    function calibGate(groups, groupsState) {
+      if (groupsState === "loading") return "waiting";
+      if (groupsState !== "ok") return "groups_error";
+      return (groups || []).length > auditListLimit() ? "gated" : "";
+    }
+
+    // Request a route and settle its rows. Only the latest request of the route, of the current
+    // generation, writes (success or failure), as every view's loader.
+    async function checkRoute(route) {
+      const def = overviewRoutes()[route];
+      if (!def) return;
+      const store = overviewStore();
+      const seq = (store.seq[route] = (store.seq[route] || 0) + 1);
+      const gen = generation;
+      const setting = def.setting(STATE);
+      def.rows.forEach(r => { store.entries[r] = {state: "checking", setting}; });
+      renderOverviewStatusIfShown();
+      let out;
+      try {
+        out = def.summarize(await fetchJson(def.url(STATE)));
+      } catch (err) {
+        out = Object.fromEntries(def.rows.map(r => [r, {state: "error", detail: err.message, kind: errorKind(err)}]));
+      }
+      // The store read again: a Refresh replaced it, and the old one is no longer shown.
+      const live = overviewStore();
+      if (gen !== generation || seq !== live.seq[route]) return;
+      const at = new Date().toLocaleTimeString();
+      def.rows.forEach(r => { live.entries[r] = {...out[r], setting, at}; });
+      renderOverviewStatusIfShown();
+    }
+
+    function checkAllRoutes() {
+      Object.keys(overviewRoutes()).forEach(route => {
+        if (route !== "audit" || calibGate(GROUPS, groupsState) === "") checkRoute(route);
+      });
+    }
+
+    // The table's rows from the store and the calibration gate. A count a row lacks is null.
+    function overviewStatusRows(entries, gate, groupsCount, groupsErr) {
+      const words = {checking: "Checking…", counted: "Counted", nodata: "No data", error: "Error", none: "Not checked", nostatus: "No status", waiting: "Waiting for groups", groups_error: "Groups failed", gated: "Not audited"};
+      return overviewRows().map(r => {
+        const e = (entries || {})[r.row] || null;
+        let state = e ? e.state : "none";
+        let detail = e && typeof e.detail === "string" ? e.detail : "";
+        if (!r.route) {
+          state = "nostatus";
+          detail = "A what-if over one group: open it to try a policy.";
+        } else if (r.row === "calib" && gate) {
+          state = gate;
+          detail = gate === "waiting" ? "The labeled groups are still loading."
+            : gate === "groups_error" ? "The labeled groups could not be loaded: " + String(groupsErr || "")
+            : `${Number(groupsCount)} labeled groups: auditing them here would bootstrap every one; the calibration view lists them.`;
+        } else if (state === "none") {
+          detail = "Not checked yet: Check requests this view's report.";
+        }
+        const counted = state === "counted" && e;
+        const num = k => counted && typeof e[k] === "number" && Number.isFinite(e[k]) ? e[k] : null;
+        const setting = e && typeof e.setting === "number" ? e.setting : null;
+        const settingText = setting === null ? "" : (r.row === "calib" ? `n_boot ${setting}` : (r.row === "slices" ? "FDR " + fdrText(setting) : ""));
+        const source = e && e.at && (state === "counted" || state === "nodata" || state === "error") ? ["checked " + e.at, settingText].filter(Boolean).join(", ") : null;
+        return {
+          row: r.row, view: r.view, route: r.route, name: r.name, unit: r.unit,
+          state, state_text: words[state] || state,
+          attention: num("attention"), warnings: num("warnings"), ok: num("ok"), other: num("other"), n_items: num("n_items"),
+          detail: detail || null, source, checked_at: e && e.at ? e.at : null, setting,
+          can_check: Boolean(r.route) && !(r.row === "calib" && gate),
+        };
+      });
+    }
+
+    function overviewStatusTable(rows) {
+      return {
+        spec: {
+          id: "overview-views", caption: "Status of each view", file: "overview-status",
+          columns: [
+            {key: "name", name: "View", kind: "text"},
+            {key: "unit", name: "Unit", kind: "text"},
+            {key: "state_text", name: "State", kind: "text", showOnly: true},
+            {key: "attention", name: "Attention", kind: "num", digits: 0},
+            {key: "warnings", name: "Warnings", kind: "num", digits: 0},
+            {key: "ok", name: "OK", kind: "num", digits: 0},
+            {key: "other", name: "Other", kind: "num", digits: 0},
+            {key: "check", name: "Check", kind: "button", act: "ov-check", text: "Check", data: {row: "row", route: "route"}, labelKey: "name", whenKey: "can_check"},
+            {key: "open", name: "Open", kind: "button", act: "ov-open", text: "Open", data: {row: "row", view: "view"}, labelKey: "name"},
+            {key: "detail", name: "Detail", kind: "text", showOnly: true, wide: true},
+            {key: "source", name: "Source", kind: "text", showOnly: true},
+            {key: "row", name: "row", kind: "text", exportOnly: true},
+            {key: "state", name: "state", kind: "text", exportOnly: true},
+            {key: "n_items", name: "n_items", kind: "num", digits: 0, exportOnly: true},
+            {key: "checked_at", name: "checked_at", kind: "text", exportOnly: true},
+            {key: "setting", name: "setting", kind: "num", exportOnly: true},
+          ],
+        },
+        rows,
+      };
+    }
+
+    // How many rows are in each state, in the table's words (summing to the rows).
+    function overviewStateLine(rows) {
+      const order = [];
+      rows.forEach(r => { if (!order.includes(r.state_text)) order.push(r.state_text); });
+      return `${rows.length} rows: ` + order.map(w => `${rows.filter(r => r.state_text === w).length} ${w.toLowerCase()}`).join(", ") +
+        ". Counts are of each row's own unit and are not added across rows; Not checked and No data are not OK.";
+    }
+
+    function overviewStatusHtml(t, tstate) {
+      return `
+        <div class="card">
+          <h3>Status of each view</h3>
+          <div class="sub">Each count is of the row's unit: every item once, at the worst status badge its view shows for it (Attention: error, Warnings: warning, Other: neither, OK: only good ones). Check requests a view's report; Check all requests every view's, except calibration past ${auditListLimit()} labeled groups.</div>
+          <div style="margin:8px 0;"><button type="button" class="tool" data-act="ov-check-all">Check all</button>
+            <span id="overview-status-line" class="sub">${esc(overviewStateLine(t.rows))}</span></div>
+          ${tableHtml(t.spec, t.rows, tstate)}
+        </div>`;
+    }
+
+    function overviewTables() {
+      const t = overviewStatusTable(overviewStatusRows(overviewStore().entries, calibGate(GROUPS, groupsState), (GROUPS || []).length, groupsError));
+      return {[t.spec.id]: t};
+    }
+
+    // Write the status block, keeping the table's filter box (its focus and composition) when the
+    // table is already there, and the focus on the row action that had it.
+    function renderOverviewStatus() {
+      const el = document.getElementById("overview-status");
+      const t = Object.values(overviewTables())[0];
+      const active = document.activeElement;
+      const box = tableBox(t.spec.id);
+      if (box && el.contains(box)) {
+        document.getElementById("overview-status-line").textContent = overviewStateLine(t.rows);
+        refreshTable(t.spec.id);
+      } else {
+        el.innerHTML = overviewStatusHtml(t, TSTATE);
+      }
+      // A replaced row action or sort header gives the focus to its new copy (compared by dataset,
+      // never a built selector: the values are identifiers).
+      const act = active && active.dataset ? active.dataset.act : "";
+      if ((act === "ov-check" || act === "ov-open" || act === "tk-sort") && !el.contains(active)) {
+        const key = act === "tk-sort" ? "col" : "row";
+        const next = Array.from(el.querySelectorAll("button[data-act]")).find(b => b.dataset.act === act && b.dataset[key] === active.dataset[key]);
+        if (next) next.focus();
+      }
+    }
+
+    function renderOverviewStatusIfShown() {
+      if (STATE.view === "overview") renderOverviewStatus();
     }
 
     // The calibration view. With no group chosen and more than auditListLimit() labeled groups
@@ -1680,9 +1987,8 @@
     function auditCardHtml(g, strategy, tstate, index) {
         const bef = g.before;
         const aft = g.after || null;
-        const floor = g.ece_floor && g.ece_floor.mass ? g.ece_floor.mass : {mean: 0, p95: 0};
+        const {floor, above: aboveFloor} = rawFloorVerdict(g);
         const tie = g.tie_mass || {max_tie_share: 0, max_tie_value: 0};
-        const aboveFloor = bef.ece_mass > floor.p95;
         const series = reliabilitySeries(g, strategy);
         const tables = auditTables(g, strategy);
         const binsDomId = "calib-bins-table-" + Number(index || 0);
@@ -3056,6 +3362,16 @@
 
     // One question's card. `o.index` makes its DOM id unique in the view; `o.focusable` lets the
     // heading take the focus after Show.
+    // A compared question's status badge, from the served `replaceable` (the card and the overview).
+    function compareBadge(q) {
+      return q.replaceable ? {cls: "badge-ok", text: "Replaceable"} : {cls: "badge-warn", text: "Exceeds Flip/Drop Guard"};
+    }
+
+    // The judge audit's status badge, from the served `passes_bar`.
+    function judgeBadge(o) {
+      return o.passes_bar === true ? {cls: "badge-ok", text: "PASS"} : {cls: "badge-warn", text: "BELOW BAR"};
+    }
+
     function compareCardHtml(q, o) {
       const m = q.mcnemar || null;
       const flips = compareFlips(q);
@@ -3082,7 +3398,7 @@
             <div>
               <div class="sub">Decision Flip Rate</div>
               <div class="kpi">${(q.flip_rate * 100).toFixed(2)}%</div>
-              <span class="badge ${q.replaceable ? 'badge-ok' : 'badge-warn'}">${q.replaceable ? 'Replaceable' : 'Exceeds Flip/Drop Guard'}</span>
+              <span class="badge ${compareBadge(q).cls}">${compareBadge(q).text}</span>
               <div class="sub" style="margin-top:4px">Mean |Δp| / TVD: ${q.mean_distance.toFixed(4)} · max ${esc(fmtNum(q.max_distance, 4))}</div>
             </div>
             <div>
@@ -3105,7 +3421,7 @@
             <div>
               <div class="sub">Graded items, every criterion</div>
               <div class="kpi">${esc(fmtNum(o.n, 0))}</div>
-              <span class="badge ${o.passes_bar === true ? 'badge-ok' : 'badge-warn'}">${o.passes_bar === true ? 'PASS' : 'BELOW BAR'}</span>
+              <span class="badge ${judgeBadge(o).cls}">${judgeBadge(o).text}</span>
             </div>
             <div>
               <div class="sub">Exact match · within ±1</div>
@@ -3182,6 +3498,11 @@
     function sideStat(q, side, value) {
       const n = side === "ref" ? q.n_ref_answered : q.n_cur_answered;
       return typeof n === "number" && n > 0 ? value : null;
+    }
+
+    // A drift question's status badge class, from its served status.
+    function driftStatusClass(status) {
+      return status === 'CRITICAL' ? 'badge-err' : (status === 'WARN' ? 'badge-warn' : 'badge-ok');
     }
 
     function driftSeverity(status) {
@@ -3420,7 +3741,7 @@
       const overview = `<div class="card">${tableHtml(qt.spec, qt.rows, tstate)}<div class="calib-note">${esc(psiTestText(d.psi_test))} Show opens one question; the picker above does the same.</div></div>`;
       if (dq && !qs.length) return picker + summary + overview + questionMissingHtml(dq, "drift report");
       return picker + summary + overview + qs.map((q, index) => {
-        const badgeCls = q.status === 'CRITICAL' ? 'badge-err' : (q.status === 'WARN' ? 'badge-warn' : 'badge-ok');
+        const badgeCls = driftStatusClass(q.status);
         const alertsHtml = (q.alerts || []).map(a => `<div style="margin:4px 0;"><span class="badge ${badgeCls}">${esc(q.status)}</span> ${esc(a)}</div>`).join('')
           + (q.notes || []).map(n => `<div class="sub" style="margin:4px 0;">${esc(n)}</div>`).join('');
         const psiP = (q.psi_p_value === null || q.psi_p_value === undefined) ? 'N/A' : q.psi_p_value.toFixed(3);
@@ -3776,10 +4097,12 @@
 
     // What the served facts of a checkpoint mean, most pressing first. Every yes or no is the
     // response's (`n_trained_hits`, `manifest_loaded`, `parent_loaded`, `run_matches`).
-    function checkpointNotesHtml(c) {
+    // A checkpoint's notes, each {cls, name, html}: the card prints them, the overview counts their
+    // classes with checkpointStatus'.
+    function checkpointNotes(c) {
       const rec = runRecord(c);
       const notes = [];
-      const warn = (cls, label, html) => notes.push(`<div style="margin:4px 0;"><span class="badge ${cls}">${label}</span> ${html}</div>`);
+      const warn = (cls, name, html) => notes.push({cls, name, html});
       const hit = (c.groups || []).find(g => g.first_trained_hit);
       if (typeof c.n_trained_hits === "number" && c.n_trained_hits > 0) {
         warn("badge-err", "ON TRAINED ITEMS", `${Number(c.n_trained_hits)} item(s) among its answered records are in its training set` +
@@ -3801,7 +4124,11 @@
       (c.policies || []).filter(p => p.run_matches === false).forEach(p => {
         warn("badge-err", "POLICY NAMES ANOTHER RUN", `The policy for ${esc(p.question_id)} names ${esc(p.trainrun_id)}, and the record here is ${esc(c.run ? c.run.trainrun_id : "")}: two sets of weights under one name. <code>s1 export langfuse --policy</code> refuses the pair.`);
       });
-      return notes.join("");
+      return notes;
+    }
+
+    function checkpointNotesHtml(c) {
+      return checkpointNotes(c).map(n => `<div style="margin:4px 0;"><span class="badge ${n.cls}">${n.name}</span> ${n.html}</div>`).join("");
     }
 
     function checkpointCardHtml(c, index, tstate, chosen) {
@@ -3972,6 +4299,8 @@
 
     function runView(view) {
       const def = viewDefs()[view];
+      // The status block is the overview's own state: drawn on every visit, a cached one too.
+      if (view === "overview") renderOverviewStatus();
       if (view === "calib") applyCalibInputs(STATE);
       if (view === "slices") applySlicesInputs(STATE);
       const sig = viewSig(view, STATE);
@@ -4058,6 +4387,7 @@
       if (STATE.view === "compare" && d) return compareTables(d);
       if (STATE.view === "lint" && d) return lintTables(d);
       if (STATE.view === "checkpoints" && d) return checkpointTables(d);
+      if (STATE.view === "overview") return overviewTables();
       return {};
     }
 
@@ -4264,6 +4594,12 @@
       const el = ev.target.closest("[data-act]");
       if (!el) return;
       if (el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
+      if (el.dataset.act === "ov-check") checkRoute(el.dataset.route);
+      if (el.dataset.act === "ov-check-all") checkAllRoutes();
+      if (el.dataset.act === "ov-open" && viewNames().includes(el.dataset.view)) {
+        commit({...STATE, view: el.dataset.view}, "push");
+        document.getElementById("nav-" + el.dataset.view).focus();
+      }
       if (el.dataset.act === "drift-show") {
         commit({...STATE, dq: el.dataset.qid}, "push");
         focusDriftCard();

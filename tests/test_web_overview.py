@@ -356,6 +356,8 @@ def test_a_check_settles_and_only_the_latest_writes(demo) -> None:
   // Check all: six routes, five past the calibration gate.
   pending.length = 0; checkAllRoutes(); out.all = pending.map(p => p.url.split("?")[0]).sort();
   pending.length = 0; GROUPS = new Array(7).fill({{}}); checkAllRoutes(); out.gated = pending.length;
+  pending.length = 0; GROUPS = []; groupsState = "loading"; checkAllRoutes(); out.loading = pending.map(p => p.url.split("?")[0]).includes("/api/audit");
+  pending.length = 0; groupsState = "error"; checkAllRoutes(); out.failed = pending.map(p => p.url.split("?")[0]).includes("/api/audit");
 """
     out = _check_run(steps)
     assert out["checking"] == "checking" and out["url"] == "/api/lint"
@@ -367,6 +369,7 @@ def test_a_check_settles_and_only_the_latest_writes(demo) -> None:
     assert out["compareUrls"] == ["/api/compare"] and out["both"] == ["counted", "counted"]
     assert out["all"] == ["/api/audit", "/api/checkpoints", "/api/compare", "/api/drift", "/api/lint", "/api/slices"]
     assert out["gated"] == 5
+    assert out["loading"] is False and out["failed"] is False
 
 
 @needs_node
@@ -442,10 +445,60 @@ process.stdout.write(JSON.stringify(calls));
     return _node(js)
 
 
+def _buttons(t: str) -> dict[str, dict]:
+    """The rendered buttons by accessible name (or text), each with its data-* attributes as a dataset."""
+    out = {}
+    for attrs, text in re.findall(r"<button([^>]*)>([^<]*)</button>", t):
+        data = {k.replace("-", "_"): html_lib.unescape(v) for k, v in re.findall(r'data-([a-z-]+)="([^"]*)"', attrs)}
+        label = re.search(r'aria-label="([^"]*)"', attrs)
+        out[html_lib.unescape(label.group(1)) if label else text.strip()] = data
+    return out
+
+
 @needs_node
-def test_the_row_buttons_act_on_their_route_and_view() -> None:
-    assert _click({"act": "ov-check", "row": "judge", "route": "compare"}) == [["check", "compare"]]
-    assert _click({"act": "ov-check", "row": "calib", "route": "audit"}) == [["check", "audit"]]
-    assert _click({"act": "ov-check-all"}) == [["all"]]
-    assert _click({"act": "ov-open", "row": "judge", "view": "compare"}) == [["commit", "compare", "push"], ["focus", "nav-compare"]]
+def test_the_rendered_row_buttons_act_on_their_route_and_view() -> None:
+    rows = _rows({})
+    b = _buttons(_js(f"overviewStatusHtml(overviewStatusTable({json.dumps(rows)}), {{}})"))
+    assert _click(b["Check: Judge audit"]) == [["check", "compare"]]
+    assert _click(b["Check: Calibration"]) == [["check", "audit"]]
+    assert _click(b["Check all"]) == [["all"]]
+    assert _click(b["Open: Judge audit"]) == [["commit", "compare", "push"], ["focus", "nav-compare"]]
+    assert _click(b["Open: Simulator"]) == [["commit", "policy", "push"], ["focus", "nav-policy"]]
     assert _click({"act": "ov-open", "row": "x", "view": "nowhere"}) == []
+
+
+def _live_run(active: dict) -> dict:
+    """renderOverviewStatus with its table already mounted and `active` (detached) holding the focus."""
+    js = f"""
+let STATE = {{}};
+let viewSeq = {{}}, loadedSig = {{}}, viewData = {{}}, generation = 0, TSTATE = {{}}, policySeq = 0;
+let GROUPS = [{{}}], groupsState = "ok", groupsError = "";
+const focused = [];
+const button = d => ({{dataset: d, focus: () => focused.push(d)}});
+const parts = {{body: {{innerHTML: ""}}, count: {{textContent: ""}}}};
+const box = {{dataset: {{table: "overview-views"}}, querySelector: s => s === ".tk-body" ? parts.body : parts.count}};
+const status = {{html: "SENTINEL", set innerHTML(v) {{ this.html = v; }}, get innerHTML() {{ return this.html; }},
+  contains: x => x === box,
+  querySelectorAll: () => [button({{act: "ov-check", row: "compare"}}), button({{act: "ov-check", row: "judge"}}),
+    button({{act: "tk-sort", col: "ok"}}), button({{act: "tk-sort", col: "attention"}})]}};
+const line = {{textContent: "old"}};
+const document = {{getElementById: id => id === "overview-status" ? status : line, querySelectorAll: () => [box],
+  activeElement: {{dataset: {json.dumps(active)}}}}};
+{_all_functions()}
+STATE = {{...defaultState(), view: "overview"}};
+overviewStore().entries.lint = {{state: "counted", attention: 2, warnings: 0, ok: null, other: 0, n_items: 2, detail: "d", at: "12:00", setting: null}};
+renderOverviewStatus();
+process.stdout.write(JSON.stringify({{outer: status.html, line: line.textContent, body: parts.body.innerHTML.includes(">Counted<"),
+  count: parts.count.textContent, focused}}));
+"""
+    return _node(js)
+
+
+@needs_node
+def test_a_settle_updates_the_mounted_table_in_place_and_keeps_the_focus() -> None:
+    out = _live_run({"act": "ov-check", "row": "judge"})
+    assert out["outer"] == "SENTINEL"  # the block (and its filter box) is not rewritten
+    assert out["line"].startswith("8 rows: 6 not checked, 1 no status, 1 counted.") and out["body"] and out["count"] == "8 rows"
+    assert out["focused"] == [{"act": "ov-check", "row": "judge"}]
+    assert _live_run({"act": "tk-sort", "col": "attention"})["focused"] == [{"act": "tk-sort", "col": "attention"}]
+    assert _live_run({"act": "tk-filter"})["focused"] == []

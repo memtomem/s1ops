@@ -995,7 +995,9 @@
     // `top` to `bottom`, split halfway to its neighbours, so the pointer reads the nearest point in
     // x and no target lies under another. Points drawn at one x are one column naming each. With
     // `left` and `right` (the plot's sides) no column reaches past them: the outermost ones would
-    // otherwise light up over the axis labels or the margin.
+    // otherwise light up over the axis labels or the margin. A column is as wide as its share of
+    // the axis, however narrow (a minimum width made neighbours overlap and cross the sides), and
+    // one with no width inside the sides is not drawn.
     function svgHitColumns(points, top, bottom, left, right) {
       const lo = Number.isFinite(left) ? left : -Infinity, hi = Number.isFinite(right) ? right : Infinity;
       const cols = [];
@@ -1007,9 +1009,11 @@
       return cols.map((c, i) => {
         const before = i ? (c.x - cols[i - 1].x) / 2 : null;
         const after = i < cols.length - 1 ? (cols[i + 1].x - c.x) / 2 : null;
-        const x0 = Math.min(hi, Math.max(lo, c.x - (before === null ? (after === null ? 6 : after) : before)));
-        const x1 = Math.min(hi, Math.max(lo, c.x + (after === null ? (before === null ? 6 : before) : after)));
-        return `<rect class="hit col" x="${px(x0)}" y="${px(top)}" width="${px(Math.max(x1 - x0, 1))}" height="${px(bottom - top)}" data-tip="${esc(c.tip)}" />`;
+        // Both ends as written (a tenth of a pixel), so a column ends where the next begins.
+        const x0 = Number(px(Math.min(hi, Math.max(lo, c.x - (before === null ? (after === null ? 6 : after) : before)))));
+        const x1 = Number(px(Math.min(hi, Math.max(lo, c.x + (after === null ? (before === null ? 6 : before) : after)))));
+        if (!(x1 > x0)) return "";
+        return `<rect class="hit col" x="${px(x0)}" y="${px(top)}" width="${px(x1 - x0)}" height="${px(bottom - top)}" data-tip="${esc(c.tip)}" />`;
       }).join("");
     }
 

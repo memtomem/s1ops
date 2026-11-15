@@ -170,6 +170,17 @@ def test_hover_columns_tile_the_plot_without_overlap() -> None:
     assert re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"', clamped) == [("70.0", "180.0"), ("250.0", "150.0")]
     alone = _js('svgHitColumns([{x: 400, tip: "a"}], 0, 10, 70, 400)')
     assert 'x="394.0" y="0.0" width="6.0"' in alone
+    # Two points a third of a pixel apart at the right side (coverage 0.999 and 1.0 of 1,000 records
+    # on the curve's frame): each column is as narrow as its share, they meet without overlapping,
+    # and neither passes the side. A minimum width of 1 drew them as [439.4, 440.4] and [439.8, 440.8].
+    tight = _js('(f => svgHitColumns([{x: f.x(0.999), tip: "a"}, {x: f.x(1), tip: "b"}], 0, 10, f.left, f.right))(curveFrame())')
+    edges = [(float(x), round(float(x) + float(w), 1)) for x, w in re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"', tight)]
+    assert edges == [(439.4, 439.8), (439.8, 440.0)]
+    # A point outside the sides has no column inside them: none is drawn.
+    assert _js('svgHitColumns([{x: 500, tip: "a"}], 0, 10, 70, 440)') == ""
+    # With a neighbour inside, the outside point still answers for the part of the plot nearest it.
+    shared = _js('svgHitColumns([{x: 500, tip: "a"}, {x: 100, tip: "b"}], 0, 10, 70, 440)')
+    assert re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"[^>]*data-tip="(\w)"', shared) == [("70.0", "230.0", "b"), ("300.0", "140.0", "a")]
 
 
 @needs_node

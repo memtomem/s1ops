@@ -1229,7 +1229,7 @@
     }
 
     // The header (sort buttons, `aria-sort`) and body: what a sort or filter re-renders. The table
-    // is named by its caption, so one of several tables in a view can be told from the others.
+    // is named by its caption (a view with a table per question or group puts that name in it).
     function tableBodyHtml(spec, rows, st) {
       const cols = shownColumns(spec);
       const shown = viewRows(spec, rows, st);
@@ -2234,7 +2234,7 @@
     function lintFindingsTable(d) {
       const titles = new Map((d.rules || []).map(r => [r.id, r.title]));
       const rows = (d.findings || []).map(f => ({
-        rule: f.rule, rule_title: titles.has(f.rule) ? titles.get(f.rule) : "", severity: f.severity, rank: severityRank(f.severity),
+        rule: f.rule, rule_title: titles.has(f.rule) ? titles.get(f.rule) : null, severity: f.severity, rank: severityRank(f.severity),
         question_text: f.question === null || f.question === undefined ? "(file)" : f.question, question: f.question,
         question_id: f.question_id, message: f.message, fix: f.fix, evidence: f.evidence, evidence_url: f.evidence_url,
       }));
@@ -2279,7 +2279,6 @@
         probe_question: p.probe_question, model_served: p.model_served, n_states: p.n_states,
         mean_twin_gap: p.mean_twin_gap, max_twin_gap: p.max_twin_gap, twin_flip_rate: p.twin_flip_rate,
         mean_inverse_error: p.mean_inverse_error, max_inverse_error: p.max_inverse_error, inverse_flip_rate: p.inverse_flip_rate,
-        inverse_text: p.inverse_source === null || p.inverse_source === undefined ? "N/A" : String(p.inverse_source),
         inverse_source: p.inverse_source,
       }));
       return {
@@ -2293,8 +2292,7 @@
           {key: "mean_inverse_error", name: "Mean inverse error", kind: "num", digits: 4},
           {key: "max_inverse_error", name: "Max inverse error", kind: "num", digits: 4},
           {key: "inverse_flip_rate", name: "Inverse flip rate", kind: "num", digits: 3},
-          {key: "inverse_text", name: "Inverse wording", kind: "text", showOnly: true},
-          {key: "inverse_source", name: "inverse_source", kind: "text", exportOnly: true},
+          {key: "inverse_source", name: "Inverse wording", kind: "text"},
         ]},
         rows,
       };
@@ -2377,7 +2375,7 @@
       return "A probe asks one question three ways: as it is (noul, probability p), as a yes / no choice (its twin, p_yes), and negated (its inverse, p_inverse). " +
         "A coherent model gives p ≈ p_yes and p + p_inverse ≈ 1. Twin gap = |p − p_yes|; inverse error = |p + p_inverse − 1|. " +
         "A twin flip is the two answers on different sides of 0.5; an inverse flip is the question and its inverse on the same side (0.5 itself counts as the upper side). " +
-        "Items counts the items with an answered noul probe. Inverse wording: supplied (the question's own), generated (\"Is it false that: ...\"), or N/A when the group's inverse records do not all carry one tag.";
+        "Items counts the items with an answered noul probe. Inverse wording: supplied (the question's own), generated (\"Is it false that: ...\"), or empty when the group's inverse records do not all carry one tag.";
     }
 
     // One probe group: its two charts and its items. `index` makes its DOM id unique in the view.
@@ -2925,7 +2923,7 @@
           n: q.n, n_labeled: q.n_labeled, flip_rate: q.flip_rate, mean_distance: q.mean_distance, max_distance: q.max_distance,
           primary_accuracy: q.primary_accuracy, shadow_accuracy: q.shadow_accuracy, accuracy_delta: q.accuracy_delta,
           a_only: m ? m.a_only : null, b_only: m ? m.b_only : null, p: m ? m.p : null, p_holm: m ? m.p_holm : null,
-          significant_text: m ? (m.significant_05 === true ? "yes" : "no") : "", significant_05: m ? m.significant_05 : null,
+          significant_text: m ? (m.significant_05 === true ? "yes" : "no") : null, significant_05: m ? m.significant_05 : null,
           replaceable_text: q.replaceable === true ? "yes" : "no", replaceable: q.replaceable,
         };
       });

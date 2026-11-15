@@ -197,6 +197,8 @@ def test_a_finding_shows_its_rules_title_its_evidence_and_where_it_is(demo, tmp_
     rows = _cells(_table(_sections(_render(odd))["findings"], "Findings"))
     assert (rows[0][1], rows[0][3], rows[0][7:]) == (RULES["JL000"].title, "(file)", ["", ""])
     assert (rows[1][0], rows[1][1], rows[1][3]) == ("JL999", "", "q")
+    titled = _js('viewRows(lintTables(d)["lint:findings"].spec, lintTables(d)["lint:findings"].rows, {sort: "rule_title", dir: "asc", q: ""}).map(r => r.rule)', prelude=f"const d = {json.dumps(odd)};")
+    assert titled == ["JL000", "JL999"]  # a finding without a title sorts last
     # The export is each finding as served: its eight keys, the null question, no title and no rank.
     out = _js('[JSON.parse(toJsonRows(lintTables(d)["lint:findings"].spec, lintTables(d)["lint:findings"].rows)), toCsv(lintTables(d)["lint:findings"].spec, lintTables(d)["lint:findings"].rows).split("\\r\\n")[0]]',
               prelude=f"const d = {json.dumps(odd)};")
@@ -247,14 +249,20 @@ def test_the_probe_table_shows_every_served_statistic(demo) -> None:
     assert _head(table) == ["Probe question", "Model served", "Items", "Mean twin gap", "Max twin gap", "Twin flip rate",
                             "Mean inverse error", "Max inverse error", "Inverse flip rate", "Inverse wording"]
     assert _cells(table) == [[p["probe_question"], p["model_served"], "50", f"{p['mean_twin_gap']:.4f}", f"{p['max_twin_gap']:.4f}", f"{p['twin_flip_rate']:.3f}",
-                              f"{p['mean_inverse_error']:.4f}", f"{p['max_inverse_error']:.4f}", f"{p['inverse_flip_rate']:.3f}", "N/A"]]
+                              f"{p['mean_inverse_error']:.4f}", f"{p['max_inverse_error']:.4f}", f"{p['inverse_flip_rate']:.3f}", ""]]
     assert "A probe asks one question three ways" in s and "0.5 itself counts as the upper side" in s
     prelude = f"const d = {json.dumps(demo)};"
     exported = _js('JSON.parse(toJsonRows(lintTables(d)["lint:probes"].spec, lintTables(d)["lint:probes"].rows))[0]', prelude=prelude)
-    assert exported["inverse_source"] is None and "inverse_text" not in exported
+    assert exported["inverse_source"] is None and list(exported)[-1] == "inverse_source"  # the served value, under its own key
+    assert "or empty when the group&#39;s inverse records do not all carry one tag" in s
     tagged = copy.deepcopy(demo)
-    tagged["probe_audit"][0]["inverse_source"] = "generated"
-    assert _cells(_table(_sections(_render(tagged))["probes"], "Probe groups"))[0][-1] == "generated"
+    tagged["probe_audit"] = [{**tagged["probe_audit"][0], "probe_question": name, "inverse_source": source}
+                             for name, source in (("a", "supplied"), ("b", None), ("c", "generated"))]
+    assert [r[-1] for r in _cells(_table(_sections(_render(tagged))["probes"], "Probe groups"))] == ["supplied", "", "generated"]
+    # A group without one tag sorts last in either direction, not between the two words.
+    order = _js('["asc", "desc"].map(dir => viewRows(lintTables(d)["lint:probes"].spec, lintTables(d)["lint:probes"].rows, {sort: "inverse_source", dir, q: ""}).map(r => r.probe_question))',
+                prelude=f"const d = {json.dumps(tagged)};")
+    assert order == [["c", "a", "b"], ["a", "c", "b"]]
 
 
 @needs_node

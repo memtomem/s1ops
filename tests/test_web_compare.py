@@ -240,6 +240,9 @@ def test_a_question_without_labels_has_a_row_and_no_lane() -> None:
     assert [r[0] for r in rows] == ["q-labeled", "q-plain"]
     plain = rows[1]
     assert plain[6] == "0" and plain[10:17] == ["N/A"] * 7 and plain[17:] == ["", "no"]
+    order = _js('["asc", "desc"].map(dir => viewRows(compareTables(d)["compare:questions"].spec, compareTables(d)["compare:questions"].rows, {sort: "significant_text", dir, q: ""}).map(r => r.question_id))',
+                prelude=f"const d = {json.dumps(d)};")
+    assert order == [["q-labeled", "q-plain"], ["q-labeled", "q-plain"]]  # no verdict sorts last in either direction
     assert "No labeled pair: accuracy and McNemar's test need labels" in _cards(html)[1]
     # No question with labels at all: the sentence, and no chart.
     none = _render(_report([_noul("i0", 0.9, "old")], [_noul("i0", 0.1, "new")]))

@@ -59,6 +59,9 @@ SLICE_MIN_N = 10
 
 SLICE_MIN_SUPPORT = 5
 """A feature carried by fewer items is not tested (`/api/slices`, `s1 slice mine --min-support`'s default is 5 too)."""
+
+JUDGE_PASS_LEVEL = 3
+"""The grade from which a judged item passes (`/api/compare`'s pass/fail agreement; the page's caption states it)."""
 CURVE_COST_ERROR = float(inspect.signature(threshold_curve).parameters["c_error"].default)
 CURVE_DELEGATE_ACCURACY = float(inspect.signature(threshold_curve).parameters["delegate_accuracy"].default)
 """`threshold_curve`'s own error cost and System 2 accuracy: the simulator passes them and serves them
@@ -620,8 +623,8 @@ def create_app(
                 (str(r.get("criterion", "default")), r["judge"], r["human"])
                 for r in judge_rows
             ]
-            overall = judge_agreement(j_vals, h_vals, levels=levels, pass_level=3)
-            by_crit = judge_by_criterion(crit_tuples, levels=levels, pass_level=3)
+            overall = judge_agreement(j_vals, h_vals, levels=levels, pass_level=JUDGE_PASS_LEVEL)
+            by_crit = judge_by_criterion(crit_tuples, levels=levels, pass_level=JUDGE_PASS_LEVEL)
             judge_out = {
                 "overall": overall.as_dict(),
                 "by_criterion": {k: v.as_dict() for k, v in by_crit.items()},

@@ -398,7 +398,8 @@
     /* Table kit. */
     .tk { margin-top: 8px; }
     .tk-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 6px; }
-    .tk-toolbar .tk-title { font-size: 13px; font-weight: 600; margin-right: auto; }
+    /* A title can hold a question id or a probe group's name: it wraps instead of widening the card. */
+    .tk-toolbar .tk-title { font-size: 13px; font-weight: 600; margin-right: auto; min-width: 0; overflow-wrap: anywhere; }
     input.tk-filter {
       background: var(--panel);
       color: var(--text);
@@ -426,6 +427,8 @@
     .tk th { white-space: nowrap; }
     /* A long identifier wraps inside its cell instead of pushing the other columns out of view. */
     .tk td.mono:not(.num) { max-width: 44ch; overflow-wrap: break-word; }
+    /* A column of prose is not squeezed to a word a line: the table scrolls inside its card instead. */
+    .tk td.wide { min-width: 26ch; }
     .warn-row { margin: 0 0 6px; font-size: 13px; }
     .panel-block { margin-top: 12px; }
     .calib-note { font-size: 12px; color: var(--muted); }
@@ -434,6 +437,8 @@
     /* Policy simulator. */
     .policy-charts { align-items: start; }
     .card h3.section-head { margin-top: 20px; }
+    /* A block inside a card (a probe group): its name wraps, however long and unbroken. */
+    .card h4.block-head { margin: 20px 0 6px; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
     table.facts { width: auto; margin: 6px 0; }
     table.facts th, table.facts td { padding: 5px 14px 5px 0; }
     table.facts td { text-align: right; }
@@ -1137,7 +1142,9 @@
     // kind "text" (escaped), "num" (fmtNum), "p" (a p- or q-value, pText), "range" (a [lo, hi]
     // pair) or "button" ({act, text, data: {attribute: key}, labelKey: the key whose value
     // completes its accessible name; never exported). `digitsKey` takes a row's places from that
-    // row, `sortBy` sorts the column by another (numeric) key, and `showOnly` is a column of text
+    // row, `sortBy` sorts the column by another (numeric) key of the row (which need not be a
+    // column), `wide` marks a column of prose (it keeps a readable width when the table is wider
+    // than its card and scrolls), and `showOnly` is a column of text
     // the page made from served values: shown and filtered, never exported (the values it was made
     // from are export-only columns). The view state of a table (sort column, direction, filter text) is
     // kept by the shell per table id; the renderers only read it.
@@ -1212,10 +1219,11 @@
         const label = c.labelKey ? ` aria-label="${esc(c.text + ": " + r[c.labelKey])}"` : "";
         return `<td><button type="button" class="tool" data-act="${esc(c.act)}" ${data}${label}>${esc(c.text)}</button></td>`;
       }
-      return `<td class="mono${c.kind === "text" ? "" : " num"}">${esc(cellText(c, r))}</td>`;
+      return `<td class="mono${c.kind === "text" ? "" : " num"}${c.wide ? " wide" : ""}">${esc(cellText(c, r))}</td>`;
     }
 
-    // The header (sort buttons, `aria-sort`) and body: what a sort or filter re-renders.
+    // The header (sort buttons, `aria-sort`) and body: what a sort or filter re-renders. The table
+    // is named by its caption, so one of several tables in a view can be told from the others.
     function tableBodyHtml(spec, rows, st) {
       const cols = shownColumns(spec);
       const shown = viewRows(spec, rows, st);
@@ -1228,7 +1236,7 @@
       }).join("");
       const body = shown.map(r => `<tr>${cols.map(c => cellHtml(c, r)).join("")}</tr>`).join("");
       const empty = `<tr><td colspan="${cols.length}" class="sub">${rows.length ? "No rows match the filter." : "No rows."}</td></tr>`;
-      return `<table><thead><tr>${head}</tr></thead><tbody>${body || empty}</tbody></table>`;
+      return `<table aria-label="${esc(spec.caption)}"><thead><tr>${head}</tr></thead><tbody>${body || empty}</tbody></table>`;
     }
 
     // A table with its toolbar: title, filter box, row count and the two exports.
@@ -1922,22 +1930,27 @@
         ", escalated " + fmtRate(b.escalation_rate) + ", cost " + fmtUsd(b.cost_usd);
     }
 
-    // The bands grouped by where they are drawn ({x, y, bands}), in first-seen order: bands at one
+    // Items grouped by where they are drawn ({x, y, items}), in first-seen order: items at one
     // pixel position are one hover target naming each, so none hides under another.
-    function bandSpots(bands, at) {
+    function pointSpots(items, at) {
       const spots = [];
       const index = new Map();
-      bands.forEach(b => {
-        const p = at(b);
+      items.forEach(item => {
+        const p = at(item);
         if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
         const key = px(p.x) + "," + px(p.y);
         if (!index.has(key)) {
           index.set(key, spots.length);
-          spots.push({x: p.x, y: p.y, bands: []});
+          spots.push({x: p.x, y: p.y, items: []});
         }
-        spots[index.get(key)].bands.push(b);
+        spots[index.get(key)].items.push(item);
       });
       return spots;
+    }
+
+    // The bands grouped by where they are drawn ({x, y, bands}).
+    function bandSpots(bands, at) {
+      return pointSpots(bands, at).map(s => ({x: s.x, y: s.y, bands: s.items}));
     }
 
     // F1 against batch cost for every band of `bands` (policyBands): the swept bands as context,
@@ -2182,54 +2195,271 @@
       });
     });
 
+    // --- question lint and probe coherence ---------------------------------------------------------
+    // Pure builders over one /api/lint response. The page decides nothing here: the counts are the
+    // served `counts`, a rule's title is the catalog's entry for that id, and the probe rates are
+    // the report's. No point is marked as a flip (the report serves rates, not a per-item verdict).
     async function loadLint(ctx = {}) {
       const d = await fetchJson("/api/lint");
       if (isStale(ctx)) return;
-      const el = document.getElementById("lint-container");
+      document.getElementById("lint-container").innerHTML = renderLint(d, ctx.opts ? ctx.opts() : {});
+      if (ctx.keep) ctx.keep(d);
+    }
+
+    // Where a severity sorts: errors first. A key of the page's rows, never a column, so no export
+    // carries it.
+    function severityRank(severity) {
+      return severity === "error" ? 0 : (severity === "warning" ? 1 : (severity === "info" ? 2 : 3));
+    }
+
+    // Points of a probe group a chart draws and its table lists, at most.
+    function scatterLimit() {
+      return 2000;
+    }
+
+    // The items of a probe group the page shows: its first scatterLimit() points in the report's
+    // order. Both charts and the table are built from this one list, so every mark has its row.
+    function probeShown(p) {
+      return (Array.isArray(p.points) ? p.points : []).slice(0, scatterLimit());
+    }
+
+    // The findings as served (the export), with the catalog's title and "(file)" for a file-level
+    // finding as the page's own columns.
+    function lintFindingsTable(d) {
+      const titles = new Map((d.rules || []).map(r => [r.id, r.title]));
+      const rows = (d.findings || []).map(f => ({
+        rule: f.rule, rule_title: titles.has(f.rule) ? titles.get(f.rule) : "", severity: f.severity, rank: severityRank(f.severity),
+        question_text: f.question === null || f.question === undefined ? "(file)" : f.question, question: f.question,
+        question_id: f.question_id, message: f.message, fix: f.fix, evidence: f.evidence, evidence_url: f.evidence_url,
+      }));
+      return {
+        spec: {id: "lint:findings", caption: "Findings", file: "lint-findings", columns: [
+          {key: "rule", name: "Rule", kind: "text"},
+          {key: "rule_title", name: "Rule title", kind: "text", showOnly: true, wide: true},
+          {key: "severity", name: "Severity", kind: "text", sortBy: "rank"},
+          {key: "question_text", name: "Question", kind: "text", showOnly: true},
+          {key: "question", name: "question", kind: "text", exportOnly: true},
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "message", name: "Message", kind: "text", wide: true},
+          {key: "fix", name: "Fix", kind: "text", wide: true},
+          {key: "evidence", name: "Evidence", kind: "text"},
+          {key: "evidence_url", name: "Evidence reference", kind: "text"},
+        ]},
+        rows,
+      };
+    }
+
+    // The rule catalog as served. `counted` adds how many of the listed findings each rule has:
+    // only for a questions file that was read (without one every count would be a 0 for a file
+    // nobody linted).
+    function lintRulesTable(d, counted) {
+      const findings = d.findings || [];
+      const rows = (d.rules || []).map(r => ({
+        id: r.id, severity: r.severity, rank: severityRank(r.severity), title: r.title, fix: r.fix,
+        findings: findings.filter(f => f.rule === r.id).length,
+      }));
+      const columns = [
+        {key: "id", name: "Rule", kind: "text"},
+        {key: "severity", name: "Severity", kind: "text", sortBy: "rank"},
+        {key: "title", name: "Title", kind: "text", wide: true},
+        {key: "fix", name: "Fix", kind: "text", wide: true},
+      ];
+      if (counted) columns.push({key: "findings", name: "Unsuppressed findings", kind: "num", digits: 0, showOnly: true});
+      return {spec: {id: "lint:rules", caption: "Rule catalog", file: "lint-rules", columns}, rows};
+    }
+
+    function lintProbesTable(d) {
+      const rows = (d.probe_audit || []).map(p => ({
+        probe_question: p.probe_question, model_served: p.model_served, n_states: p.n_states,
+        mean_twin_gap: p.mean_twin_gap, max_twin_gap: p.max_twin_gap, twin_flip_rate: p.twin_flip_rate,
+        mean_inverse_error: p.mean_inverse_error, max_inverse_error: p.max_inverse_error, inverse_flip_rate: p.inverse_flip_rate,
+        inverse_text: p.inverse_source === null || p.inverse_source === undefined ? "N/A" : String(p.inverse_source),
+        inverse_source: p.inverse_source,
+      }));
+      return {
+        spec: {id: "lint:probes", caption: "Probe groups", file: "probe-groups", columns: [
+          {key: "probe_question", name: "Probe question", kind: "text"},
+          {key: "model_served", name: "Model served", kind: "text"},
+          {key: "n_states", name: "Items", kind: "num", digits: 0},
+          {key: "mean_twin_gap", name: "Mean twin gap", kind: "num", digits: 4},
+          {key: "max_twin_gap", name: "Max twin gap", kind: "num", digits: 4},
+          {key: "twin_flip_rate", name: "Twin flip rate", kind: "num", digits: 3},
+          {key: "mean_inverse_error", name: "Mean inverse error", kind: "num", digits: 4},
+          {key: "max_inverse_error", name: "Max inverse error", kind: "num", digits: 4},
+          {key: "inverse_flip_rate", name: "Inverse flip rate", kind: "num", digits: 3},
+          {key: "inverse_text", name: "Inverse wording", kind: "text", showOnly: true},
+          {key: "inverse_source", name: "inverse_source", kind: "text", exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    // A probe group's name for a caption or a chart's title (plain text): its place in the report
+    // first, since two names joined by a separator could be another group's.
+    function probeGroupName(p, index) {
+      return "group " + (Number(index) + 1) + ": " + [p.probe_question, p.model_served].join(" · ");
+    }
+
+    // A probe group's shown items. The id holds the group as a JSON pair, for the same reason.
+    function lintPointsTable(p, index) {
+      return {
+        spec: {id: "lint:points:" + JSON.stringify([p.probe_question, p.model_served]), caption: "Items of " + probeGroupName(p, index),
+          file: "probe-items-" + fileSafe([p.probe_question, p.model_served].join("-")), columns: [
+            {key: "dataset", name: "Dataset", kind: "text"},
+            {key: "item_id", name: "Item ID", kind: "text"},
+            {key: "p_noul", name: "p (as asked)", kind: "num", digits: 4},
+            {key: "p_twin_yes", name: "p (twin yes)", kind: "num", digits: 4},
+            {key: "twin_gap", name: "Twin gap", kind: "num", digits: 4},
+            {key: "p_inverse", name: "p (inverse)", kind: "num", digits: 4},
+            {key: "inverse_sum", name: "Inverse sum", kind: "num", digits: 4},
+          ]},
+        rows: probeShown(p),
+      };
+    }
+
+    // Every table the lint view shows for what it holds, by id.
+    function lintTables(d) {
+      const out = {};
+      const add = t => { out[t.spec.id] = t; };
+      const read = d && d.questions_file !== null && d.questions_file !== undefined;
+      if (read) add(lintFindingsTable(d));
+      add(lintRulesTable(d || {}, read));
+      add(lintProbesTable(d || {}));
+      ((d && d.probe_audit) || []).forEach((p, index) => add(lintPointsTable(p, index)));
+      return out;
+    }
+
+    // The answer a probe chart sets against the question as asked: its key in a point and its names.
+    function probeRole(kind) {
+      return kind === "twin"
+        ? {key: "p_twin_yes", article: "a twin", axis: "p (yes) of the twin", title: "Twin coherence of ", ref: "y = x (the two answers agree)"}
+        : {key: "p_inverse", article: "an inverse", axis: "p of the inverse", title: "Inverse coherence of ", ref: "y = 1 − x (the two answers sum to 1)"};
+    }
+
+    // An item's tooltip line in a probe chart (plain text: the chart kit escapes it).
+    function probeTip(pt, kind) {
+      const item = (pt.dataset === null || pt.dataset === undefined ? "" : String(pt.dataset) + " · ") + String(pt.item_id);
+      const rest = kind === "twin"
+        ? ", twin p(yes) " + fmtNum(pt.p_twin_yes, 4) + ", gap " + fmtNum(pt.twin_gap, 4)
+        : ", inverse p " + fmtNum(pt.p_inverse, 4) + ", sum " + fmtNum(pt.inverse_sum, 4);
+      return item + ": p " + fmtNum(pt.p_noul, 4) + rest;
+    }
+
+    // One probe role against the question as asked, a dot per shown item that has that answer, on
+    // a square plot (both axes 0..1, gridlines at the quarters, so the 0.5 lines mark the sides a
+    // flip is counted on) with the line coherent answers lie on.
+    function probeScatterHtml(p, shown, kind, details, index) {
+      const W = 460, ml = 52, mr = 14, mt = 12, side = W - ml - mr;
+      const role = probeRole(kind);
+      const x = scaleLinear(0, 1, ml, ml + side), y = scaleLinear(0, 1, mt + side, mt);
+      const ticks = [0, 0.25, 0.5, 0.75, 1];
+      const pts = shown.filter(pt => typeof pt[role.key] === "number" && Number.isFinite(pt[role.key]));
+      const at = pt => ({x: x(finite(pt.p_noul)), y: y(finite(pt[role.key]))});
+      let body = svgAxes({x, y, xTicks: ticks, yTicks: ticks, left: ml, right: ml + side, top: mt, bottom: mt + side,
+        digits: 2, xName: "p of the question as asked", yName: role.axis});
+      const from = kind === "twin" ? 0 : 1;
+      body += `<line class="ref" x1="${px(x(0))}" y1="${px(y(from))}" x2="${px(x(1))}" y2="${px(y(1 - from))}" />`;
+      body += svgDots(pts.map(at), "ser-1", "small");
+      body += svgHits(pointSpots(pts, at).map(s => ({x: s.x, y: s.y,
+        tip: s.items.slice(0, 8).map(pt => probeTip(pt, kind)).join("\n") + (s.items.length > 8 ? `\n+${s.items.length - 8} more at this point (all are in the table)` : "")})));
+      return svgFrame({w: W, h: mt + side + 40, details, title: role.title + probeGroupName(p, index),
+        desc: `The probability of the question as asked (x) against the ${role.axis} (y) for ${pts.length} items, with the reference line ${role.ref}.`}, body);
+    }
+
+    // What the probe statistics mean, for a reader who has not seen a probe (plain text).
+    function probeRuleText() {
+      return "A probe asks one question three ways: as it is (noul, probability p), as a yes / no choice (its twin, p_yes), and negated (its inverse, p_inverse). " +
+        "A coherent model gives p ≈ p_yes and p + p_inverse ≈ 1. Twin gap = |p − p_yes|; inverse error = |p + p_inverse − 1|. " +
+        "A twin flip is the two answers on different sides of 0.5; an inverse flip is the question and its inverse on the same side (0.5 itself counts as the upper side). " +
+        "Items counts the items with an answered noul probe. Inverse wording: supplied (the question's own), generated (\"Is it false that: ...\"), or N/A when the group's inverse records do not all carry one tag.";
+    }
+
+    // One probe group: its two charts and its items. `index` makes its DOM id unique in the view.
+    function probeBlockHtml(p, index, tstate) {
+      const all = Array.isArray(p.points) ? p.points : [];
+      const shown = probeShown(p);
+      const head = `<h4 class="block-head">Group ${Number(index) + 1}: ${esc(p.probe_question)} · ${esc(p.model_served)} (${esc(fmtNum(p.n_states, 0))} items with a noul answer)</h4>`;
+      if (!all.length) {
+        return head + `<div class="sub">No item of this group has an answered noul probe, so there is nothing to pair.</div>`;
+      }
+      const domId = "lint-points-table-" + Number(index);
+      const cut = all.length > shown.length
+        ? `<div class="sub" style="margin:0 0 8px">This group has ${all.length} items; the page shows the first ${shown.length} in the report's order. <code>s1 lint probe-audit</code> prints every item.</div>`
+        : "";
+      const figure = kind => {
+        const role = probeRole(kind);
+        const k = shown.filter(pt => typeof pt[role.key] === "number" && Number.isFinite(pt[role.key])).length;
+        const count = `${k} of the ${shown.length} items shown have ${role.article} answer.`;
+        if (!k) return `<div class="sub">${count}</div>`;
+        const where = kind === "twin"
+          ? "A twin flip lies in the upper-left or lower-right quarter."
+          : "An inverse flip lies in the lower-left or upper-right quarter.";
+        return chartFigure({legend: svgLegend([{name: role.ref, cls: "ref"}]), svg: probeScatterHtml(p, shown, kind, domId, index),
+          caption: `One dot per item. Coherent answers lie on the dashed line. ${where} ${count} Hover a dot for its item; the same values are in the Items table.`});
+      };
+      const t = lintPointsTable(p, index);
+      return `${head}${cut}
+          <div class="grid-2">
+            <div>${figure("twin")}</div>
+            <div>${figure("inverse")}</div>
+          </div>
+          <div class="panel-block scroll-table">${tableHtml({...t.spec, domId}, t.rows, tstate)}</div>`;
+    }
+
+    function lintFindingsCardHtml(d, tstate) {
+      if (d.questions_file === null || d.questions_file === undefined) {
+        return `<div class="card"><h3>Static Question Lint Diagnostics</h3><div class="sub">No questions file found in this workspace (questions.json): nothing was linted.</div></div>`;
+      }
+      const c = d.counts || {};
+      const n = Number(d.n_findings);
+      const t = lintFindingsTable(d);
+      const counters = [["error", "badge-err"], ["warning", "badge-warn"], ["info", "badge-info"], ["suppressed", "badge-none"]]
+        .map(([key, cls]) => `<span class="badge ${cls}">${key} ${esc(fmtNum(c[key], 0))}</span>`).join(" · ");
+      const table = t.rows.length
+        ? `<div class="panel-block scroll-table">${tableHtml(t.spec, t.rows, tstate)}</div>
+          <div class="calib-note">Evidence names the section of the research report a rule rests on; the reference is that section's anchor in the report, which is not shipped with s1ops.</div>`
+        : `<div class="sub">No unsuppressed finding in this file.</div>`;
+      return `
+        <div class="card">
+          <h3>Static Question Lint Diagnostics (${n} ${n === 1 ? "finding" : "findings"})</h3>
+          <div class="sub">File: <span class="mono">${esc(d.questions_file)}</span></div>
+          <div style="margin:8px 0 4px">${counters}</div>
+          <div class="sub" style="margin:0 0 8px">Suppressed findings are silenced by the questions file's own ignore lists (<code>x-s1-lint</code> / <code>x-jev-lint</code>); they are counted, not listed (<code>s1 lint check --format json</code> lists them).</div>
+          ${table}
+        </div>`;
+    }
+
+    function lintProbeCardHtml(d, tstate) {
       const probes = d.probe_audit || [];
-      el.innerHTML = `
+      const head = `<h3>Probe Coherence Audit (Noul vs Yes/No Twin &amp; Polarity Inverse Sum)</h3>`;
+      if (!probes.length) {
+        return `<div class="card">${head}<div class="sub">No probe coherence group: the probe records file is missing or holds no answered record with a <code>probe_role</code>.</div></div>`;
+      }
+      const t = lintProbesTable(d);
+      return `
         <div class="card">
-          <h3>Static Question Lint Diagnostics (${d.n_findings} findings)</h3>
-          <table>
-            <thead>
-              <tr><th>Rule</th><th>Severity</th><th>Question</th><th>Question ID</th><th>Message</th><th>Fix</th></tr>
-            </thead>
-            <tbody>
-              ${(d.findings || []).map(f => `
-                <tr>
-                  <td class="mono"><span class="badge ${f.severity === 'error' ? 'badge-err' : 'badge-warn'}">${esc(f.rule)}</span></td>
-                  <td class="mono">${esc(f.severity)}</td>
-                  <td class="mono">${esc(f.question || '(file)')}</td>
-                  <td class="mono">${esc(f.question_id || '-')}</td>
-                  <td>${esc(f.message)}</td>
-                  <td class="sub">${esc(f.fix)}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
+          ${head}
+          ${tableHtml({...t.spec, domId: "lint-probes-table"}, t.rows, tstate)}
+          <div class="calib-note">${esc(probeRuleText())}</div>
+          ${probes.map((p, index) => probeBlockHtml(p, index, tstate)).join("")}
+        </div>`;
+    }
+
+    function lintRulesCardHtml(d, tstate) {
+      const read = d.questions_file !== null && d.questions_file !== undefined;
+      const t = lintRulesTable(d, read);
+      const counted = read ? " Unsuppressed findings counts the findings listed above; a rule with 0 may still have suppressed ones." : " No questions file was read, so no rule has a count.";
+      return `
         <div class="card">
-          <h3>Probe Coherence Audit (Noul vs Yes/No Twin &amp; Polarity Inverse Sum)</h3>
-          <table>
-            <thead>
-              <tr><th>Probe Question</th><th>Model Served</th><th>n</th><th>Mean Twin Gap</th><th>Twin Flip Rate</th><th>Mean Inverse Error |p+p_inv-1|</th><th>Inverse Wording</th></tr>
-            </thead>
-            <tbody>
-              ${probes.map(p => `
-                <tr>
-                  <td class="mono">${esc(p.probe_question)}</td>
-                  <td class="mono">${esc(p.model_served)}</td>
-                  <td class="mono">${p.n_states}</td>
-                  <td class="mono">${p.mean_twin_gap !== null ? p.mean_twin_gap.toFixed(4) : 'N/A'}</td>
-                  <td class="mono">${p.twin_flip_rate !== null ? (p.twin_flip_rate * 100).toFixed(1) + '%' : 'N/A'}</td>
-                  <td class="mono">${p.mean_inverse_error !== null ? p.mean_inverse_error.toFixed(4) : 'N/A'}</td>
-                  <td class="mono">${p.inverse_source !== null ? esc(p.inverse_source) : 'N/A'}</td>
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>
-      `;
+          <h3>Lint rules</h3>
+          <div class="scroll-table">${tableHtml({...t.spec, domId: "lint-rules-table"}, t.rows, tstate)}</div>
+          <div class="calib-note">Every rule <code>s1 lint check</code> knows (JL000 to JL060, with gaps); <code>s1 lint rules</code> prints the same list.${counted}</div>
+        </div>`;
+    }
+
+    function renderLint(d, opts) {
+      const tstate = (opts && opts.tstate) || {};
+      return lintFindingsCardHtml(d, tstate) + lintProbeCardHtml(d, tstate) + lintRulesCardHtml(d, tstate);
     }
 
     // --- slices and blind label audit ---------------------------------------------------------------
@@ -2284,11 +2514,12 @@
       return parts.slice(0, kept).join("") + "…";
     }
 
-    // What both lane charts share: names in the left margin (18 cells of 10px monospace), one lane
-    // per row on a 24px pitch, x = a rate in [0, 1]. A lane's two marks sit 4px above and below its
-    // middle or on it, so marks of neighbouring lanes are at least 8px apart.
-    function laneFrame(count) {
-      const W = 460, ml = 126, mr = 14, mt = 12, pitch = 24;
+    // What the lane charts share: names in the left margin (`cells` of 10px monospace, 18 unless a
+    // chart asks for more), one lane per row on a 24px pitch, x = a rate in [0, 1]. A lane's two
+    // marks sit 4px above and below its middle or on it, so marks of neighbouring lanes are at
+    // least 8px apart.
+    function laneFrame(count, cells) {
+      const W = 460, ml = 18 + 6 * (cells === undefined ? 18 : cells), mr = 14, mt = 12, pitch = 24;
       const bottom = mt + pitch * count;
       return {W, H: bottom + 40, ml, mr, mt, bottom, x: scaleLinear(0, 1, ml, W - mr), mid: i => mt + pitch * i + pitch / 2};
     }
@@ -2557,25 +2788,36 @@
       return (groups.length ? cards : '<div class="card">No labeled groups found in workspace.</div>') + labelAuditCardHtml(d, tstate);
     }
 
+    // --- shadow compare and judge audit --------------------------------------------------------------
+    // Pure builders over one /api/compare response: `shadow` is the comparison report (what
+    // `s1 compare` answers) and `judge` the grader agreement. The page decides nothing the report
+    // decided: replaceable, significant and passes-bar are the served booleans, and the accuracies,
+    // rates and p-values are the report's. Its own arithmetic is counting those booleans and
+    // reading a flip count back from the served rate.
     async function loadCompare(ctx = {}) {
       const d = await fetchJson("/api/compare");
       if (isStale(ctx)) return;
+      // The question in force now, not when the request started (Back may have changed it). Kept
+      // only once it is on screen: a payload the renderer throws on leaves nothing behind.
+      document.getElementById("compare-container").innerHTML = renderCompare(d, ctx.cq ? ctx.cq() : "", ctx.opts ? ctx.opts() : {});
       if (ctx.keep) ctx.keep(d);
-      // The question in force now, not when the request started (Back may have changed it).
-      document.getElementById("compare-container").innerHTML = renderCompare(d, ctx.cq ? ctx.cq() : "");
     }
 
-    // A view's own question picker: every question its report holds, the chosen one selected.
+    // A view's own question picker: every question its report holds, the chosen one selected. A
+    // chosen question the report does not hold gets an entry of its own, so the picker never shows
+    // "all" beside a page that says the question is unknown.
     function questionPickerHtml(act, questions, chosen, allLabel) {
       const options = questions.map(q => {
         const selected = q.question_id === chosen ? " selected" : "";
         return `<option value="${esc(q.question_id)}"${selected}>${esc(q.question_id)}</option>`;
       }).join("");
+      const known = !chosen || questions.some(q => q.question_id === chosen);
+      const unresolved = known ? "" : `<option value="${esc(chosen)}" selected>Unresolved: ${esc(chosen)}</option>`;
       return `
         <div class="controls">
           <div class="control-group">
             <label>Question</label>
-            <select data-act="${act}" aria-label="Question"><option value="">${allLabel} (${questions.length})</option>${options}</select>
+            <select data-act="${act}" aria-label="Question"><option value="">${allLabel} (${questions.length})</option>${options}${unresolved}</select>
           </div>
         </div>`;
     }
@@ -2585,66 +2827,302 @@
       return `<div class="card state-card"><strong>No question ${esc(chosen)} in the ${report}.</strong> Choose another question, or all questions.</div>`;
     }
 
-    function renderCompare(d, cq) {
-      const all = d.shadow ? (d.shadow.questions || []) : [];
-      const qs = cq ? all.filter(q => q.question_id === cq) : all;
-      const j = d.judge;
-      const picker = all.length ? questionPickerHtml("compare-question", all, cq, "All shadow-compared questions") : "";
+    // With no question chosen, more compared questions than this are listed, not opened: each
+    // card holds a table of up to 50 flipped pairs.
+    function compareCardLimit() {
+      return 6;
+    }
 
-      let shadowHtml = qs.map(q => `
+    // The report's guard, in words (a test holds the two numbers to compare_records' defaults).
+    function replaceableRuleText() {
+      return "Replaceable: flip rate at most 3% and, where the pairs have labels, the shadow's accuracy at most 2 points under the primary's.";
+    }
+
+    // Why a count of one side's records is not a count of that file's rows (plain text).
+    function answeredOnlyText() {
+      return "A record without a response is not compared, so an item whose probe failed on one side counts as answered only on the other.";
+    }
+
+    // The judge's bar, in words (a test holds its numbers to the route's pass level and
+    // judge.agreement's defaults).
+    function judgeRuleText() {
+      return "Pass is a grade of 3 or more. Pass agreement is the share of items on which the judge and the human agree about reaching it, " +
+        "so it is 100% when both put every item under 3, whatever the grades. The bar: weighted κ at least 0.70 and pass agreement at least 95%. " +
+        "κ is undefined (N/A) when both graders give every item of a criterion the same grade. Bias is the mean of judge − human.";
+    }
+
+    // A difference of two rates in percentage points, signed; "N/A" for a non-number.
+    function fmtPoints(v) {
+      return typeof v === "number" && Number.isFinite(v) ? (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + " points" : "N/A";
+    }
+
+    // A signed number to `digits` places; "N/A" for a non-number.
+    function fmtSigned(v, digits) {
+      return typeof v === "number" && Number.isFinite(v) ? (v >= 0 ? "+" : "") + v.toFixed(digits) : "N/A";
+    }
+
+    // How many of a question's pairs flipped: the report serves the rate (flips / n), and the
+    // count is read back from it. NaN when either number is missing.
+    function compareFlips(q) {
+      return Math.round(finite(q.flip_rate) * finite(q.n));
+    }
+
+    // Whether a question has both accuracies (its pairs have labels): what a lane needs.
+    function hasAccuracies(q) {
+      return Number.isFinite(finite(q.primary_accuracy)) && Number.isFinite(finite(q.shadow_accuracy));
+    }
+
+    // A question's tooltip in the dumbbell (plain text: the chart kit escapes it).
+    function compareTip(q) {
+      const m = q.mcnemar || null;
+      const test = m
+        ? "\nonly primary correct " + fmtNum(m.a_only, 0) + ", only shadow correct " + fmtNum(m.b_only, 0) +
+          "\np = " + pText(m.p) + ", Holm-adjusted p = " + pText(m.p_holm) + ", " + (m.significant_05 === true ? "significant" : "not significant") + " at 0.05"
+        : "";
+      return String(q.question_id) + "\nprimary " + String(q.primary_model) + ": " + fmtRate(q.primary_accuracy) +
+        "\nshadow " + String(q.shadow_model) + ": " + fmtRate(q.shadow_accuracy) + " (" + fmtPoints(q.accuracy_delta) + ")" +
+        "\nover " + fmtNum(q.n_labeled, 0) + " labeled pairs of " + fmtNum(q.n, 0) + test +
+        "\n" + (q.replaceable === true ? "replaceable" : "not replaceable");
+    }
+
+    // One lane per question that has labels, in the served order: the primary's accuracy (circle)
+    // and the shadow's (square), joined. " *" after a name is the server's `significant_05`.
+    function compareDumbbellHtml(questions, details) {
+      const rows = questions.filter(hasAccuracies).slice(0, laneLimit());
+      const f = laneFrame(rows.length, 20);
+      let body = laneAxes(f, "accuracy over labeled pairs");
+      rows.forEach((q, i) => {
+        const mid = f.mid(i), tip = compareTip(q);
+        const primary = f.x(finite(q.primary_accuracy)), shadow = f.x(finite(q.shadow_accuracy));
+        body += laneLabel(f, i, laneName(q.question_id, 18) + (q.mcnemar && q.mcnemar.significant_05 === true ? " *" : ""));
+        body += `<line class="link" x1="${px(primary)}" y1="${px(mid)}" x2="${px(shadow)}" y2="${px(mid)}" />`;
+        body += svgDots([{x: shadow, y: mid, tip}], "ser-2", "square");
+        body += svgDots([{x: primary, y: mid, tip}], "ser-1", "circle");
+      });
+      return svgFrame({w: f.W, h: f.H, details, title: "Paired accuracy by question, primary and shadow",
+        desc: "Per question, the primary model's and the shadow model's accuracy over the labeled pairs."}, body);
+    }
+
+    // Every question of the report as served; the two verdict columns are the page's words for the
+    // served booleans, which are the export.
+    function compareQuestionsTable(d) {
+      const questions = d && d.shadow && Array.isArray(d.shadow.questions) ? d.shadow.questions : [];
+      const rows = questions.map(q => {
+        const m = q.mcnemar || null;
+        return {
+          question_id: q.question_id, primitive: q.primitive, primary_model: q.primary_model, shadow_model: q.shadow_model,
+          n: q.n, n_labeled: q.n_labeled, flip_rate: q.flip_rate, mean_distance: q.mean_distance, max_distance: q.max_distance,
+          primary_accuracy: q.primary_accuracy, shadow_accuracy: q.shadow_accuracy, accuracy_delta: q.accuracy_delta,
+          a_only: m ? m.a_only : null, b_only: m ? m.b_only : null, p: m ? m.p : null, p_holm: m ? m.p_holm : null,
+          significant_text: m ? (m.significant_05 === true ? "yes" : "no") : "", significant_05: m ? m.significant_05 : null,
+          replaceable_text: q.replaceable === true ? "yes" : "no", replaceable: q.replaceable,
+        };
+      });
+      return {
+        spec: {id: "compare:questions", caption: "Compared questions", file: "compare-questions", columns: [
+          {key: "question_id", name: "Question ID", kind: "text"},
+          {key: "show", name: "Show", kind: "button", act: "compare-show", text: "Show", labelKey: "question_id", data: {qid: "question_id"}},
+          {key: "primitive", name: "Primitive", kind: "text"},
+          {key: "primary_model", name: "Primary model", kind: "text"},
+          {key: "shadow_model", name: "Shadow model", kind: "text"},
+          {key: "n", name: "n", kind: "num", digits: 0},
+          {key: "n_labeled", name: "Labeled n", kind: "num", digits: 0},
+          {key: "flip_rate", name: "Flip rate", kind: "num", digits: 4},
+          {key: "mean_distance", name: "Mean distance", kind: "num", digits: 4},
+          {key: "max_distance", name: "Max distance", kind: "num", digits: 4},
+          {key: "primary_accuracy", name: "Primary accuracy", kind: "num", digits: 3},
+          {key: "shadow_accuracy", name: "Shadow accuracy", kind: "num", digits: 3},
+          {key: "accuracy_delta", name: "Accuracy delta", kind: "num", digits: 3},
+          {key: "a_only", name: "Only primary correct", kind: "num", digits: 0},
+          {key: "b_only", name: "Only shadow correct", kind: "num", digits: 0},
+          {key: "p", name: "p", kind: "p"},
+          {key: "p_holm", name: "p (Holm)", kind: "p"},
+          {key: "significant_text", name: "Significant", kind: "text", showOnly: true},
+          {key: "significant_05", name: "significant_05", kind: "text", exportOnly: true},
+          {key: "replaceable_text", name: "Replaceable", kind: "text", showOnly: true},
+          {key: "replaceable", name: "replaceable", kind: "text", exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    // A question's flipped pairs as the report lists them (answers and labels are booleans, option
+    // names or levels: shown as text, exported as served).
+    function compareFlippedTable(q) {
+      return {
+        spec: {id: "compare:flipped:" + q.question_id, caption: "Flipped pairs of " + q.question_id, file: "compare-flipped-" + fileSafe(q.question_id), columns: [
+          {key: "dataset", name: "Dataset", kind: "text"},
+          {key: "item_id", name: "Item ID", kind: "text"},
+          {key: "question_id", name: "question_id", kind: "text", exportOnly: true},
+          {key: "primitive", name: "primitive", kind: "text", exportOnly: true},
+          {key: "distance", name: "Distance", kind: "num", digits: 4},
+          {key: "flipped", name: "flipped", kind: "text", exportOnly: true},
+          {key: "primary_pred", name: "Primary answer", kind: "text"},
+          {key: "shadow_pred", name: "Shadow answer", kind: "text"},
+          {key: "label", name: "Label", kind: "text"},
+        ]},
+        rows: Array.isArray(q.flipped_items) ? q.flipped_items : [],
+      };
+    }
+
+    // The judge's agreement per criterion (the criteria are the keys of a mapping).
+    function compareJudgeTable(j) {
+      const rows = Object.entries((j && j.by_criterion) || {}).map(([criterion, st]) => ({
+        criterion, n: st.n, exact: st.exact, within_one: st.within_one, weighted_kappa: st.weighted_kappa, bias: st.bias,
+        pass_agreement: st.pass_agreement, passes_text: st.passes_bar === true ? "PASS" : "BELOW BAR", passes_bar: st.passes_bar,
+      }));
+      return {
+        spec: {id: "compare:judge", caption: "Judge agreement by criterion", file: "judge-criteria", columns: [
+          {key: "criterion", name: "Criterion", kind: "text"},
+          {key: "n", name: "n", kind: "num", digits: 0},
+          {key: "exact", name: "Exact match", kind: "num", digits: 3},
+          {key: "within_one", name: "Within ±1", kind: "num", digits: 3},
+          {key: "weighted_kappa", name: "Weighted κ", kind: "num", digits: 3},
+          {key: "bias", name: "Bias (judge − human)", kind: "num", digits: 3},
+          {key: "pass_agreement", name: "Pass agreement", kind: "num", digits: 3},
+          {key: "passes_text", name: "Passes bar", kind: "text", showOnly: true},
+          {key: "passes_bar", name: "passes_bar", kind: "text", exportOnly: true},
+        ]},
+        rows,
+      };
+    }
+
+    // Every table the compare view can show for what it holds, by id.
+    function compareTables(d) {
+      const out = {};
+      const add = t => { out[t.spec.id] = t; };
+      const questions = d && d.shadow && Array.isArray(d.shadow.questions) ? d.shadow.questions : [];
+      if (questions.length) add(compareQuestionsTable(d));
+      questions.forEach(q => add(compareFlippedTable(q)));
+      if (d && d.judge && d.judge.overall) add(compareJudgeTable(d.judge));
+      return out;
+    }
+
+    // The overview: every question of the report, whatever question is chosen (the Holm-adjusted
+    // p-values are over all of them).
+    function compareOverviewHtml(d, cq, tstate) {
+      const sh = d.shadow || {};
+      const all = sh.questions || [];
+      const labeled = all.filter(hasAccuracies);
+      const replaceable = all.filter(q => q.replaceable === true).length;
+      const domId = "compare-questions-table";
+      const t = compareQuestionsTable(d);
+      const unlabeled = all.length - labeled.length;
+      const noLane = unlabeled ? ` ${unlabeled} of ${all.length} questions have no labeled pair, so no accuracy and no lane; every question is in the table.` : "";
+      const chart = labeled.length ? chartFigure({
+        legend: svgLegend([
+          {name: "primary", cls: "ser-1", shape: "circle", noLine: true},
+          {name: "shadow", cls: "ser-2", shape: "square", noLine: true},
+        ]),
+        svg: compareDumbbellHtml(all, domId),
+        caption: "One lane per question, by question id: each model's accuracy over the question's labeled pairs (the primary record's label, the shadow's where the primary has none). " +
+          "* after a question marks an exact two-sided McNemar test on the pairs only one model answered correctly, significant at 0.05 after a Holm adjustment for testing several questions " +
+          "(every question that has a labeled pair)." + laneLimitNote(labeled.length, "questions with labels") + noLane +
+          " Hover a mark for its numbers; the same values are in the Compared questions table.",
+      }) : `<div class="sub">${esc(noLane.trim())}</div>`;
+      const listed = !cq && all.length > compareCardLimit()
+        ? `<div class="sub" style="margin-top:8px">${all.length} questions: choose one (Show, or the picker) to open its details.</div>`
+        : "";
+      return `
         <div class="card">
-          <h3>Shadow Comparison: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, n=${q.n})</h3>
+          <h3>Every compared question</h3>
+          <div class="sub" style="margin:0 0 12px">${all.length} ${all.length === 1 ? "question" : "questions"} compared: ${replaceable} replaceable · ${all.length - replaceable} not replaceable.
+            ${esc(fmtNum(sh.shared_pairs, 0))} pairs answered in both files; ${esc(fmtNum(sh.primary_only, 0))} answered only in the primary file, ${esc(fmtNum(sh.shadow_only, 0))} only in the shadow file. ${esc(answeredOnlyText())}</div>
+          ${chart}
+          <div class="panel-block scroll-table">${tableHtml({...t.spec, domId}, t.rows, tstate)}</div>
+          <div class="calib-note">${esc(replaceableRuleText())} Show opens one question; the picker above does the same.</div>
+          ${listed}
+        </div>`;
+    }
+
+    // One question's card. `o.index` makes its DOM id unique in the view; `o.focusable` lets the
+    // heading take the focus after Show.
+    function compareCardHtml(q, o) {
+      const m = q.mcnemar || null;
+      const flips = compareFlips(q);
+      const t = compareFlippedTable(q);
+      const domId = "compare-flipped-table-" + Number(o.index || 0);
+      const labeled = q.n_labeled > 0
+        ? `Accuracy over ${esc(fmtNum(q.n_labeled, 0))} labeled pairs of ${esc(fmtNum(q.n, 0))} (${esc(fmtPoints(q.accuracy_delta))})`
+        : "No labeled pair: accuracy and McNemar's test need labels";
+      const verdict = m ? (m.significant_05 === true ? "significant at 0.05 after Holm" : "not significant at 0.05 after Holm") : "";
+      const flipped = t.rows.length ? `
+          <div class="sub">The report lists ${t.rows.length} of this question's ${esc(fmtNum(flips, 0))} flipped pairs${t.rows.length < flips ? `: its first ${t.rows.length} in dataset, item order` : ""}.</div>
+          <div class="scroll-table">${tableHtml({...t.spec, domId}, t.rows, o.tstate)}</div>
+          <div class="calib-note">A flip is a different decision for the same item (noul: on different sides of 0.5, where 0.5 itself is a yes; choice: a different returned option; score: a different top level). Distance is |Δp| for noul and the total variation distance otherwise.</div>`
+        : `<div class="sub">No flipped pair.</div>`;
+      return `
+        <div class="card">
+          <h3${o.focusable ? ' tabindex="-1"' : ''}>Shadow Comparison: <span class="badge badge-info">${esc(q.question_id)}</span> (${esc(q.primitive)}, n=${q.n})</h3>
           <div class="grid-3">
             <div>
               <div class="sub">${esc(q.primary_model)} vs ${esc(q.shadow_model)} Accuracy</div>
               <div class="kpi">${q.primary_accuracy !== null ? (q.primary_accuracy*100).toFixed(1)+'%' : 'N/A'} → ${q.shadow_accuracy !== null ? (q.shadow_accuracy*100).toFixed(1)+'%' : 'N/A'}</div>
-              <span class="sub">Mean |Δp| / TVD: ${q.mean_distance.toFixed(4)}</span>
+              <span class="sub">${labeled}</span>
             </div>
             <div>
               <div class="sub">Decision Flip Rate</div>
               <div class="kpi">${(q.flip_rate * 100).toFixed(2)}%</div>
               <span class="badge ${q.replaceable ? 'badge-ok' : 'badge-warn'}">${q.replaceable ? 'Replaceable' : 'Exceeds Flip/Drop Guard'}</span>
+              <div class="sub" style="margin-top:4px">Mean |Δp| / TVD: ${q.mean_distance.toFixed(4)} · max ${esc(fmtNum(q.max_distance, 4))}</div>
             </div>
             <div>
               <div class="sub">McNemar Exact Test (Holm Adjusted)</div>
               <div class="kpi">p_holm = ${q.mcnemar ? fmtP(q.mcnemar.p_holm) : 'N/A'}</div>
-              <span class="sub">${q.mcnemar ? `Discordant wins: ${q.mcnemar.a_only} vs ${q.mcnemar.b_only}` : ''}</span>
+              <span class="sub">${m ? `Only primary correct: ${esc(fmtNum(m.a_only, 0))} · only shadow correct: ${esc(fmtNum(m.b_only, 0))} · unadjusted p = ${fmtP(m.p)} · ${verdict}` : ''}</span>
             </div>
           </div>
-        </div>
-      `).join('');
+          <div class="panel-block">${flipped}</div>
+        </div>`;
+    }
+
+    function judgeCardHtml(j, tstate) {
+      const o = j.overall;
+      const t = compareJudgeTable(j);
+      return `
+        <div class="card">
+          <h3>Rubric Judge Audit (Quadratic-Weighted κ = ${fmtKappa(o.weighted_kappa)}, Pass/Fail Agreement = ${esc(fmtRate(o.pass_agreement))})</h3>
+          <div class="grid-3">
+            <div>
+              <div class="sub">Graded items, every criterion</div>
+              <div class="kpi">${esc(fmtNum(o.n, 0))}</div>
+              <span class="badge ${o.passes_bar === true ? 'badge-ok' : 'badge-warn'}">${o.passes_bar === true ? 'PASS' : 'BELOW BAR'}</span>
+            </div>
+            <div>
+              <div class="sub">Exact match · within ±1</div>
+              <div class="kpi">${esc(fmtRate(o.exact))} · ${esc(fmtRate(o.within_one))}</div>
+            </div>
+            <div>
+              <div class="sub">Bias (judge − human)</div>
+              <div class="kpi">${esc(fmtSigned(o.bias, 3))}</div>
+            </div>
+          </div>
+          ${tableHtml({...t.spec, domId: "compare-judge-table"}, t.rows, tstate)}
+          <div class="calib-note">${esc(judgeRuleText())}</div>
+        </div>`;
+    }
+
+    function renderCompare(d, cq, opts) {
+      const tstate = (opts && opts.tstate) || {};
+      const all = d.shadow ? (d.shadow.questions || []) : [];
+      const j = d.judge;
+      const picker = all.length ? questionPickerHtml("compare-question", all, cq, "All shadow-compared questions") : "";
+
+      let shadowHtml = "";
       // Both files present but nothing to pair is not the same as no files.
       if (d.shadow && d.shadow.shared_pairs === 0) {
-        shadowHtml = `<div class="card">No items shared between the two record files (${d.shadow.primary_only} primary only, ${d.shadow.shadow_only} shadow only).</div>`;
-      } else if (cq && !qs.length && all.length) {
-        shadowHtml = questionMissingHtml(cq, "shadow comparison");
+        shadowHtml = `<div class="card">No items shared between the two record files (${d.shadow.primary_only} primary only, ${d.shadow.shadow_only} shadow only). ${esc(answeredOnlyText())}</div>`;
+      } else if (all.length) {
+        // One question when one is chosen; else every question while they are few, and none (the
+        // overview is the list) when they are many.
+        const open = cq ? all.filter(q => q.question_id === cq) : (all.length > compareCardLimit() ? [] : all);
+        shadowHtml = compareOverviewHtml(d, cq, tstate) +
+          (cq && !open.length ? questionMissingHtml(cq, "shadow comparison") : open.map((q, index) => compareCardHtml(q, {index, focusable: Boolean(cq), tstate})).join(""));
       }
 
       let judgeHtml = '';
       if (j && j.overall) {
-        judgeHtml = `
-          <div class="card">
-            <h3>Rubric Judge Audit (Quadratic-Weighted κ = ${fmtKappa(j.overall.weighted_kappa)}, Pass/Fail Agreement = ${(j.overall.pass_agreement*100).toFixed(1)}%)</h3>
-            <table>
-              <thead>
-                <tr><th>Criterion</th><th>n</th><th>Exact Match</th><th>Within ±1</th><th>Weighted κ</th><th>Bias (Judge - Human)</th><th>Passes Bar</th></tr>
-              </thead>
-              <tbody>
-                ${Object.entries(j.by_criterion).map(([c, st]) => `
-                  <tr>
-                    <td class="mono">${esc(c)}</td>
-                    <td class="mono">${st.n}</td>
-                    <td class="mono">${(st.exact*100).toFixed(1)}%</td>
-                    <td class="mono">${(st.within_one*100).toFixed(1)}%</td>
-                    <td class="mono">${fmtKappa(st.weighted_kappa)}</td>
-                    <td class="mono">${st.bias >= 0 ? '+' : ''}${st.bias.toFixed(3)}</td>
-                    <td><span class="badge ${st.passes_bar ? 'badge-ok' : 'badge-warn'}">${st.passes_bar ? 'PASS' : 'BELOW BAR'}</span></td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
-          </div>
-        `;
+        judgeHtml = judgeCardHtml(j, tstate);
       }
 
       if (judgeHtml && cq) {
@@ -2973,9 +3451,10 @@
 
     // After Show, the button that had the focus is re-rendered away: the chosen question's card
     // takes it (its heading, focusable by script only) and is scrolled to just below the sticky
-    // filter bar, which would cover it at the top of the page.
-    function focusDriftCard() {
-      const h = document.querySelector("#drift-container .card h3[tabindex]");
+    // filter bar, which would cover it at the top of the page. `containerId` is the view's own.
+    function focusCard(containerId) {
+      const box = document.getElementById(containerId);
+      const h = box ? box.querySelector(".card h3[tabindex]") : null;
       if (!h) return;
       h.focus({preventScroll: true});
       const bar = document.getElementById("filter-bar");
@@ -3138,7 +3617,8 @@
       const d = viewData[view];
       if (!d) return;
       if (view === "drift") document.getElementById("drift-container").innerHTML = renderDrift(d.report, STATE.dq, driftOpts(d, viewOpts()));
-      if (view === "compare") document.getElementById("compare-container").innerHTML = renderCompare(d, STATE.cq);
+      if (view === "compare") document.getElementById("compare-container").innerHTML = renderCompare(d, STATE.cq, viewOpts());
+      if (view === "lint") document.getElementById("lint-container").innerHTML = renderLint(d, viewOpts());
       if (view === "calib") document.getElementById("calib-container").innerHTML = renderCalib(d, viewOpts());
       if (view === "slices") document.getElementById("slices-container").innerHTML = renderSlices(d, viewOpts());
     }
@@ -3160,6 +3640,8 @@
       if (STATE.view === "policy" && d) return Object.fromEntries(Object.values(policyTables(d)).map(t => [t.spec.id, t]));
       if (STATE.view === "drift" && d) return driftTables(d, viewOpts());
       if (STATE.view === "slices" && d) return slicesTables(d);
+      if (STATE.view === "compare" && d) return compareTables(d);
+      if (STATE.view === "lint" && d) return lintTables(d);
       return {};
     }
 
@@ -3368,7 +3850,11 @@
       if (el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
       if (el.dataset.act === "drift-show") {
         commit({...STATE, dq: el.dataset.qid}, "push");
-        focusDriftCard();
+        focusCard("drift-container");
+      }
+      if (el.dataset.act === "compare-show") {
+        commit({...STATE, cq: el.dataset.qid}, "push");
+        focusCard("compare-container");
       }
       if (el.dataset.act === "tk-sort") sortTable(el.dataset.table, el.dataset.col);
       if (el.dataset.act === "tk-csv") exportTable(el.dataset.table, "csv");

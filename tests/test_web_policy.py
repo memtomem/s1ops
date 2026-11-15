@@ -4,6 +4,7 @@ primitive, the cost breakdown, the confusion table, the recommended band and the
 
 from __future__ import annotations
 
+import html as html_lib
 import inspect
 import json
 import re
@@ -154,44 +155,95 @@ def test_a_band_runs_along_one_bound_and_back_along_the_other() -> None:
     assert path == '<path class="area ser-1" d="M1.0 5.0L3.0 4.0L3.0 7.0L1.0 9.0Z" />'
 
 
-@needs_node
-def test_hover_columns_tile_the_plot_without_overlap() -> None:
-    cols = _js('svgHitColumns([{x: 40, tip: "c"}, {x: 10, tip: "a"}, {x: 20, tip: "b"}, {x: NaN, tip: "z"}], 5, 105)')
-    rects = re.findall(r'<rect class="hit col" x="([\d.]+)" y="5.0" width="([\d.]+)" height="100.0" data-tip="(\w)" />', cols)
-    assert rects == [("5.0", "10.0", "a"), ("15.0", "15.0", "b"), ("30.0", "20.0", "c")]
-    # One point alone, and two drawn at one x (one column naming both).
-    assert 'x="94.0" y="0.0" width="12.0"' in _js('svgHitColumns([{x: 100, tip: "a"}], 0, 10)')
-    merged = _js('svgHitColumns([{x: 10, tip: "a"}, {x: 10.01, tip: "b"}, {x: 30, tip: "c"}], 0, 10)')
-    assert merged.count("<rect") == 2 and 'data-tip="a\n\nb"' in merged
-    assert "<img" not in _js('svgHitColumns([{x: 1, tip: "<img src=x>"}], 0, 1)')
-    # With the plot's sides given, the outermost columns stop at them (two points at coverage 0.5
-    # and 1.0 would otherwise light up the margin right of the plot, and the axis labels on the left).
-    clamped = _js('svgHitColumns([{x: 100, tip: "a"}, {x: 400, tip: "b"}], 0, 10, 70, 400)')
-    assert re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"', clamped) == [("70.0", "180.0"), ("250.0", "150.0")]
-    alone = _js('svgHitColumns([{x: 400, tip: "a"}], 0, 10, 70, 400)')
-    assert 'x="394.0" y="0.0" width="6.0"' in alone
-    # Two points a third of a pixel apart at the right side (coverage 0.999 and 1.0 of 1,000 records
-    # on the curve's frame): each column is as narrow as its share, they meet without overlapping,
-    # and neither passes the side. A minimum width of 1 drew them as [439.4, 440.4] and [439.8, 440.8].
-    tight = _js('(f => svgHitColumns([{x: f.x(0.999), tip: "a"}, {x: f.x(1), tip: "b"}], 0, 10, f.left, f.right))(curveFrame())')
-    edges = [(float(x), round(float(x) + float(w), 1)) for x, w in re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"', tight)]
-    assert edges == [(439.4, 439.8), (439.8, 440.0)]
-    # A point outside the sides has no column inside them: none is drawn.
-    assert _js('svgHitColumns([{x: 500, tip: "a"}], 0, 10, 70, 440)') == ""
-    # With a neighbour inside, the outside point still answers for the part of the plot nearest it.
-    shared = _js('svgHitColumns([{x: 500, tip: "a"}, {x: 100, tip: "b"}], 0, 10, 70, 440)')
-    assert re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"[^>]*data-tip="(\w)"', shared) == [("70.0", "230.0", "b"), ("300.0", "140.0", "a")]
+def _hover(svg: str) -> tuple[dict, list]:
+    """A chart's hover layer: the rectangle's attributes as numbers, and its [x, tip] entries."""
+    rects = re.findall(r'<rect class="hit plot" x="([\d.-]+)" y="([\d.-]+)" width="([\d.-]+)" height="([\d.-]+)" data-points="([^"]*)" />', svg)
+    assert len(rects) == 1, svg[:200]
+    x, y, w, h, points = rects[0]
+    return {"x": float(x), "y": float(y), "w": float(w), "h": float(h)}, json.loads(html_lib.unescape(points))
+
+
+BOX = "{left: 70, right: 440, top: 5, bottom: 105}"
 
 
 @needs_node
-def test_the_curves_hover_columns_stay_inside_the_plot(tmp_path) -> None:
+def test_a_line_charts_hover_layer_is_one_rectangle_over_the_plot() -> None:
+    layer = _js(f'svgHoverPlot([{{x: 400, tip: "c"}}, {{x: 100, tip: "a"}}, {{x: 200.04, tip: "b"}}, {{x: NaN, tip: "z"}}], {BOX})')
+    rect, entries = _hover(layer)
+    assert rect == {"x": 70.0, "y": 5.0, "w": 370.0, "h": 100.0}
+    assert entries == [[100, "a"], [200, "b"], [400, "c"]]
+    # The crosshair comes first (moveTip finds it as the rectangle's previous sibling), hidden.
+    assert layer.startswith('<line class="cross" x1="0" y1="5.0" x2="0" y2="105.0" visibility="hidden" /><rect class="hit plot"')
+    assert _js(f"svgHoverPlot([], {BOX})") == "" and _js(f"svgHoverPlot([{{x: NaN, tip: 'z'}}], {BOX})") == ""
+    # Points written at one x are one entry naming each; a tooltip is escaped in the attribute.
+    _, merged = _hover(_js(f'svgHoverPlot([{{x: 10, tip: "a"}}, {{x: 10.01, tip: "b"}}, {{x: 30, tip: "c"}}], {BOX})'))
+    assert merged == [[10, "a\n\nb"], [30, "c"]]
+    hostile = _js(f'svgHoverPlot([{{x: 1, tip: "\\"><img src=x>"}}], {BOX})')
+    assert "<img" not in hostile and _hover(hostile)[1] == [[1, '"><img src=x>']]
+
+
+@needs_node
+def test_the_pointer_reads_the_point_nearest_in_x() -> None:
+    entries = '[[100, "a"], [200, "b"], [400, "c"]]'
+    picks = _js(f"[99, 149.9, 150, 150.1, 300.1, 1e9, -5].map(x => plotPick({entries}, x)[1])")
+    assert picks == ["a", "a", "a", "b", "c", "c", "a"]  # halfway goes to the first
+    assert _js("plotPick([], 5)") is None and _js(f"plotPick({entries}, NaN)") is None
+    # A chart shown at another size than it is drawn: the pointer's x in the chart's own units.
+    assert _js("[chartX(150, 100, 920, 460), chartX(100, 100, 920, 460), chartX(1020, 100, 920, 460), chartX(5, 0, 230, 460)]") == [25, 0, 460, 10]
+    assert _js("[chartX(5, 0, 0, 460)].map(Number.isNaN)") == [True]
+
+
+def _curve_layer(coverages: list[float]) -> tuple[dict, list]:
+    points = ", ".join(f'{{x: f.x({c!r}), tip: "p{i}"}}' for i, c in enumerate(coverages))
+    return _hover(_js(f"(f => svgHoverPlot([{points}], f))(curveFrame())"))
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "coverages, entries",
+    [
+        # Each case broke the per-point columns this layer replaced (the review rounds of PR 162):
+        # the outermost columns of a sparse curve ran past the plot's sides;
+        pytest.param([0.5, 1.0], [[255, "p0"], [440, "p1"]], id="sparse"),
+        # a one-pixel minimum width made two columns a third of a pixel apart overlap and cross the side;
+        pytest.param([0.999, 1.0], [[439.6, "p0"], [440, "p1"]], id="a-third-of-a-pixel-apart"),
+        # edges rounded separately left neighbours overlapping by a tenth of a pixel;
+        pytest.param([0.022, 0.708, 1.0], [[78.1, "p0"], [332, "p1"], [440, "p2"]], id="edges-rounded-apart"),
+        # and a share of 0.037px rounded to nothing, so the end point had no tooltip at all.
+        pytest.param([4999 / 5000, 1.0], [[439.9, "p0"], [440, "p1"]], id="a-share-that-rounded-away"),
+    ],
+)
+def test_no_point_of_a_curve_loses_its_tooltip_or_leaves_the_plot(coverages, entries) -> None:
+    rect, got = _curve_layer(coverages)
+    frame = _js("(f => [f.left, f.right, f.top, f.bottom])(curveFrame())")
+    # One rectangle, exactly the plot: nothing to overlap and nothing outside the sides.
+    assert [rect["x"], rect["x"] + rect["w"], rect["y"], rect["y"] + rect["h"]] == frame
+    assert got == entries
+    # Every point is the answer somewhere on the plot: at its own x.
+    for x, tip in entries:
+        assert _js(f"plotPick({json.dumps(got)}, {x})") == [x, tip]
+
+
+@needs_node
+def test_a_point_outside_the_plot_still_answers_for_the_part_nearest_it() -> None:
+    # Deliberately unlike the columns, which drew nothing for a lone point outside the sides: the
+    # layer is the plot, and the nearest point answers wherever the pointer is on it.
+    rect, entries = _hover(_js(f'svgHoverPlot([{{x: 500, tip: "out"}}], {BOX})'))
+    assert (rect["x"], rect["w"]) == (70.0, 370.0) and entries == [[500, "out"]]
+    _, both = _hover(_js(f'svgHoverPlot([{{x: 500, tip: "out"}}, {{x: 100, tip: "in"}}], {BOX})'))
+    assert _js(f"[299, 301].map(x => plotPick({json.dumps(both)}, x)[1])") == ["in", "out"]
+
+
+@needs_node
+def test_the_curves_hover_layer_is_the_plot(tmp_path) -> None:
     rows = _rows((50, {"a": 0.9, "b": 0.1}, "a"), (29, {"a": 0.8, "b": 0.2}, "b"), (21, {"a": 0.8, "b": 0.2}, "a"))
     d = _get(TestClient(create_app(records_path=_write(tmp_path / "r.jsonl", rows))), use_calib=False)
     assert [p["coverage"] for p in d["threshold_curve"]] == [0.5, 1.0]
     frame = _js("(f => [f.left, f.right])(curveFrame())")
     for svg in _charts(_view(d)["html"]):
-        edges = [(float(x), float(x) + float(w)) for x, w in re.findall(r'<rect class="hit col" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"', svg)]
-        assert len(edges) == 2 and min(a for a, _ in edges) >= frame[0] and max(b for _, b in edges) <= frame[1]
+        rect, entries = _hover(svg)
+        assert [rect["x"], rect["x"] + rect["w"]] == frame and [x for x, _ in entries] == [255, 440]
+        assert "threshold 0.9000" in entries[0][1] and "threshold 0.8000" in entries[1][1]
 
 
 @needs_node
@@ -346,7 +398,7 @@ def test_every_primitive_gets_the_curve_and_noul_the_bands(payloads, case, chart
     assert out["tables"] == sorted(f"policy:{name}:{key}" for name in (("bands", "curve") if tables == 2 else ("curve",)))
     # The curve's line is drawn over every point; a 160-point curve draws no marker at each.
     points = len(payloads[case]["threshold_curve"])
-    assert points > 40 and html.count('class="hit col"') == 2 * points
+    assert points > 40 and all(len(_hover(svg)[1]) == points for svg in _charts(html)[-2:])
     assert 'class="dot ser-1" cx' not in _charts(html)[-2]
 
 
@@ -416,7 +468,7 @@ def test_a_one_point_curve_and_zero_costs_still_draw(tmp_path, clients) -> None:
     d = _get(TestClient(create_app(records_path=records)), use_calib=False)
     assert len(d["threshold_curve"]) == 1
     html = _view(d)["html"]
-    assert len(_charts(html)) == 2 and "NaN" not in html and html.count('class="hit col"') == 2
+    assert len(_charts(html)) == 2 and "NaN" not in html and [len(_hover(svg)[1]) for svg in _charts(html)] == [1, 1]
     free = _get(clients["noul"], cost_s1=0, cost_sys2=0)
     assert {b["cost_usd"] for b in free["display"]["swept_bands"]} == {0.0}
     html = _view(free, inputs={"inp-cost-s1": "0", "inp-cost-s2": "0"})["html"]
@@ -434,7 +486,7 @@ def test_a_long_curve_thins_only_its_hover_targets(payloads) -> None:
     d["tuned_threshold"]["threshold"] = d["threshold_curve"][502]["threshold"]
     html = _view(d)["html"]
     first, second = _charts(html)
-    assert first.count('class="hit col"') == second.count('class="hit col"') == 401
+    assert len(_hover(first)[1]) == len(_hover(second)[1]) == 401
     assert len(re.search(r'<polyline class="line ser-1" points="([^"]+)"', first).group(1).split(" ")) == 1000
     assert "Hover reads 400 evenly spaced points and the tuned one; the table below holds all 1000." in html
     assert len(_tuned_marks(html)) == 2

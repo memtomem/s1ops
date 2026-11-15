@@ -377,7 +377,7 @@
     .viz .area.ser-1, .legend .area.ser-1 { fill: var(--series-1); }
     .viz .dot.mark, .legend .mark.fill { fill: var(--text); stroke: var(--panel); }
     .viz .dot.ctx, .legend .ctx.fill { fill: var(--muted); stroke: none; fill-opacity: 0.6; }
-    .viz .hit.col:hover { fill: var(--muted); fill-opacity: 0.12; }
+    .viz .cross { stroke: var(--muted); stroke-width: 1; pointer-events: none; }
     #chart-tip {
       position: fixed;
       z-index: 10;
@@ -991,30 +991,35 @@
       return `<path class="area ${esc(cls)}" d="M${there.concat(back).join("L")}Z" />`;
     }
 
-    // A line chart's hover targets: one transparent column per point ({x, tip} in pixels) from
-    // `top` to `bottom`, split halfway to its neighbours, so the pointer reads the nearest point in
-    // x and no target lies under another. Points drawn at one x are one column naming each. With
-    // `left` and `right` (the plot's sides) no column reaches past them: the outermost ones would
-    // otherwise light up over the axis labels or the margin. A column is as wide as its share of
-    // the axis, however narrow (a minimum width made neighbours overlap and cross the sides), and
-    // one with no width inside the sides is not drawn.
-    function svgHitColumns(points, top, bottom, left, right) {
-      const lo = Number.isFinite(left) ? left : -Infinity, hi = Number.isFinite(right) ? right : Infinity;
-      const cols = [];
+    // A line chart's hover layer: one transparent rectangle over the plot (`box`: left, right, top,
+    // bottom) carrying every point's x and tooltip ({x, tip} in pixels), after the crosshair that
+    // moveTip moves to the point it picks. The pointer reads the point nearest in x (plotPick),
+    // however close its neighbours are: there are no per-point targets to overlap, to round away
+    // or to cross the plot's sides. Points written at one x are one entry naming each.
+    function svgHoverPlot(points, box) {
+      const entries = [];
       points.filter(p => Number.isFinite(p.x)).sort((a, b) => a.x - b.x).forEach(p => {
-        const last = cols[cols.length - 1];
-        if (last && px(last.x) === px(p.x)) last.tip += "\n\n" + p.tip;
-        else cols.push({x: p.x, tip: String(p.tip)});
+        const x = Number(px(p.x));
+        const last = entries[entries.length - 1];
+        if (last && last[0] === x) last[1] += "\n\n" + p.tip;
+        else entries.push([x, String(p.tip)]);
       });
-      return cols.map((c, i) => {
-        const before = i ? (c.x - cols[i - 1].x) / 2 : null;
-        const after = i < cols.length - 1 ? (cols[i + 1].x - c.x) / 2 : null;
-        // Both ends as written (a tenth of a pixel), so a column ends where the next begins.
-        const x0 = Number(px(Math.min(hi, Math.max(lo, c.x - (before === null ? (after === null ? 6 : after) : before)))));
-        const x1 = Number(px(Math.min(hi, Math.max(lo, c.x + (after === null ? (before === null ? 6 : before) : after)))));
-        if (!(x1 > x0)) return "";
-        return `<rect class="hit col" x="${px(x0)}" y="${px(top)}" width="${px(x1 - x0)}" height="${px(bottom - top)}" data-tip="${esc(c.tip)}" />`;
-      }).join("");
+      if (!entries.length) return "";
+      return `<line class="cross" x1="0" y1="${px(box.top)}" x2="0" y2="${px(box.bottom)}" visibility="hidden" />` +
+        `<rect class="hit plot" x="${px(box.left)}" y="${px(box.top)}" width="${px(box.right - box.left)}" height="${px(box.bottom - box.top)}" data-points="${esc(JSON.stringify(entries))}" />`;
+    }
+
+    // The entry of a hover plot ([x, tip] pairs) nearest to x, the first of two equally near; null
+    // for none.
+    function plotPick(entries, x) {
+      const i = nearestIndex(entries.map(e => ({x: e[0], y: 0})), x, 0);
+      return i < 0 ? null : entries[i];
+    }
+
+    // A pointer's x in a chart's own coordinates: the chart is drawn `viewWidth` wide and shown
+    // `boxWidth` wide from `boxLeft`.
+    function chartX(clientX, boxLeft, boxWidth, viewWidth) {
+      return boxWidth > 0 ? (clientX - boxLeft) / boxWidth * viewWidth : NaN;
     }
 
     // At most `limit` of `items`, evenly spaced with both ends, and the one at index `keep` (-1 for
@@ -1788,7 +1793,7 @@
     }
 
     // On either curve chart: the tuned point (a reference line at its coverage and a mark on the
-    // line of `key`), and the hover columns.
+    // line of `key`), and the hover layer.
     function curveMarks(curve, f, y, key) {
       const tuned = curve.tuned >= 0 ? curve.rows[curve.tuned] : null;
       let body = "";
@@ -1798,7 +1803,7 @@
         body += svgDots([{x: tx, y: y(finite(tuned[key]))}], "mark", "diamond");
       }
       const hover = thinned(curve.rows, curveHoverLimit(), curve.tuned);
-      return body + svgHitColumns(hover.map(p => ({x: f.x(finite(p.coverage)), tip: curveTip(p)})), f.top, f.bottom, f.left, f.right);
+      return body + svgHoverPlot(hover.map(p => ({x: f.x(finite(p.coverage)), tip: curveTip(p)})), f);
     }
 
     // Error rate among accepted records against coverage, shaded up to the Clopper-Pearson bound,
@@ -2627,25 +2632,48 @@
       return best;
     }
 
-    // One tooltip for every chart: a mark's data-tip, written as text. Round hover targets overlap
+    // The crosshair a hover plot is showing, if any: hidden again by the next pointer move.
+    let hoverCross = null;
+
+    // One tooltip for every chart, written as text. A hover plot (a line chart) answers with the
+    // point nearest the pointer in x and moves its crosshair there. Round hover targets overlap
     // where marks crowd, and the one drawn last would answer for its neighbours: the pointer reads
     // the target of its chart whose centre is nearest.
     function moveTip(ev) {
       const tip = document.getElementById("chart-tip");
-      let mark = ev.target && ev.target.closest ? ev.target.closest("[data-tip]") : null;
-      if (!mark) {
+      if (hoverCross) hoverCross.setAttribute("visibility", "hidden");
+      hoverCross = null;
+      let mark = ev.target && ev.target.closest ? ev.target.closest("[data-tip], [data-points]") : null;
+      let text = null;
+      if (mark && mark.hasAttribute("data-points")) {
+        const svg = mark.ownerSVGElement;
+        const box = svg.getBoundingClientRect();
+        if (!mark.hoverPoints) mark.hoverPoints = JSON.parse(mark.getAttribute("data-points"));
+        const pick = plotPick(mark.hoverPoints, chartX(ev.clientX, box.left, box.width, svg.viewBox.baseVal.width));
+        const cross = mark.previousElementSibling;
+        if (pick && cross) {
+          cross.setAttribute("x1", px(pick[0]));
+          cross.setAttribute("x2", px(pick[0]));
+          cross.setAttribute("visibility", "visible");
+          hoverCross = cross;
+        }
+        text = pick ? pick[1] : null;
+      } else if (mark) {
+        if (mark.matches("circle.hit") && mark.parentNode) {
+          const hits = Array.from(mark.parentNode.querySelectorAll("circle.hit"));
+          const centres = hits.map(h => {
+            const box = h.getBoundingClientRect();
+            return {x: box.left + box.width / 2, y: box.top + box.height / 2};
+          });
+          mark = hits[nearestIndex(centres, ev.clientX, ev.clientY)] || mark;
+        }
+        text = mark.getAttribute("data-tip");
+      }
+      if (text === null) {
         tip.hidden = true;
         return;
       }
-      if (mark.matches("circle.hit") && mark.parentNode) {
-        const hits = Array.from(mark.parentNode.querySelectorAll("circle.hit"));
-        const centres = hits.map(h => {
-          const box = h.getBoundingClientRect();
-          return {x: box.left + box.width / 2, y: box.top + box.height / 2};
-        });
-        mark = hits[nearestIndex(centres, ev.clientX, ev.clientY)] || mark;
-      }
-      tip.textContent = mark.getAttribute("data-tip");
+      tip.textContent = text;
       tip.hidden = false;
       const left = Math.min(ev.clientX + 14, window.innerWidth - tip.offsetWidth - 6);
       const top = ev.clientY - tip.offsetHeight - 12;

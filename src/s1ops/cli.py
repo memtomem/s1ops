@@ -1515,6 +1515,9 @@ def _cmd_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+SHEET_HOSTS = ("127.0.0.1", "localhost")
+
+
 def _cmd_web(args: argparse.Namespace) -> int:
     if not Path(args.workspace).is_dir():
         raise CliError(f"workspace directory not found: {args.workspace}")
@@ -1523,7 +1526,14 @@ def _cmd_web(args: argparse.Namespace) -> int:
 
     from s1ops.web.app import create_app
 
-    app = create_app(workspace_dir=args.workspace)
+    if args.sheet is not None:
+        # The sheet holds state text, which `/api/sheet` serves to loopback requests only; any other
+        # address would start a server whose Review view refuses every request.
+        if args.host not in SHEET_HOSTS:
+            raise CliError(f"--sheet serves state text to this computer only: --host must be {' or '.join(SHEET_HOSTS)}, not {args.host!r}")
+        if not stat.S_ISREG(os.stat(args.sheet).st_mode):
+            raise CliError(f"review sheet is not a regular file: {args.sheet} (the workbench reads it again on every request)")
+    app = create_app(workspace_dir=args.workspace, sheet_path=args.sheet)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
@@ -1932,6 +1942,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_web.add_argument("--workspace", default=".", help="directory holding records.jsonl, fits.json, policy.json, ...")
     p_web.add_argument("--host", default="127.0.0.1", help="bind address")
     p_web.add_argument("--port", type=int, default=8765, help="bind port")
+    p_web.add_argument(
+        "--sheet",
+        default=None,
+        help="review sheet from `s1 labelaudit sheet` to answer in the Review view; it holds state text, so it is served "
+        "to this computer only (--host 127.0.0.1 or localhost), and never looked for in the workspace",
+    )
     p_web.set_defaults(func=_cmd_web)
 
     return parser

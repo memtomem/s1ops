@@ -20,7 +20,13 @@ from s1ops.improve.slices import wilson
 
 EPS = 1e-6
 SHEET_TITLE = "Label blind review"
+SHEET_INSTRUCTION = ("Choose one answer for each item: ", ". Write it after `Answer:`.")
+"""What the line under a sheet's title says before and after its options, which it joins with `", "`."""
+# What sheets printed by s1ops 0.6.0 and earlier say (e072369 made them English).
+_OLD_SHEET_TITLE = "라벨 블라인드 재검수"
+_OLD_SHEET_INSTRUCTION = ("각 항목의 올바른 답을 하나 고르세요: ", ". `답:` 뒤에 적어 주세요.")
 ANSWER_RE = re.compile(r"^## (\d+)[ \t]*\n(.*?)(?=^## \d+[ \t]*$|\Z)", re.M | re.S)
+_ITEM_HEADING = re.compile(r"^## \d+[ \t]*$", re.M)
 
 FitKey = tuple[str, str | None]
 Identity = tuple[str | None, str]
@@ -337,7 +343,7 @@ def _render_sheet(
     lines = [
         f"# {SHEET_TITLE}",
         "",
-        f"Choose one answer for each item: {', '.join(options)}. Write it after `Answer:`.",
+        f"{SHEET_INSTRUCTION[0]}{', '.join(options)}{SHEET_INSTRUCTION[1]}",
         "",
         *header,
     ]
@@ -400,6 +406,11 @@ def build_sheet(
     try:
         check_sheet_records(eligible)
         chosen = sheet_options(eligible, options)
+        joined = [o for o in chosen if ", " in o]
+        if joined:
+            # `read_sheet` splits the instruction line back into the options; `patch` and `pull` take
+            # the options from the key or the records, so only a sheet refuses this.
+            raise ValueError(f"option {joined[0]!r} cannot be put on a sheet: its instruction line joins the options with ', '")
     except ValueError as e:
         raise SheetInputError(str(e)) from None
     if question is not None:
@@ -422,20 +433,159 @@ def build_sheet(
 ANSWER_MARKER = re.compile(r"^(?:Answer:|답:)", re.M)
 
 
+@dataclass(frozen=True)
+class _Section:
+    """One `## <n>` section: `n` as written, its body's span, and every answer marker in the body."""
+
+    n: str
+    start: int
+    end: int
+    markers: tuple[re.Match, ...]
+
+
+def _sections(form: str) -> list[_Section]:
+    """The answer sections both sheet readers see: `parse_answers` and `read_sheet` cannot disagree on
+    where an item or its answer is. A marker counts only at a line start, so a quoted `> Answer:` in a
+    state does not."""
+    return [
+        _Section(m.group(1), m.start(2), m.end(2), tuple(ANSWER_MARKER.finditer(form, m.start(2), m.end(2))))
+        for m in ANSWER_RE.finditer(form)
+    ]
+
+
 def parse_answers(form: str, options: Sequence[str]) -> dict[str, str]:
     allowed = set(options)
     out: dict[str, str] = {}
-    for n, body in ANSWER_RE.findall(form):
-        parts = ANSWER_MARKER.split(body)
-        if len(parts) != 2:
+    for sec in _sections(form):
+        n = sec.n
+        if len(sec.markers) != 1:
             raise ValueError(f"item {n}: expected one line starting with Answer:")
-        answer = " ".join(parts[1].split())
+        given = form[sec.markers[0].end() : sec.end]
+        answer = " ".join(given.split())
         if answer not in allowed:
-            raise ValueError(f"item {n}: answer {parts[1].strip()!r} is not one of {sorted(allowed)}")
+            raise ValueError(f"item {n}: answer {given.strip()!r} is not one of {sorted(allowed)}")
         if n in out:
             raise ValueError(f"item {n} is answered more than once; keep one `## {n}` section")
         out[n] = answer
     return out
+
+
+class SheetFormatError(ValueError):
+    """`read_sheet` cannot read a review sheet in the form `s1 labelaudit sheet` writes. The message
+    names an item number or a kind of line, never the sheet's text."""
+
+
+@dataclass(frozen=True)
+class SheetItem:
+    n: int
+    state: str
+    answer: str | None
+
+
+@dataclass(frozen=True)
+class SheetForm:
+    """A review sheet as the web workbench answers it. `pieces` is the sheet cut where each item's
+    answer goes, the answers taken out (N items, N+1 pieces, each but the last ending with the marker
+    and one space), so `fill` writes answers into the sheet without rendering it again."""
+
+    question_id: str | None
+    header: str
+    options: tuple[str, ...]
+    items: tuple[SheetItem, ...]
+    pieces: tuple[str, ...]
+
+    def fill(self, answers: Mapping[int, str | None]) -> str:
+        """The sheet with `answers` by item number written in, `None` clearing one; an item not given
+        keeps the sheet's own answer. `fill({})` is the sheet."""
+        for k, v in answers.items():
+            if isinstance(k, bool) or not isinstance(k, int) or not 1 <= k <= len(self.items):
+                raise ValueError(f"the sheet has no item {k!r}")
+            if v is not None and v not in self.options:
+                raise ValueError(f"item {k}: the answer is not one of the sheet's options")
+        out = [self.pieces[0]]
+        for item, piece in zip(self.items, self.pieces[1:]):
+            answer = answers[item.n] if item.n in answers else item.answer
+            out += [answer or "", piece]
+        return "".join(out)
+
+
+def _first_lines(form: str, count: int) -> list[tuple[int, str]]:
+    """The first `count` non-blank lines as (offset after the line, the line without trailing spaces)."""
+    out, pos = [], 0
+    for line in form.split("\n"):
+        pos += len(line) + 1
+        if line.strip():
+            out.append((pos, line.rstrip(" \t")))
+            if len(out) == count:
+                break
+    return out
+
+
+def _unquoted(text: str) -> str:
+    """A state as `quote` wrote it: the blank lines around the quoted block dropped first, so a
+    state's own empty first or last line (`> `) is kept."""
+    lines = text.split("\n")
+    while lines and not lines[0].strip(" \t"):
+        lines.pop(0)
+    while lines and not lines[-1].strip(" \t"):
+        lines.pop()
+    return "\n".join(line[2:] if line.startswith("> ") else "" if line == ">" else line for line in lines)
+
+
+def read_sheet(form: str) -> SheetForm:
+    """Read a review sheet in the form `s1 labelaudit sheet` writes it (0.6.0's Korean one too), for the
+    web workbench to answer: the title, the instruction line naming the options, items `## 1` .. `## N`
+    in order, and under each one marker line that says `Answer: ` with nothing or one option after it
+    and nothing below it. Anything else is `SheetFormatError` naming the item; `s1 labelaudit estimate`
+    still scores a sheet edited by hand."""
+    first = _first_lines(form, 2)
+    titles = {f"# {SHEET_TITLE}": SHEET_INSTRUCTION, f"# {_OLD_SHEET_TITLE}": _OLD_SHEET_INSTRUCTION}
+    if not first or first[0][1] not in titles:
+        raise SheetFormatError(f"the first line is not the title `# {SHEET_TITLE}`")
+    prefix, suffix = titles[first[0][1]]
+    if len(first) < 2 or not (first[1][1].startswith(prefix) and first[1][1].endswith(suffix)) or len(first[1][1]) < len(prefix) + len(suffix):
+        raise SheetFormatError("the line after the title is not the instruction line naming the options")
+    header_start, line = first[1]
+    options = line[len(prefix) : len(line) - len(suffix)].split(", ")
+    if any(not o or _normalized(o) != o for o in options) or len(set(options)) != len(options):
+        raise SheetFormatError("the instruction line's options cannot be read: one is empty, repeated, or has extra spaces")
+    sections = _sections(form)
+    if not sections:
+        raise SheetFormatError("the sheet has no item")
+    starts = {m.start() for m in ANSWER_RE.finditer(form)}
+    for heading in _ITEM_HEADING.finditer(form):
+        if heading.start() not in starts:
+            line_no = form.count("\n", 0, heading.start()) + 1
+            raise SheetFormatError(f"line {line_no} is an item heading that opens no item (one at the end of the file needs a line after it)")
+    first_heading = min(starts)
+    if first_heading < header_start:
+        raise SheetFormatError("the line after the title is not the instruction line naming the options")
+    items, pieces, pos = [], [], 0
+    for i, sec in enumerate(sections, 1):
+        if sec.n != str(i):
+            raise SheetFormatError(f"the heading of item {i} is not `## {i}`: items are numbered 1, 2, ... in order")
+        if len(sec.markers) != 1:
+            raise SheetFormatError(f"item {i}: expected one line starting with Answer:")
+        marker = sec.markers[0]
+        answer_line, _, below = form[marker.end() : sec.end].partition("\n")
+        given = answer_line[1:]
+        if not answer_line.startswith(" ") or (given and given not in options) or below.strip(" \t\n"):
+            raise SheetFormatError(
+                f'item {i}: the web reads an answer only as "Answer: <option>" on its own line; '
+                "fix the item by hand, or score the sheet with s1 labelaudit estimate"
+            )
+        cut = marker.end() + 1
+        pieces.append(form[pos:cut])
+        pos = cut + len(given)
+        items.append(SheetItem(i, _unquoted(form[sec.start : marker.start()]), given or None))
+    pieces.append(form[pos:])
+    return SheetForm(
+        question_id=sheet_question_id(form),
+        header=form[header_start:first_heading].strip("\n"),
+        options=tuple(options),
+        items=tuple(items),
+        pieces=tuple(pieces),
+    )
 
 
 class _KeyItem(BaseModel):

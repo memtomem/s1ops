@@ -6,7 +6,9 @@ real API responses whose strings, and an extra key in every object, are all host
 
 from __future__ import annotations
 
+import contextlib
 import copy
+import io
 import json
 import re
 import shutil
@@ -14,6 +16,7 @@ import shutil
 import pytest
 from fastapi.testclient import TestClient
 
+from s1ops.cli import main as cli_main
 from s1ops.contracts.schemas import save_policies
 from s1ops.demo import generate_workspace
 from s1ops.eval.compare import compare_records
@@ -197,6 +200,18 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
     r2_manifest.write_text(r2_manifest.read_text(encoding="utf-8") + "\n", encoding="utf-8")
     (ck / "trainrun-r2.json").rename(root / "trainrun-r2.json")
     checkpoints = get(TestClient(create_app(workspace_dir=ck, training_run_paths=[root / "trainrun-r2.json"])), "/api/checkpoints")
+    # The review sheet README's walkthrough writes, read by a loopback client (the route refuses the
+    # test client's own address and Host).
+    sheet, key = root / "blind_sheet.md", root / "blind_key.json"
+    with contextlib.redirect_stdout(io.StringIO()):
+        assert cli_main(["labelaudit", "sheet", ws["records"], "--states", ws["states_local"], "--questions", ws["questions"],
+                         "-o", str(sheet), "-k", str(key), "--top", "3", "--controls", "3"]) == 0
+    loopback = TestClient(create_app(workspace_dir=root / "w", sheet_path=sheet), client=("127.0.0.1", 50000), base_url="http://127.0.0.1:8765")
+    review = get(loopback, "/api/sheet")
+    # Item 1 answered in the file, and no question named (a 0.6.0 sheet): both lines are rendered.
+    review_answered = copy.deepcopy(review)
+    review_answered["sheet"]["items"][0]["answer"] = review_answered["sheet"]["options"][0]
+    review_answered["sheet"]["question_id"] = None
     audit_filled = get(client, "/api/audit")
     for g in audit_filled["groups"]:
         g["warnings"] = g["warnings"] or ["a warning"]
@@ -219,6 +234,8 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         "drift-filled": {"/api/drift/histograms": drift_filled},
         "checkpoints": {"/api/checkpoints": checkpoints},
         "checkpoints-demo": {"/api/checkpoints": get(client, "/api/checkpoints")},
+        "review": {"/api/sheet": review},
+        "review-answered": {"/api/sheet": review_answered},
     }
 
 
@@ -255,6 +272,8 @@ LOADERS = {
     "drift-filled": "loadDrift",
     "checkpoints": "loadCheckpoints",
     "checkpoints-demo": "loadCheckpoints",
+    "review": "loadReview",
+    "review-answered": "loadReview",
 }
 
 
@@ -340,6 +359,13 @@ def _mutated(old: str, new: str) -> str:
         pytest.param("checkpoints", 'text-anchor="middle">${esc(ax.yName)}</text>', 'text-anchor="middle">${ax.yName}</text>', id="checkpoint-metric-name"),
         pytest.param("checkpoints", "names ${esc(p.trainrun_id)}, and", "names ${p.trainrun_id}, and", id="checkpoint-policy-run"),
         pytest.param("checkpoints-demo", "${esc(cellText(c, r))}</td>", "${cellText(c, r)}</td>", id="checkpoint-table-cell"),
+        # The review view: an item's state text, the sheet's header and file name, an option's label
+        # (a radio names its option by position), and the shown answer (only in a sheet that has one).
+        pytest.param("review", '<pre class="review-state">\\n${esc(it.state)}</pre>', '<pre class="review-state">\\n${it.state}</pre>', id="review-state"),
+        pytest.param("review", '<pre class="review-state">\\n${esc(sheet.header)}</pre>', '<pre class="review-state">\\n${sheet.header}</pre>', id="review-header"),
+        pytest.param("review", "Blind label review: ${esc(sheet.file_name)}</h3>", "Blind label review: ${sheet.file_name}</h3>", id="review-file-name"),
+        pytest.param("review", '` : ""}${esc(opt)}</label>`', '` : ""}${opt}</label>`', id="review-option-label"),
+        pytest.param("review-answered", "Your answer: <strong>${esc(answer)}</strong>", "Your answer: <strong>${answer}</strong>", id="review-answer"),
     ],
 )
 def test_the_hostile_check_catches_a_dropped_esc(payloads, case, old, new) -> None:
@@ -394,13 +420,14 @@ CONTAINERS = {
     "loadCompare": "compare-container",
     "loadDrift": "drift-container",
     "loadCheckpoints": "checkpoints-container",
+    "loadReview": "review-container",
 }
 
 
 def test_the_error_containers_are_the_pages_own() -> None:
     # The views' table in the page (`viewDefs`), which the shell runs each loader from.
     defs = re.findall(r'^        \w+: \{loader: (\w+), container: "([^"]+)"', _script(), re.M)
-    assert len(defs) == 8
+    assert len(defs) == 9
     assert CONTAINERS == dict(defs)
     assert set(CONTAINERS) == set(LOADERS.values())
 

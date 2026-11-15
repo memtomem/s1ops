@@ -551,4 +551,4 @@ def test_the_view_has_its_tab_and_pane() -> None:
     html = (Path(__file__).parent.parent / "src" / "s1ops" / "web" / "static" / "index.html").read_text(encoding="utf-8")
     assert 'id="nav-checkpoints" data-view="checkpoints" aria-controls="tab-checkpoints"' in html
     assert '<section id="tab-checkpoints" class="tab-pane" role="tabpanel" aria-labelledby="nav-checkpoints">' in html
-    assert html.count('role="tab"') == 8
+    assert html.count('role="tab"') == 9

@@ -993,8 +993,11 @@
 
     // A line chart's hover targets: one transparent column per point ({x, tip} in pixels) from
     // `top` to `bottom`, split halfway to its neighbours, so the pointer reads the nearest point in
-    // x and no target lies under another. Points drawn at one x are one column naming each.
-    function svgHitColumns(points, top, bottom) {
+    // x and no target lies under another. Points drawn at one x are one column naming each. With
+    // `left` and `right` (the plot's sides) no column reaches past them: the outermost ones would
+    // otherwise light up over the axis labels or the margin.
+    function svgHitColumns(points, top, bottom, left, right) {
+      const lo = Number.isFinite(left) ? left : -Infinity, hi = Number.isFinite(right) ? right : Infinity;
       const cols = [];
       points.filter(p => Number.isFinite(p.x)).sort((a, b) => a.x - b.x).forEach(p => {
         const last = cols[cols.length - 1];
@@ -1004,9 +1007,9 @@
       return cols.map((c, i) => {
         const before = i ? (c.x - cols[i - 1].x) / 2 : null;
         const after = i < cols.length - 1 ? (cols[i + 1].x - c.x) / 2 : null;
-        const left = c.x - (before === null ? (after === null ? 6 : after) : before);
-        const right = c.x + (after === null ? (before === null ? 6 : before) : after);
-        return `<rect class="hit col" x="${px(left)}" y="${px(top)}" width="${px(Math.max(right - left, 1))}" height="${px(bottom - top)}" data-tip="${esc(c.tip)}" />`;
+        const x0 = Math.min(hi, Math.max(lo, c.x - (before === null ? (after === null ? 6 : after) : before)));
+        const x1 = Math.min(hi, Math.max(lo, c.x + (after === null ? (before === null ? 6 : before) : after)));
+        return `<rect class="hit col" x="${px(x0)}" y="${px(top)}" width="${px(Math.max(x1 - x0, 1))}" height="${px(bottom - top)}" data-tip="${esc(c.tip)}" />`;
       }).join("");
     }
 
@@ -1791,7 +1794,7 @@
         body += svgDots([{x: tx, y: y(finite(tuned[key]))}], "mark", "diamond");
       }
       const hover = thinned(curve.rows, curveHoverLimit(), curve.tuned);
-      return body + svgHitColumns(hover.map(p => ({x: f.x(finite(p.coverage)), tip: curveTip(p)})), f.top, f.bottom);
+      return body + svgHitColumns(hover.map(p => ({x: f.x(finite(p.coverage)), tip: curveTip(p)})), f.top, f.bottom, f.left, f.right);
     }
 
     // Error rate among accepted records against coverage, shaded up to the Clopper-Pearson bound,
@@ -2646,15 +2649,24 @@
       tip.style.top = (top < 6 ? ev.clientY + 18 : top) + "px";
     }
 
+    // A number into its input, unless the input already names that number: "0.0" names 0, and
+    // rewriting it as "0" under the viewer's hands turns the 0.05 being typed into 5. A field that
+    // names another number (a clamped one, a link's) is rewritten.
+    function setNumberInput(id, v) {
+      const el = document.getElementById(id);
+      if (String(el.value).trim() !== "" && Number(el.value) === v) return;
+      el.value = String(v);
+    }
+
     // The simulator's inputs from the state, before its loader reads them. The group picker is set
     // only for a resolved group or none; an unresolved one keeps its own entry (syncFilterBar).
     function applyPolicyInputs(st) {
       document.getElementById("inp-dist").value = st.dist;
-      document.getElementById("inp-tau-low").value = String(st.lo);
-      document.getElementById("inp-tau-high").value = String(st.hi);
-      document.getElementById("inp-cost-s1").value = String(st.cs1);
-      document.getElementById("inp-cost-s2").value = String(st.cs2);
-      document.getElementById("inp-err-budget").value = String(st.budget);
+      setNumberInput("inp-tau-low", st.lo);
+      setNumberInput("inp-tau-high", st.hi);
+      setNumberInput("inp-cost-s1", st.cs1);
+      setNumberInput("inp-cost-s2", st.cs2);
+      setNumberInput("inp-err-budget", st.budget);
       const resolved = resolveGroup(st, GROUPS, groupsState);
       if (resolved.status === "ok") document.getElementById("inp-group").value = String(resolved.index);
       if (resolved.status === "none") document.getElementById("inp-group").value = "";

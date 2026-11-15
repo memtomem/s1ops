@@ -164,6 +164,23 @@ def test_hover_columns_tile_the_plot_without_overlap() -> None:
     merged = _js('svgHitColumns([{x: 10, tip: "a"}, {x: 10.01, tip: "b"}, {x: 30, tip: "c"}], 0, 10)')
     assert merged.count("<rect") == 2 and 'data-tip="a\n\nb"' in merged
     assert "<img" not in _js('svgHitColumns([{x: 1, tip: "<img src=x>"}], 0, 1)')
+    # With the plot's sides given, the outermost columns stop at them (two points at coverage 0.5
+    # and 1.0 would otherwise light up the margin right of the plot, and the axis labels on the left).
+    clamped = _js('svgHitColumns([{x: 100, tip: "a"}, {x: 400, tip: "b"}], 0, 10, 70, 400)')
+    assert re.findall(r'x="([\d.]+)" y="0.0" width="([\d.]+)"', clamped) == [("70.0", "180.0"), ("250.0", "150.0")]
+    alone = _js('svgHitColumns([{x: 400, tip: "a"}], 0, 10, 70, 400)')
+    assert 'x="394.0" y="0.0" width="6.0"' in alone
+
+
+@needs_node
+def test_the_curves_hover_columns_stay_inside_the_plot(tmp_path) -> None:
+    rows = _rows((50, {"a": 0.9, "b": 0.1}, "a"), (29, {"a": 0.8, "b": 0.2}, "b"), (21, {"a": 0.8, "b": 0.2}, "a"))
+    d = _get(TestClient(create_app(records_path=_write(tmp_path / "r.jsonl", rows))), use_calib=False)
+    assert [p["coverage"] for p in d["threshold_curve"]] == [0.5, 1.0]
+    frame = _js("(f => [f.left, f.right])(curveFrame())")
+    for svg in _charts(_view(d)["html"]):
+        edges = [(float(x), float(x) + float(w)) for x, w in re.findall(r'<rect class="hit col" x="([\d.]+)" y="[\d.]+" width="([\d.]+)"', svg)]
+        assert len(edges) == 2 and min(a for a, _ in edges) >= frame[0] and max(b for _, b in edges) <= frame[1]
 
 
 @needs_node
@@ -410,6 +427,79 @@ def test_a_long_curve_thins_only_its_hover_targets(payloads) -> None:
     assert len(re.search(r'<polyline class="line ser-1" points="([^"]+)"', first).group(1).split(" ")) == 1000
     assert "Hover reads 400 evenly spaced points and the tuned one; the table below holds all 1000." in html
     assert len(_tuned_marks(html)) == 2
+
+
+# --- typing a number -----------------------------------------------------------------------------------
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "held, value, after",
+    [("0.0", 0, "0.0"), ("0.10", 0.1, "0.10"), ("1e-5", 0.00001, "1e-5"), ("0.00005", 0.00005, "0.00005"),
+     ("2", 1, "1"), ("", 0.5, "0.5"), (" ", 0, "0"), ("abc", 0.25, "0.25"), ("0.3", 0.25, "0.25")],
+)
+def test_an_input_that_names_the_number_is_left_as_typed(held, value, after) -> None:
+    js = f"const box = {{value: {json.dumps(held)}}}; const document = {{getElementById: () => box}};"
+    assert _js(f"(setNumberInput('x', {value}), box.value)", js) == after
+
+
+TYPING = """
+let STATE, GROUPS = [], groupsState = "ok", groupsError = "", generation = 0, loadedSig = {}, viewData = {}, TSTATE = {}, policySeq = 0;
+const els = {};
+const defaults = {"inp-dist": "", "inp-tau-low": "0.25", "inp-tau-high": "0.75", "inp-cost-s1": "0.00004", "inp-cost-s2": "0.004", "inp-err-budget": "0.1", "inp-group": ""};
+const el = id => (els[id] ??= {value: defaults[id] ?? "", textContent: "", innerHTML: "", style: {}});
+const document = {getElementById: el, querySelectorAll: () => []};
+const location = {pathname: "/", search: ""};
+const replaced = [];
+const history = {replaceState: (a, b, url) => replaced.push(url)};
+"""
+
+
+def _typed(field: str, text: str, functions: str | None = None) -> dict:
+    """Type `text` into a simulator input a key at a time, running what the page's `input` listener
+    runs after each key; return the field after each key, the final state and hash."""
+    key = {"inp-cost-s1": "cs1", "inp-cost-s2": "cs2", "inp-err-budget": "budget"}[field]
+    js = f"""
+{TYPING}
+{functions if functions is not None else _all_functions()}
+STATE = {{...defaultState(), view: "policy"}};
+const steps = [];
+el({json.dumps(field)}).value = "";
+for (const ch of {json.dumps(text)}) {{
+  el({json.dumps(field)}).value += ch;
+  keepPolicyInputs();
+  steps.push(el({json.dumps(field)}).value);
+}}
+process.stdout.write(JSON.stringify({{steps, value: STATE[{json.dumps(key)}], hash: replaced[replaced.length - 1]}}));
+"""
+    return _node(js)
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "field, text, value, key",
+    [("inp-cost-s1", "0.00005", 0.00005, "cs1"), ("inp-cost-s2", "0.01", 0.01, "cs2"),
+     ("inp-err-budget", "0.05", 0.05, "budget"), ("inp-err-budget", "0.105", 0.105, "budget")],
+)
+def test_a_decimal_typed_key_by_key_is_the_number_requested(field, text, value, key) -> None:
+    # The state follows every key ("0.0" is 0 on the way to 0.05), and the field keeps what was typed.
+    out = _typed(field, text)
+    assert out["steps"] == [text[: i + 1] for i in range(len(text))]
+    assert out["value"] == value and out["hash"] == f"#/policy?{key}={text}"
+
+
+@needs_node
+def test_a_number_out_of_range_is_still_rewritten_as_clamped() -> None:
+    out = _typed("inp-err-budget", "25")
+    assert out["steps"] == ["1", "1"] and out["value"] == 1  # "2" is clamped to 1, then "15" to 1
+
+
+@needs_node
+def test_the_typing_check_catches_a_field_rewritten_after_every_key() -> None:
+    # As the page was: every valid key rewrote the field from the state, so 0.05 ended as 5.
+    functions = _mutated('      if (String(el.value).trim() !== "" && Number(el.value) === v) return;\n', "")
+    out = _typed("inp-cost-s1", "0.00005", functions=functions)
+    assert out["steps"][-1] == "5" and out["value"] == 5
 
 
 # --- bands -------------------------------------------------------------------------------------------

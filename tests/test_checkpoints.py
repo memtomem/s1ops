@@ -289,6 +289,29 @@ def test_paths_given_to_create_app_replace_the_search(ws: Path, tmp_path: Path) 
     assert d["display"]["files"]["training_manifests"] == [str(elsewhere / "m.json")]
 
 
+def test_the_examples_folder_is_searched_when_the_workspace_has_none(ws: Path, tmp_path: Path) -> None:
+    # The fallback every other workspace file has (`_resolve`), per kind of file.
+    root = tmp_path / "repo"
+    (root / "examples").mkdir(parents=True)
+    os.rename(ws, root / "examples" / "data")
+    d = _get(root)
+    assert d["summary"] == {"n_checkpoints": 3, "n_manifests": 2, "n_training_runs": 2}
+    os.rename(root / "examples" / "data" / "trainrun.json", root / "trainrun.json")
+    d = _get(root)
+    assert d["display"]["files"]["training_runs"] == [str(root / "trainrun.json")] and d["summary"]["n_manifests"] == 2
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root lists any directory")
+def test_a_workspace_that_cannot_be_listed_is_400_naming_it(ws: Path) -> None:
+    client = _refused(ws)
+    os.chmod(ws, 0o300)
+    try:
+        r = client.get("/api/checkpoints")
+    finally:
+        os.chmod(ws, 0o700)
+    assert r.status_code == 400 and r.json()["detail"].startswith(f"{ws}: cannot read: ")
+
+
 def test_one_records_file_under_two_roles_is_read_once(ws: Path) -> None:
     d = _get(ws, compare_records_path=ws / "records.jsonl")
     assert [Path(f).name for f in d["display"]["files"]["records"]] == ["records.jsonl"]

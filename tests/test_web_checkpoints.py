@@ -248,6 +248,8 @@ def test_a_run_without_steps_says_so_and_a_model_without_a_run_draws_nothing(pay
     cards = _cards(_render(d))
     assert "The run record holds no step metrics" in cards[R1] and _svgs(cards[R1]) == {}
     assert _svgs(cards[BASELINE]) == {} and "no step metrics" not in cards[BASELINE]
+    # The two long tables scroll inside the card (97 rows of settings in a real record).
+    assert cards[R2].count('<div class="panel-block scroll-table">') == 2 and '<div class="panel-block scroll-table">' not in cards[BASELINE]
     assert f'data-table="checkpoints:steps:{BASELINE}"' not in cards[BASELINE] and f'data-table="checkpoints:run:{BASELINE}"' not in cards[BASELINE]
 
 

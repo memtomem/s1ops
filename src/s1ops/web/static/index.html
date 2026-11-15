@@ -3337,7 +3337,7 @@
               </div>
             </div>
             <div class="panel-block">${stepChartsHtml(c, ids.steps)}</div>
-            ${tables.map(t => `<div class="panel-block${t.spec.id.startsWith("checkpoints:steps:") ? " scroll-table" : ""}">${tableHtml(t.domId ? {...t.spec, domId: t.domId} : t.spec, t.rows, tstate)}</div>`).join("")}
+            ${tables.map(t => `<div class="panel-block${/^checkpoints:(steps|run):/.test(t.spec.id) ? " scroll-table" : ""}">${tableHtml(t.domId ? {...t.spec, domId: t.domId} : t.spec, t.rows, tstate)}</div>`).join("")}
           </div>`;
     }
 

@@ -153,3 +153,11 @@ def test_file_safe(name, safe) -> None:
 def test_table_state_ignores_inherited_and_malformed_entries() -> None:
     assert _js('tableState({}, "constructor")') == {"sort": "", "dir": "asc", "q": ""}
     assert _js('tableState({x: {sort: 3, dir: "up", q: null}}, "x")') == {"sort": "", "dir": "asc", "q": ""}
+
+
+def test_the_export_buttons_are_named_for_their_table() -> None:
+    spec = {"id": "t", "caption": "Bins <b>", "file": "f", "columns": [{"key": "a", "name": "A", "kind": "num"}]}
+    html = _js(f"tableHtml({json.dumps(spec)}, [{{a: 1}}], {{}})")
+    # The visible text leads the name, and the caption is escaped in it.
+    assert 'data-act="tk-csv" data-table="t" aria-label="CSV: Bins &lt;b&gt;">CSV</button>' in html
+    assert 'data-act="tk-json" data-table="t" aria-label="JSON: Bins &lt;b&gt;">JSON</button>' in html

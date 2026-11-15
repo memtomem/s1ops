@@ -19,7 +19,7 @@ from s1ops.eval.metrics import reliability, reliability_counts
 from s1ops.improve.slices import wilson
 from s1ops.web.app import create_app
 from tests.test_web_harness import ESCAPED, HOSTILE, _hostile, _mutated
-from tests.test_web_render import _all_functions, _node
+from tests.test_web_render import _all_functions, _declarations, _node
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node is needed to run the page's functions")
 
@@ -418,6 +418,34 @@ def test_each_chart_names_the_table_holding_its_values(payloads) -> None:
     assert len(ids) == len(set(ids)) == 2
     # No mark takes focus: the table is the keyboard path.
     assert "tabindex" not in html
+
+
+UNRENDERABLE_STEPS = """
+  // A response the renderer throws on (a group without its metrics): the error card, nothing kept.
+  runView("calib");
+  pending.shift().resolve({groups: [{...payload.groups[0], before: null}]});
+  await tick(); await tick();
+  out.error = el("calib-container").innerHTML.includes("ERROR</span>");
+  out.kept = "calib" in viewData;
+  out.tables = Object.keys(currentTables()).length;
+"""
+
+
+@needs_node
+def test_a_response_the_view_cannot_render_is_not_kept(payloads) -> None:
+    assert _shell_run(UNRENDERABLE_STEPS, payloads["noul"]) == {"error": True, "kept": False, "tables": 0}
+    # Kept before rendering, it would stay behind the error card.
+    functions = _mutated(
+        "      el.innerHTML = renderCalib(data, ctx.opts ? ctx.opts() : {});\n      if (ctx.keep) ctx.keep(data);\n",
+        "      if (ctx.keep) ctx.keep(data);\n      el.innerHTML = renderCalib(data, ctx.opts ? ctx.opts() : {});\n",
+    )
+    assert _shell_run(UNRENDERABLE_STEPS, payloads["noul"], functions=functions)["kept"] is True
+
+
+@needs_node
+def test_the_group_list_is_kept_once_it_is_on_screen() -> None:
+    script = "\n".join(src for name, src in _declarations() if name == "loadAudit")
+    assert script.index("el.innerHTML = renderCalib(kept") < script.index("ctx.keep(kept)")
 
 
 REFRESH_STEPS = """

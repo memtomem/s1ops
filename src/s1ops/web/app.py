@@ -11,6 +11,7 @@ Serves a 6-tab interactive System 1 LLMOps console on `127.0.0.1`:
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import stat
@@ -55,6 +56,10 @@ from s1ops.runtime.routing import RoutingInputError
 STATIC_DIR = Path(__file__).parent / "static"
 SLICE_MIN_N = 10
 """Slices with fewer items are reported but never answerable (`/api/slices`, `s1 slice answerable --min-n`'s default is 10 too)."""
+CURVE_COST_ERROR = float(inspect.signature(threshold_curve).parameters["c_error"].default)
+CURVE_DELEGATE_ACCURACY = float(inspect.signature(threshold_curve).parameters["delegate_accuracy"].default)
+"""`threshold_curve`'s own error cost and System 2 accuracy: the simulator passes them and serves them
+(`display.costs`), so the page states the numbers `cost_per_1k_usd` was computed with."""
 
 def _load_or_400(what: str | Path, fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Run one input-reading or input-validation call; a malformed or unreadable input becomes
@@ -389,6 +394,8 @@ def create_app(
             correct,
             c_s1=cost_s1,
             c_delegate=cost_sys2,
+            c_error=CURVE_COST_ERROR,
+            delegate_accuracy=CURVE_DELEGATE_ACCURACY,
             always_escalated=escalated,
         )
         out: dict[str, Any] = {
@@ -408,6 +415,17 @@ def create_app(
             "recommended_band_under_35pct_esc": None,
             "pareto_frontier": None,
             "threshold_curve": curve,
+            # For the page only: the costs every number above was computed with, and (noul) every
+            # band the sweep evaluated, of which `pareto_frontier` is the frontier.
+            "display": {
+                "costs": {
+                    "cost_s1": cost_s1,
+                    "cost_sys2": cost_sys2,
+                    "c_error": CURVE_COST_ERROR,
+                    "delegate_accuracy": CURVE_DELEGATE_ACCURACY,
+                },
+                "swept_bands": None,
+            },
         }
         if chosen_grp.primitive != "noul":
             # An escalation band is a noul rule (`policy tune` compiles none for choice or score):
@@ -438,6 +456,7 @@ def create_app(
         out["active_band"] = active_res.as_row() if active_res else None
         out["recommended_band_under_35pct_esc"] = recommended.as_row() if recommended else None
         out["pareto_frontier"] = [r.as_row() for r in pareto(swept, metric="f1")]
+        out["display"]["swept_bands"] = [r.as_row() for r in swept]
         return out
 
     @app.get("/api/lint")

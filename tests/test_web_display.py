@@ -85,10 +85,12 @@ def _policy(payload: dict, *, lo: str = "0.25", hi: str = "0.75", moved: str | N
     js = f"""
 let policySeq = 0;
 let GROUPS = [];
+let viewData = {{}}, TSTATE = {{}};
 const els = {{}};
 const el = id => (els[id] ??= {{value: "", textContent: "", innerHTML: "", style: {{}}}});
 Object.assign(el("inp-tau-low"), {{value: {json.dumps(lo)}}});
 Object.assign(el("inp-tau-high"), {{value: {json.dumps(hi)}}});
+Object.assign(el("inp-cost-s1"), {{value: "0.00004"}});
 Object.assign(el("inp-cost-s2"), {{value: "0.004"}});
 Object.assign(el("inp-err-budget"), {{value: {json.dumps(budget)}}});
 Object.assign(el("inp-dist"), {{value: {json.dumps(dist)}}});
@@ -132,7 +134,7 @@ def test_a_handle_moved_past_the_other_pushes_it(noul, moved, lo, hi, expected) 
 
 def test_each_slider_has_one_input_listener_that_pushes_before_loading() -> None:
     script = HTML[HTML.index("<script>"):HTML.index("</script>")]
-    wiring = re.search(r'\["inp-tau-low", "inp-tau-high", "inp-cost-s2", "inp-err-budget"\]\.forEach\(id => \{.*?\n    \}\);', script, re.S).group(0)
+    wiring = re.search(r'\["inp-tau-low", "inp-tau-high", "inp-cost-s1", "inp-cost-s2", "inp-err-budget"\]\.forEach\(id => \{.*?\n    \}\);', script, re.S).group(0)
     assert wiring.index("pushBand(id)") < wiring.index("run(loadPolicy")
     assert wiring.count('addEventListener("input"') == 1
     # The page's one other input listener is the table kit's filter box, which never loads.

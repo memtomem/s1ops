@@ -66,13 +66,14 @@ def test_without_a_filter_the_simulator_opens_on_a_noul_group(ws) -> None:
 
 
 def test_the_noul_simulation_is_unchanged(ws) -> None:
-    # Same numbers as before the per-primitive split; only band_supported and distribution are new.
+    # Same numbers as before the per-primitive split; band_supported, distribution and the page's
+    # `display` are the additions.
     d = TestClient(create_app(workspace_dir=Path(ws["records"]).parent)).get(
         "/api/simulate-policy?tau_low=0.25&tau_high=0.75"
     ).json()
     assert set(d) == {
         "group", "distribution", "band_supported", "active_band", "tuned_threshold",
-        "recommended_band_under_35pct_esc", "pareto_frontier", "threshold_curve",
+        "recommended_band_under_35pct_esc", "pareto_frontier", "threshold_curve", "display",
     }
     # The demo's records all carry calib from one fit, so auto picks it, as the old default did.
     assert d["distribution"] == "calibrated"

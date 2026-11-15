@@ -54,7 +54,8 @@ def checkpoints_report(
     one run per checkpoint. `records` maps a records file's name to its records, in the order the
     report lists them. A checkpoint with a manifest or a run comes first; a model that only answered
     records follows, with no manifest: what it trained on is unknown here, so its counts of trained
-    items are `None`, never 0.
+    items are `None`, never 0. `n_trained_hits` counts distinct `(dataset, item_id)`, per group and
+    per checkpoint, so a checkpoint's count is not the sum of its groups' and never exceeds `n_trained`.
     """
     by_checkpoint: dict[str, list[tuple[TrainingManifest, str]]] = {}
     for manifest, sha256 in manifests:
@@ -91,6 +92,10 @@ def checkpoints_report(
                     "first_trained_hit": list(hits[0]) if hits else None,
                 }
             )
+        # Per checkpoint the hits are distinct items too: one answered under two questions, or in
+        # two files, is one item it trained on (the rule reads only the key's model).
+        answered = [item for items in groups.get(name, {}).values() for item in items]
+        checkpoint_hits = len(trained_hits(("", name, ""), answered, trained)) if known else None
         run = runs.get(name)
         run_row = None
         if run is not None:
@@ -122,7 +127,7 @@ def checkpoints_report(
                 "checkpoint": name,
                 "n_records": sum(g["n_records"] for g in group_rows),
                 "n_trained": len(trained[name]) if known else None,
-                "n_trained_hits": sum(g["n_trained_hits"] for g in group_rows) if known else None,
+                "n_trained_hits": checkpoint_hits,
                 "manifests": [_manifest_row(m, sha256) for m, sha256 in by_checkpoint.get(name, [])],
                 "run": run_row,
                 "groups": group_rows,

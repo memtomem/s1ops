@@ -2572,8 +2572,11 @@
     }
 
     // A view's own picker over the names its report holds (`label` and `allLabel` are the page's
-    // words), the chosen one selected.
+    // words), the chosen one selected. A chosen name the report does not hold gets an entry of its
+    // own, so the picker never shows "all" as chosen while a card says the name is missing, and
+    // choosing "all" is then a change.
     function pickerHtml(act, label, names, chosen, allLabel) {
+      const missing = chosen && !names.includes(chosen) ? `<option value="${esc(chosen)}" selected>Not found: ${esc(chosen)}</option>` : "";
       const options = names.map(name => {
         const selected = name === chosen ? " selected" : "";
         return `<option value="${esc(name)}"${selected}>${esc(name)}</option>`;
@@ -2582,7 +2585,7 @@
         <div class="controls">
           <div class="control-group">
             <label>${label}</label>
-            <select data-act="${act}" aria-label="${label}"><option value="">${allLabel} (${names.length})</option>${options}</select>
+            <select data-act="${act}" aria-label="${label}"><option value="">${allLabel} (${names.length})</option>${options}${missing}</select>
           </div>
         </div>`;
     }
@@ -3052,8 +3055,7 @@
         spec: {id: "checkpoints:all", caption: "Checkpoints and served models", file: "checkpoints", columns: [
           {key: "checkpoint", name: "Checkpoint", kind: "text"},
           {key: "show", name: "Show", kind: "button", act: "checkpoint-show", text: "Show", labelKey: "checkpoint", data: {ck: "checkpoint"}},
-          {key: "status", name: "Status", kind: "text", sortBy: "rank"},
-          {key: "rank", name: "rank", kind: "num", digits: 0, exportOnly: true},
+          {key: "status", name: "Status", kind: "text", sortBy: "rank", showOnly: true},
           {key: "n_records", name: "Answered records", kind: "num", digits: 0},
           {key: "n_trained_hits", name: "Items trained on, among them", kind: "num", digits: 0},
           {key: "n_trained", name: "Training set (items)", kind: "num", digits: 0},
@@ -3071,7 +3073,9 @@
     function checkpointGroupsTable(c) {
       const rows = (c.groups || []).map(g => ({
         checkpoint: c.checkpoint, file: baseName(g.file), path: g.file, question_id: g.question_id, primitive: g.primitive,
-        n_records: g.n_records, n_items: g.n_items, n_trained_hits: g.n_trained_hits, first_trained_hit: itemText(g.first_trained_hit),
+        n_records: g.n_records, n_items: g.n_items, n_trained_hits: g.n_trained_hits, first_trained_text: itemText(g.first_trained_hit),
+        first_trained_dataset: Array.isArray(g.first_trained_hit) ? g.first_trained_hit[0] : null,
+        first_trained_item_id: Array.isArray(g.first_trained_hit) ? g.first_trained_hit[1] : null,
       }));
       return {
         spec: {id: "checkpoints:groups:" + c.checkpoint, caption: "Answered records, by file and question", file: "checkpoint-records-" + fileSafe(c.checkpoint), columns: [
@@ -3083,7 +3087,9 @@
           {key: "n_records", name: "Records", kind: "num", digits: 0},
           {key: "n_items", name: "Items", kind: "num", digits: 0},
           {key: "n_trained_hits", name: "Items trained on", kind: "num", digits: 0},
-          {key: "first_trained_hit", name: "First trained item", kind: "text"},
+          {key: "first_trained_text", name: "First trained item", kind: "text", showOnly: true},
+          {key: "first_trained_dataset", name: "first_trained_dataset", kind: "text", exportOnly: true},
+          {key: "first_trained_item_id", name: "first_trained_item_id", kind: "text", exportOnly: true},
         ]},
         rows,
       };
@@ -3163,10 +3169,14 @@
       const rec = runRecord(c);
       const steps = Array.isArray(rec.steps) ? rec.steps : [];
       const metrics = stepMetrics(steps);
-      const ident = {checkpoint: c.checkpoint, trainrun_id: c.run ? c.run.trainrun_id : null};
+      // Only the identifying columns no metric is named as: a step without that metric must not
+      // show the identifier in the metric's column.
+      const identKeys = ["checkpoint", "trainrun_id"].filter(k => !metrics.includes(k));
+      const values = {checkpoint: c.checkpoint, trainrun_id: c.run ? c.run.trainrun_id : null};
+      const ident = Object.fromEntries(identKeys.map(k => [k, values[k]]));
       return {
         spec: {id: "checkpoints:steps:" + c.checkpoint, caption: "Recorded steps", file: "checkpoint-steps-" + fileSafe(c.checkpoint), columns: [
-          ...["checkpoint", "trainrun_id"].filter(k => !metrics.includes(k)).map(k => ({key: k, name: k, kind: "text", exportOnly: true})),
+          ...identKeys.map(k => ({key: k, name: k, kind: "text", exportOnly: true})),
           {key: "step", name: "Step", kind: "num", digits: 0},
           ...metrics.map(m => ({key: m, name: m, kind: "num", digits: metricDigits(steps.map(s => s[m]))})),
         ]},
@@ -3186,7 +3196,7 @@
           {key: "question_id", name: "Question ID", kind: "text"},
           {key: "primitive", name: "Primitive", kind: "text"},
           {key: "trainrun_id", name: "Training run it names", kind: "text"},
-          {key: "names", name: "Which is", kind: "text"},
+          {key: "names", name: "Which is", kind: "text", showOnly: true},
           {key: "run_matches", name: "run_matches", kind: "text", exportOnly: true},
         ]},
         rows,
@@ -3208,14 +3218,30 @@
     // range from zero to twice its value, so its line runs through the middle of the plot and
     // not along an edge.
     function niceDomain(lo, hi) {
-      if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [0, 1];
-      if (lo === hi) return lo > 0 ? [0, niceMax(2 * lo, 4)] : (lo < 0 ? [-niceMax(-2 * lo, 4), 0] : [0, 1]);
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || lo > hi) return [0, 1];
+      const size = Math.max(Math.abs(lo), Math.abs(hi));
+      // One value, or a span too narrow for float64 to tick (niceTicks' own limit), is drawn as a
+      // constant; twice a value near the largest number is not one, so the axis then ends on it.
+      if (hi / 4 - lo / 4 <= size * 1e-9) {
+        if (size === 0) return [0, 1];
+        const twice = niceMax(2 * size, 4);
+        const far = Number.isFinite(twice) ? twice : size;
+        return hi > 0 ? [0, far] : [-far, 0];
+      }
       // The tick step of a range this wide, read off a range that starts on a tick (one starting
       // elsewhere may hold a single tick, and no step to read).
       const ticks = niceTicks(0, hi - lo, 4);
       if (ticks.length < 2) return [lo, hi];
       const step = ticks[1] - ticks[0];
-      return [Number((Math.floor(lo / step + 1e-9) * step).toPrecision(12)), Number((Math.ceil(hi / step - 1e-9) * step).toPrecision(12))];
+      const d0 = Number((Math.floor(lo / step + 1e-9) * step).toPrecision(12)), d1 = Number((Math.ceil(hi / step - 1e-9) * step).toPrecision(12));
+      // Ends are rounded to twelve digits: a pair that no longer holds both values is not used.
+      return d0 <= lo && hi <= d1 && d0 < d1 ? [d0, d1] : [lo, hi];
+    }
+
+    // The smallest and largest of `values`; [Infinity, -Infinity] for none. A loop, since a long
+    // series spread into Math.min overflows the call stack.
+    function extent(values) {
+      return values.reduce((m, v) => [v < m[0] ? v : m[0], v > m[1] ? v : m[1]], [Infinity, -Infinity]);
     }
 
     // How many step metrics get a chart; the steps table holds every one.
@@ -3233,10 +3259,9 @@
     function stepChartHtml(c, metric, steps, metrics, details) {
       const W = 460, ml = 70, mr = 20, mt = 14, ph = 170;
       const rows = steps.filter(s => typeof s.step === "number" && Number.isFinite(s.step) && typeof s[metric] === "number" && Number.isFinite(s[metric]));
-      const xs = rows.map(s => s.step), ys = rows.map(s => s[metric]);
-      const x0 = Math.min(...xs), x1 = Math.max(...xs);
+      const [x0, x1] = extent(rows.map(s => s.step));
       const x = scaleLinear(x0, x1 > x0 ? x1 : x0 + 1, ml, W - mr);
-      const [y0, y1] = niceDomain(Math.min(...ys), Math.max(...ys));
+      const [y0, y1] = niceDomain(...extent(rows.map(s => s[metric])));
       const y = scaleLinear(y0, y1, mt + ph, mt);
       const xTicks = niceTicks(x0, x1 > x0 ? x1 : x0 + 1, 5).filter(Number.isInteger), yTicks = niceTicks(y0, y1, 4);
       let body = svgAxes({x, y, xTicks, yTicks, left: ml, right: W - mr, top: mt, bottom: mt + ph, digits: 0, yDigits: tickDigits(yTicks), nameGap: 46, xName: "step", yName: metric});

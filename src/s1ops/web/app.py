@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
 from s1ops import __version__
+from s1ops.contracts._validation import UNDECODABLE
 from s1ops.contracts.records import GroupKey, Record, has_calib, read_records, select
 from s1ops.contracts.schemas import load_policies
 from s1ops.eval.audit import audit_group
@@ -231,6 +232,9 @@ def create_app(
                 continue
             except OSError as e:
                 raise HTTPException(status_code=400, detail=f"{folder}: cannot read: {e.strerror or e}") from None
+            if any(not n.isascii() and UNDECODABLE.search(n) for n in names):
+                # Listed with surrogateescape: neither the response nor an error could name it.
+                raise HTTPException(status_code=400, detail=f"{folder}: a file matching {pattern} has a name that is not UTF-8")
             found = [folder / n for n in names if _present(folder / n)]
             if found:
                 return found

@@ -16,7 +16,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from s1ops.contracts._validation import pydantic_errors, read_json_bytes, read_json_file
-from s1ops.contracts.records import MODEL_NAME, GroupKey, ItemKey, Record, RecordError
+from s1ops.contracts.records import MODEL_NAME, GroupKey, ItemKey, Record, RecordError, _row_surrogate_problem
 
 MANIFEST_SCHEMA = "s1-training-manifest/1"
 
@@ -202,6 +202,12 @@ def load_manifest_hashed(path: str | Path) -> tuple[TrainingManifest, str]:
 def _manifest_from_doc(doc: object, path: str | Path) -> TrainingManifest:
     if not isinstance(doc, dict) or doc.get("schema") != MANIFEST_SCHEMA:
         raise ManifestError(f"{path}: not a {MANIFEST_SCHEMA} file")
+    # First, and by code point, as a run record is checked: an escaped lone surrogate passes an
+    # unconstrained field (`created_at`), and whatever copies the manifest's strings out (the
+    # workbench's response, an error naming the checkpoint) then fails to encode.
+    problem = _row_surrogate_problem(doc)
+    if problem is not None:
+        raise ManifestError(f"{path}: {problem}")
     try:
         parsed = _Manifest.model_validate(doc)
     except ValidationError as e:

@@ -281,7 +281,8 @@ def test_the_tables_hold_the_record_as_served(payloads) -> None:
     steps = tables[f"checkpoints:steps:{R1}"]
     assert [{k: r[k] for k in ("step", "loss", "lr")} for r in steps] == rec["steps"]
     groups = tables[f"checkpoints:groups:{R1}"]
-    assert [(r["file"], r["n_records"], r["n_trained_hits"], r["first_trained_hit"]) for r in groups] == [("records.jsonl", 6, 0, ""), ("records_kev.jsonl", 3, 2, "d / t0")]
+    assert [(r["file"], r["n_records"], r["n_trained_hits"], r["first_trained_text"]) for r in groups] == [("records.jsonl", 6, 0, ""), ("records_kev.jsonl", 3, 2, "d / t0")]
+    assert [(r["first_trained_dataset"], r["first_trained_item_id"]) for r in groups] == [(None, None), ("d", "t0")]
     assert groups[0]["path"] == c["groups"][0]["file"]
     (m,) = tables[f"checkpoints:manifests:{R1}"]
     assert (m["file"], m["sha256"], m["n_rows"]) == ("training_manifest.json", c["manifests"][0]["sha256"], 3)
@@ -307,6 +308,10 @@ def test_a_metric_named_as_an_identifying_column_keeps_its_own_values(payloads) 
     t = _js(f"checkpointStepsTable({json.dumps(c)})")
     assert [col["key"] for col in t["spec"]["columns"]] == ["trainrun_id", "step", "loss", "lr", "checkpoint"]
     assert {r["checkpoint"] for r in t["rows"]} == {7.5}
+    # Recorded at some steps only: the others have no value there, never the checkpoint's name.
+    del c["run"]["record"]["steps"][0]["checkpoint"]
+    rows = _js(f"checkpointStepsTable({json.dumps(c)}).rows")
+    assert [r.get("checkpoint") for r in rows] == [None, 7.5, 7.5, 7.5, 7.5] and {r["trainrun_id"] for r in rows} == {c["run"]["trainrun_id"]}
 
 
 @needs_node
@@ -315,6 +320,60 @@ def test_small_helpers() -> None:
     assert _js('[itemText(["d", "t0"]), itemText([null, "t0"]), itemText(null)]') == ["d / t0", "t0", ""]
     assert _js("[niceDomain(0.02, 1), niceDomain(2e-4, 2e-4), niceDomain(-3, -3), niceDomain(0, 0), niceDomain(NaN, 1), niceDomain(3, 97)]") == [
         [0, 1], [0, 4e-4], [-6, 0], [0, 1], [0, 1], [0, 100]]
+    assert _js("[extent([3, -1, 2]), extent([5]), extent(Array.from({length: 200000}, (_, i) => i))]") == [[-1, 3], [5, 5], [0, 199999]]
+
+
+@needs_node
+@pytest.mark.parametrize(
+    "lo, hi",
+    [
+        (1234567890126, 1234567890128),  # a span at the thirteenth digit: the rounded ends once passed both values
+        (0.3, 0.30000000000000004),  # float jitter around one value
+        (1e308, 1e308),  # twice it is not a number
+        (-1e308, -1e308),
+        (-1e308, 1e308),  # a span that is not a number
+        (-2.5, 7.25),
+        (0.999999999, 1.5),
+        (5e-324, 1e-323),
+        (-7, -7 + 1e-12),
+    ],
+)
+def test_a_value_axis_holds_its_values_and_has_a_width(lo, hi) -> None:
+    d0, d1 = _js(f"niceDomain({lo!r}, {hi!r})")
+    assert d0 is not None and d1 is not None  # finite: JSON has no Infinity
+    assert d0 <= lo and hi <= d1 and d0 < d1
+
+
+@needs_node
+def test_a_long_or_extreme_series_is_drawn_inside_its_plot(payloads) -> None:
+    c = copy.deepcopy(_by_name(payloads["full"])[R1])
+    cases = {
+        "long": [{"step": i, "loss": 1 / (i + 1)} for i in range(150_000)],
+        "narrow": [{"step": i, "loss": 1234567890126 + i} for i in range(3)],
+        "jitter": [{"step": 0, "loss": 0.3}, {"step": 1, "loss": 0.30000000000000004}],
+        "huge": [{"step": 0, "loss": 1e308}, {"step": 1, "loss": 1e308}],
+    }
+    for name, steps in cases.items():
+        svg = _js(f"stepChartHtml(c, 'loss', steps, ['loss'], 'details')", prelude=f"const c = {json.dumps(c)}; const steps = {json.dumps(steps)};")
+        points = [p.split(",") for p in re.search(r'<polyline class="line ser-1" points="([^"]+)"', svg).group(1).split(" ")]
+        assert len(points) == len(steps), name
+        # Inside the plot box: x in [70, 440], y in [14, 184].
+        assert all(70 <= float(x) <= 440 and 14 <= float(y) <= 184 for x, y in points), name
+        assert "NaN" not in svg and "Infinity" not in svg, name
+
+
+@needs_node
+def test_a_chosen_name_the_picker_does_not_hold_has_its_own_entry(payloads) -> None:
+    html = _render(payloads["full"], "tickets-r9")
+    assert '<option value="tickets-r9" selected>Not found: tickets-r9</option>' in html and html.count(" selected>") == 1
+    # "All" is then another value than the one selected, so choosing it is a change.
+    assert '<option value="">All checkpoints (3)</option>' in html
+    assert "Not found:" not in _render(payloads["full"], R1) and "Not found:" not in _render(payloads["full"])
+    # The question pickers are the same builder.
+    drift = _js('questionPickerHtml("drift-question", [{question_id: "q-1"}], "q-9", "All drift questions")')
+    assert '<option value="q-9" selected>Not found: q-9</option>' in drift
+    hostile = _js(f'pickerHtml("a", "Checkpoint", ["x"], {json.dumps(HOSTILE)}, "All")')
+    assert "<img" not in hostile and "Not found: &quot;" in hostile
 
 
 # --- empty states ------------------------------------------------------------------------------------
@@ -446,8 +505,27 @@ def test_the_table_sorts_filters_and_exports_what_it_shows(payloads) -> None:
         prelude=f"const d = {json.dumps(d)};",
     )
     assert out["names"] == [R1, R2]
-    assert out["csv"] == "checkpoint,status,rank,n_records,n_trained_hits,n_trained,manifests,trainrun_id,parent,steps,policies"
-    assert out["json"]["trainrun_id"] == _by_name(d)[R1]["run"]["trainrun_id"] and "show" not in out["json"]
+    # The status is the page's wording of the counts: shown, sorted and filtered, never exported.
+    assert out["csv"] == "checkpoint,n_records,n_trained_hits,n_trained,manifests,trainrun_id,parent,steps,policies"
+    assert out["json"]["trainrun_id"] == _by_name(d)[R1]["run"]["trainrun_id"] and "show" not in out["json"] and "status" not in out["json"]
+    held = _js("(() => { const t = checkpointsTable(d); return filterRows(t.spec, t.rows, 'unknown').map(r => r.checkpoint); })()", prelude=f"const d = {json.dumps(d)};")
+    assert held == [BASELINE]
+
+
+@needs_node
+def test_exports_hold_served_values_not_the_pages_words(payloads) -> None:
+    c = _by_name(payloads["full"])[R1]
+    out = _js(
+        "(() => { const g = checkpointGroupsTable(c), p = checkpointPoliciesTable(c);"
+        " return {groups: JSON.parse(toJsonRows(g.spec, g.rows)), groupsCsv: toCsv(g.spec, g.rows).split('\\r\\n')[0],"
+        " policies: JSON.parse(toJsonRows(p.spec, p.rows)), shown: shownColumns(g.spec).map(x => x.key)}; })()",
+        prelude=f"const c = {json.dumps(c)};",
+    )
+    assert out["groupsCsv"] == "checkpoint,file,path,question_id,primitive,n_records,n_items,n_trained_hits,first_trained_dataset,first_trained_item_id"
+    assert [(g["first_trained_dataset"], g["first_trained_item_id"]) for g in out["groups"]] == [(None, None), ("d", "t0")]
+    assert "first_trained_text" in out["shown"] and "first_trained_dataset" not in out["shown"]
+    assert out["policies"] == [{"checkpoint": R1, "question_id": c["policies"][0]["question_id"], "primitive": "noul",
+                                "trainrun_id": c["run"]["trainrun_id"], "run_matches": True}]
 
 
 def test_the_view_has_its_tab_and_pane() -> None:

@@ -19,7 +19,7 @@ from s1ops.contracts.schemas import PolicyEntry, save_policies
 from s1ops.demo import generate_workspace
 from s1ops.improve.checkpoints import checkpoints_report
 from s1ops.improve.trainrun import load_trainrun, runs_by_checkpoint
-from s1ops.improve.trainset import TrainedItemError, check_not_trained, load_manifest_hashed, trained_hits
+from s1ops.improve.trainset import ManifestError, TrainedItemError, check_not_trained, load_manifest, load_manifest_hashed, trained_hits
 from s1ops.web.app import MANIFEST_PATTERN, TRAINRUN_PATTERN, create_app
 from tests.test_trainrun_shown import BASELINE, QID, R1, R2, SECRET, _row, _spread, _write
 
@@ -180,6 +180,19 @@ def test_two_manifests_for_a_checkpoint_add_up(ws: Path, tmp_path: Path, capsys)
     assert len(r1["manifests"]) == 2 and r1["n_trained"] == 4
     held = next(g for g in r1["groups"] if Path(g["file"]).name == "records.jsonl")
     assert held["n_trained_hits"] == 1 and held["first_trained_hit"] == ["d", "e0"]
+
+
+def test_a_checkpoints_count_is_distinct_items_not_the_sum_of_its_groups(ws: Path) -> None:
+    # t0 and t1 again in the canary, and t0 under a second question in the shadow file.
+    _write(ws / "records_canary.jsonl", [_row("t0", "prod", R1), _row("t1", "prod", R1)])
+    other = {**_row("t0", "train", R1), "question_id": "q-bbbbbbbbbbbbbbbb"}
+    with open(ws / "records_kev.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps(other) + "\n")
+    r1 = _by_name(_get(ws))[R1]
+    assert [g["n_trained_hits"] for g in r1["groups"]] == [0, 2, 1, 2]
+    assert r1["n_trained_hits"] == 2 <= r1["n_trained"] == 3
+    # Every checkpoint of the report: never more hits than trained items.
+    assert all(c["n_trained_hits"] <= c["n_trained"] for c in _get(ws)["checkpoints"] if c["n_trained"] is not None)
 
 
 def test_trained_hits_is_the_refusals_rule() -> None:
@@ -368,6 +381,39 @@ def test_a_malformed_manifest_is_400_naming_the_file_once(ws: Path) -> None:
     r = _refused(ws).get("/api/checkpoints")
     detail = r.json()["detail"]
     assert r.status_code == 400 and detail.count("training_manifest-r2.json") == 1 and "checkpoint" in detail
+
+
+def _with_surrogate(doc: dict, field: str) -> None:
+    if field in ("question_id", "item_id", "dataset"):
+        doc["items"][0][field] = "x\ud800"
+    elif field == "inherited_items":
+        doc["inherited_items"][0]["item_id"] = "x\ud800"
+    else:
+        doc[field] = "x\ud800"
+
+
+@pytest.mark.parametrize("field", ["created_at", "split", "checkpoint", "question_id", "item_id", "dataset", "inherited_items"])
+def test_an_escaped_lone_surrogate_in_a_manifest_is_400_by_code_point(ws: Path, field: str) -> None:
+    # `created_at` has no constraint, so the row model let it through and the response failed to encode (a 500).
+    path = ws / "training_manifest-r2.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    _with_surrogate(doc, field)
+    path.write_text(json.dumps(doc), encoding="ascii")  # the surrogate as a JSON escape
+    r = _refused(ws).get("/api/checkpoints")
+    assert r.status_code == 400
+    assert r.json()["detail"] == f"{path}: a string holds a lone surrogate (U+D800), which is not a character"
+    with pytest.raises(ManifestError, match=r"lone surrogate \(U\+D800\)"):
+        load_manifest(path)
+
+
+def test_a_matching_file_name_that_is_not_utf8_is_400(ws: Path) -> None:
+    os.symlink("trainrun.json", os.fsencode(ws) + b"/trainrun-\xff.json")
+    r = _refused(ws).get("/api/checkpoints")
+    assert r.status_code == 400 and r.json()["detail"] == f"{ws}: a file matching trainrun*.json has a name that is not UTF-8"
+    os.unlink(os.fsencode(ws) + b"/trainrun-\xff.json")
+    # A name the view does not read may be anything.
+    os.symlink("trainrun.json", os.fsencode(ws) + b"/notes-\xff.json")
+    assert _refused(ws).get("/api/checkpoints").status_code == 200
 
 
 def test_a_manifest_under_a_records_name_is_400(ws: Path) -> None:

@@ -537,7 +537,7 @@ def read_sheet(form: str) -> SheetForm:
     web workbench to answer: the title, the instruction line naming the options, items `## 1` .. `## N`
     in order, and under each one marker line that says `Answer: ` with nothing or one option after it
     and nothing below it. Anything else is `SheetFormatError` naming the item; `s1 labelaudit estimate`
-    still scores a sheet edited by hand."""
+    still scores an answer moved to the next line, though not a note under the answer."""
     first = _first_lines(form, 2)
     titles = {f"# {SHEET_TITLE}": SHEET_INSTRUCTION, f"# {_OLD_SHEET_TITLE}": _OLD_SHEET_INSTRUCTION}
     if not first or first[0][1] not in titles:

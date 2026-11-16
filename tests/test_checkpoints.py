@@ -5,6 +5,7 @@ what it trained on by the rule `--training-manifest` refuses by, and nothing is 
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -278,7 +279,9 @@ def test_only_the_named_files_are_read(ws: Path) -> None:
     (ws / "training_manifest.json.bak").write_text("not json")
     (ws / "trainrun.json~").write_text("not json")
     (ws / "my_trainrun.json").write_text("not json")
-    (ws / "TRAINRUN.json").write_text("not json")
+    # Upper case, with no lower-case twin in the workspace: on a case-insensitive file system
+    # `TRAINRUN.json` would be `trainrun.json` itself. The listing keeps the case it was written in.
+    (ws / "TRAINRUN-old.json").write_text("not json")
     assert _get(ws)["summary"] == {"n_checkpoints": 3, "n_manifests": 2, "n_training_runs": 2}
 
 
@@ -407,7 +410,12 @@ def test_an_escaped_lone_surrogate_in_a_manifest_is_400_by_code_point(ws: Path, 
 
 
 def test_a_matching_file_name_that_is_not_utf8_is_400(ws: Path) -> None:
-    os.symlink("trainrun.json", os.fsencode(ws) + b"/trainrun-\xff.json")
+    try:
+        os.symlink("trainrun.json", os.fsencode(ws) + b"/trainrun-\xff.json")
+    except OSError as e:
+        if e.errno != errno.EILSEQ:  # APFS refuses the name; anything else is a failure
+            raise
+        pytest.skip(f"this file system refuses a name that is not UTF-8: {e.strerror}")
     r = _refused(ws).get("/api/checkpoints")
     assert r.status_code == 400 and r.json()["detail"] == f"{ws}: a file matching trainrun*.json has a name that is not UTF-8"
     os.unlink(os.fsencode(ws) + b"/trainrun-\xff.json")

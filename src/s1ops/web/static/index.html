@@ -697,11 +697,16 @@
     }
 
     function showError(containerId, err) {
+      document.getElementById(containerId).innerHTML = errorHtml(err);
+    }
+
+    // A failed request's card. `heading` is the page's own words naming what failed, for a view
+    // that shows more than one report (never a server string).
+    function errorHtml(err, heading) {
       const kind = errorKind(err);
-      const el = document.getElementById(containerId);
+      const head = heading ? `<h3>${heading}</h3>` : "";
       if (kind === "empty") {
-        el.innerHTML = `<div class="card state-card"><strong>Nothing to show.</strong> ${esc(err.message)}</div>`;
-        return;
+        return `<div class="card state-card">${head}<strong>Nothing to show.</strong> ${esc(err.message)}</div>`;
       }
       const hint = {
         input: "A workspace file could not be used: fix the file named above, then Refresh.",
@@ -709,8 +714,7 @@
         server: "The server failed on this request; the terminal running <code>s1 web</code> has the traceback.",
         network: "No answer from the server: is <code>s1 web</code> still running?",
       }[kind];
-      el.innerHTML =
-        `<div class="card"><div><span class="badge badge-err">ERROR</span> ${esc(err.message)}</div><div class="sub">${hint}</div></div>`;
+      return `<div class="card">${head}<div><span class="badge badge-err">ERROR</span> ${esc(err.message)}</div><div class="sub">${hint}</div></div>`;
     }
 
     // Run a view's loader; a failure is shown unless a newer request for the view has started.
@@ -2807,19 +2811,35 @@
     // Two independent reports in one view: /api/slices (per group: answerability and error slices)
     // and /api/labelaudit (a ranking of label disagreements). Nothing here is computed from both.
     // The settings a response was asked with (fdrq, topk) are kept with it, so a title never shows
-    // a q the server did not use.
+    // a q the server did not use. Each request settles on its own: a failed one is its report's
+    // error card (`slicesError` / `labelsError`, its report null), and the other report is shown.
     async function loadSlicesAndLabels(ctx = {}) {
       const params = ctx.params || {};
-      const [slices, labels] = await Promise.all([
+      const [slices, labels] = await Promise.allSettled([
         fetchJson(apiUrl("/api/slices", {...params, fdr_q: ctx.fdrq})),
         fetchJson(apiUrl("/api/labelaudit", {...params, top_k: ctx.topk})),
       ]);
       if (isStale(ctx)) return;
-      const d = {slices, labels, fdrq: ctx.fdrq, topk: ctx.topk, grouped: Boolean(params.question_id)};
+      const d = {
+        slices: slices.status === "fulfilled" ? slices.value : null,
+        labels: labels.status === "fulfilled" ? labels.value : null,
+        slicesError: slices.status === "rejected" ? settledError(slices.reason) : null,
+        labelsError: labels.status === "rejected" ? settledError(labels.reason) : null,
+        fdrq: ctx.fdrq,
+        topk: ctx.topk,
+        grouped: Boolean(params.question_id),
+      };
       // Kept only once it is on screen: a payload the renderer throws on leaves nothing behind the
       // error card for a later re-render or table action to read.
       document.getElementById("slices-container").innerHTML = renderSlices(d, ctx.opts ? ctx.opts() : {});
       if (ctx.keep) ctx.keep(d);
+    }
+
+    // What a rejected request leaves for its card: the message and the status `errorKind` reads,
+    // as plain data, so a kept payload re-renders the same card.
+    function settledError(reason) {
+      const message = reason && reason.message !== undefined ? reason.message : reason;
+      return {message: String(message), status: reason && typeof reason.status === "number" ? reason.status : null};
     }
 
     // Lanes a lane chart draws at most; the table under it holds every row.
@@ -3030,14 +3050,21 @@
       };
     }
 
-    // Every table the slices view shows for what it holds, by id.
+    // Every table the slices view shows for what it holds, by id: only the tables it draws, by the
+    // renderer's own conditions (none of a report that failed, no ranking table where the card says
+    // there is nothing to rank).
     function slicesTables(d) {
       const out = {};
       const add = t => { out[t.spec.id] = t; };
       const s = (d && d.slices) || {};
       (s.groups || []).forEach(g => Object.values(slicesGroupTables(g, s.min_n, d.fdrq)).forEach(add));
-      add(flagsTable(d && d.labels));
+      if (rankingDrawn(d && d.labels)) add(flagsTable(d.labels));
       return out;
+    }
+
+    // Whether the ranking's card draws its table: a labels report that names its distribution.
+    function rankingDrawn(l) {
+      return Boolean(l) && typeof l.distribution === "string";
     }
 
     // How many slices got each verdict, in the order the verdicts first appear.
@@ -3098,7 +3125,7 @@
     function labelAuditCardHtml(d, tstate) {
       const l = d.labels || {};
       const head = `<h3>Blind Label Audit: disagreement candidates (safe-v1: ids only, no state text)</h3>`;
-      if (typeof l.distribution !== "string") {
+      if (!rankingDrawn(l)) {
         return `<div class="card">${head}<div class="sub">The workspace has no records to rank.</div></div>`;
       }
       const t = flagsTable(l);
@@ -3126,7 +3153,12 @@
       const s = d.slices || {};
       const groups = s.groups || [];
       const cards = groups.map((g, index) => sliceCardHtml(g, {minN: s.min_n, dist: s.distribution, fdrq: d.fdrq, tstate, index})).join("");
-      return (groups.length ? cards : '<div class="card">No labeled groups found in workspace.</div>') + labelAuditCardHtml(d, tstate);
+      // Each report or its own error card: neither reads the other's files.
+      const slicePart = d.slicesError
+        ? errorHtml(d.slicesError, "Answerability and error slices")
+        : (groups.length ? cards : '<div class="card">No labeled groups found in workspace.</div>');
+      const labelPart = d.labelsError ? errorHtml(d.labelsError, "Blind Label Audit") : labelAuditCardHtml(d, tstate);
+      return slicePart + labelPart;
     }
 
     // --- shadow compare and judge audit --------------------------------------------------------------

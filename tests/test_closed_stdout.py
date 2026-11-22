@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -73,15 +74,35 @@ def test_argparse_exits_keep_exit_0(argv) -> None:
     assert (done.returncode, done.stderr) == (0, "")
 
 
-def test_a_pipe_that_breaks_mid_print_is_one_line_and_exit_1(ws) -> None:
+@pytest.fixture(scope="module")
+def ranked_past_the_buffer(ws, tmp_path_factory) -> list[str]:
+    """A `labelaudit rank` whose output is larger than the child's stream buffer (8 KiB through 3.13,
+    128 KiB on 3.14), so its `print` writes, and meets a closed pipe, before the command returns: the
+    demo records with one ranked item's id made longer than twice that buffer."""
+    size = int(subprocess.run([sys.executable, "-c", "import io; print(io.DEFAULT_BUFFER_SIZE)"],
+                              capture_output=True, text=True, check=True, env=_env(), timeout=120).stdout)
+    lines = Path(ws["records"]).read_text(encoding="utf-8").splitlines()
+    first = json.loads(lines[0])
+    assert first["label"] is not None and first["model_served"] is not None
+    first["item_id"] = "long-" + "x" * (2 * size)
+    records = tmp_path_factory.mktemp("rank") / "records.jsonl"
+    records.write_text("\n".join([json.dumps(first), *lines[1:]]) + "\n", encoding="utf-8")
+    argv = ["labelaudit", "rank", str(records), "--top", "100000"]
+    done = subprocess.run([sys.executable, "-c", "from s1ops.cli import console_main; console_main()", *argv],
+                          capture_output=True, env=_env(), timeout=120)
+    assert done.returncode == 0 and len(done.stdout) > 2 * size
+    return argv
+
+
+def test_a_pipe_that_breaks_mid_print_is_one_line_and_exit_1(ranked_past_the_buffer) -> None:
     # Larger than the stream's buffer, so `print` itself writes and meets the closed pipe.
-    done = _closed_pipe(["labelaudit", "rank", ws["records"], "--top", "100000"])
+    done = _closed_pipe(ranked_past_the_buffer)
     assert done.returncode == 1
     assert done.stderr.strip().splitlines() == ["s1: [Errno 32] Broken pipe"]
 
 
-def test_debug_mid_print_is_a_traceback_and_exit_1_not_120(ws) -> None:
-    done = _closed_pipe(["labelaudit", "rank", ws["records"], "--top", "100000"], S1_DEBUG="1")
+def test_debug_mid_print_is_a_traceback_and_exit_1_not_120(ranked_past_the_buffer) -> None:
+    done = _closed_pipe(ranked_past_the_buffer, S1_DEBUG="1")
     assert done.returncode == 1
     assert "BrokenPipeError" in done.stderr and "Exception ignored" not in done.stderr
 
@@ -217,7 +238,9 @@ def test_a_normal_run_prints_and_exits_0(ws, monkeypatch, capsys) -> None:
 
 
 def test_main_as_a_library_leaves_stdout_alone(ws, monkeypatch) -> None:
-    """An embedding process keeps its stream: no flush, no touching its descriptor."""
+    """An embedding process keeps its stream: no flush, no touching its descriptor, and (Python 3.14's
+    argparse colors help by default, deciding by asking `sys.stdout`) no question about it to choose
+    a color."""
 
     class Watching(io.StringIO):
         flushes = 0
@@ -228,6 +251,13 @@ def test_main_as_a_library_leaves_stdout_alone(ws, monkeypatch) -> None:
         def fileno(self) -> int:
             raise AssertionError("main() must not reach for the descriptor")
 
+        def isatty(self) -> bool:
+            raise AssertionError("main() must not ask whether the stream is a terminal")
+
+    # An environment in which 3.14 would ask: these settle the color without looking at the stream.
+    monkeypatch.setenv("TERM", "xterm-256color")
+    for name in ("NO_COLOR", "FORCE_COLOR", "PYTHON_COLORS"):
+        monkeypatch.delenv(name, raising=False)
     stream = Watching()
     monkeypatch.setattr("sys.stdout", stream)
     assert cli_main(["audit", ws["records"]]) == 0

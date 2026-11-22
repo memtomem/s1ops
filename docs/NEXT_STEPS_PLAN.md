@@ -21,6 +21,7 @@
   - [x] PyPI·TestPyPI 이름 확보 (2026-10-25): 코드 없는 `s1ops 0.0.1`을 올리고 두 곳 모두 yank. pip는 yank된 버전을 건너뛰지만 `uv`는 고정하지 않은 `s1ops`에도 0.0.1을 고르므로, 첫 실제 릴리스 전까지 uv 사용자는 빈 패키지를 받음
   - [x] `.github/workflows/ci.yml` 추가 (2026-10-25, PR #2 run 40169216043 녹색: 3.11–3.13 각 92 passed, `package` job `release_check: dist ok`):
     - Python 3.11–3.13 매트릭스 (`eval/judge.py`가 쓰는 `cohen_kappa_score(replace_undefined_by=...)`가 scikit-learn 1.9부터 있고, 1.9는 Python 3.11 이상 필요), `uv sync --all-extras --locked` (lock이 낡으면 실패)
+    - 2026-11-22 (#171): 매트릭스에 3.14 추가, 3.11–3.14. 3.14의 `argparse`는 help 색을 정하려고 `sys.stdout`에 묻기 때문에 `_Parser`·`_HelpFormatter`가 `color=False`로 만들어짐: 라이브러리 호출인 `main`이 help 색을 정하려고 호스트의 stdout에 묻지 않음 (터미널 폭을 재는 `shutil.get_terminal_size()`는 모든 버전에서 `sys.__stdout__`에 물으며, 이 변경의 범위 밖)
     - `uv run pytest -v` (100% 오프라인 무의존성 검증)
     - `examples/data/`는 gitignore된 생성물이므로 `uv run s1 demo examples/data`로 먼저 만든 뒤 `uv run s1 lint check examples/data/questions.json` 스모크 체크 (데모 문항에 의도된 경고가 있어 `--strict` 없이 실행)
     - `package` job: `uv build` → `twine check --strict` (publish action과 같은 twine 7.0.0) → `scripts/release_check.py dist`가 sdist 목록이 `[tool.hatch.build.targets.sdist] include` 아래의 `git ls-files` 목록(+ Hatch가 강제로 넣는 `.gitignore`·`PKG-INFO`)과 정확히 같은지(일반 파일만, 링크 불가) 확인하고, wheel·sdist를 각각 checkout 밖의 새 venv에 설치해 버전·`import s1` 별칭·`web/static/index.html`을 확인

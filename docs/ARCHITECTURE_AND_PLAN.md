@@ -92,6 +92,7 @@ s1ops/
         app.py                         # FastAPI 로컬 워크벤치 서버 (127.0.0.1 전용, `/api/drift` 포함)
         static/index.html              # 무외부통신 인터랙티브 SPA (개요 + 8개 뷰)
       demo.py                          # 시드 고정 데모 워크스페이스 생성기 (`s1 demo`, 카나리 드리프트 포함)
+      registry.py                      # 프로젝트 레지스트리 (`s1 project`): slug·이름·워크스페이스 경로를 담는 SQLite 파일
       cli.py                           # 단일 CLI 진입점 (`s1` / `s1ops`)
   tests/                               # 100% 오프라인 단위·통합 테스트 스위트 (19 tests)
 ```

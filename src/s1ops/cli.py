@@ -188,6 +188,7 @@ _INPUTS: dict[str, tuple[str, str | None]] = {
     "training_run": ("training-run record", "s1 trainset record"),
     "cal": ("candidate calibration records file", None),
     "eval": ("candidate evaluation records file", None),
+    "db": ("project registry", "s1 project init"),
 }
 
 
@@ -1255,6 +1256,25 @@ def _cmd_ledger(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_project(args: argparse.Namespace) -> int:
+    from s1ops import registry
+
+    if args.project_cmd == "init":
+        registry.init_registry(args.new_db)
+        out: dict[str, Any] = {"created": args.new_db, "projects": 0}
+    elif args.project_cmd == "list":
+        out = {"projects": [p.as_dict() for p in registry.list_projects(args.db)]}
+    elif args.project_cmd == "add":
+        out = {"added": registry.add_project(args.db, args.slug, args.workspace, args.name).as_dict()}
+    elif args.project_cmd == "rename":
+        out = {"renamed": registry.rename_project(args.db, args.name, slug=args.slug).as_dict()}
+    else:
+        # The registration goes; the workspace directory and its files stay where they are.
+        out = {"removed": registry.remove_project(args.db, slug=args.slug).as_dict(), "workspace_kept": True}
+    print(json.dumps(out, indent=2, sort_keys=True))
+    return 0
+
+
 def _cmd_drift(args: argparse.Namespace) -> int:
     rep = _drift(args)
     print(json.dumps(rep, indent=2, sort_keys=True))
@@ -1948,6 +1968,28 @@ def build_parser() -> argparse.ArgumentParser:
     p_lr.add_argument("path", help="journal with a partial trailing write")
     p_lr.add_argument("-o", "--output", required=True, help="recovered journal to write")
     p_led.set_defaults(func=_cmd_ledger)
+
+    # project
+    p_proj = sub.add_parser("project", help="Keep a registry of projects: named workspace directories", **_FMT)
+    sub_proj = p_proj.add_subparsers(dest="project_cmd", required=True)
+    db_help = "project registry made by `s1 project init`"
+    p_pi = sub_proj.add_parser("init", help="Create an empty project registry", **_FMT)
+    p_pi.add_argument("new_db", metavar="FILE", help="registry file to create; must not exist")
+    p_pa = sub_proj.add_parser("add", help="Register a workspace directory as a project", **_FMT)
+    p_pa.add_argument("slug", help="the project's id on the command line: 1-63 of a-z, 0-9 and '-', starting with a letter or digit")
+    p_pa.add_argument("--workspace", required=True, help="the project's workspace directory (stored as an absolute path)")
+    p_pa.add_argument("--name", default=None, help="display name: 1-80 characters, no leading or trailing space, no control, bidirectional-control or line-separator character (default: the slug)")
+    p_pa.add_argument("--db", required=True, help=db_help)
+    p_pl = sub_proj.add_parser("list", help="List the registered projects", **_FMT)
+    p_pl.add_argument("--db", required=True, help=db_help)
+    p_pr = sub_proj.add_parser("rename", help="Change a project's display name (its slug and directory stay)", **_FMT)
+    p_pr.add_argument("slug", help="the project to rename")
+    p_pr.add_argument("name", help="the new display name, by the same rule as `add --name`")
+    p_pr.add_argument("--db", required=True, help=db_help)
+    p_prm = sub_proj.add_parser("remove", help="Remove a project's registration; its directory is not touched", **_FMT)
+    p_prm.add_argument("slug", help="the project to remove")
+    p_prm.add_argument("--db", required=True, help=db_help)
+    p_proj.set_defaults(func=_cmd_project)
 
     # demo
     p_demo = sub.add_parser("demo", help="Write a seeded synthetic demo workspace", **_FMT)

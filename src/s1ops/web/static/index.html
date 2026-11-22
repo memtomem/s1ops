@@ -207,6 +207,21 @@
       max-width: 1360px;
       padding: 20px 24px 48px;
     }
+    /* What a page shows around its views follows its scope (`applyScope`): a project's page names its
+       project in the header, and a registry's list has no views to pick from and no groups. A rule here
+       rather than a `hidden` attribute, which loses to these elements' own `display`. */
+    .project-tools { display: none; align-items: center; gap: 10px; min-width: 0; font-size: 12px; }
+    .project-tools a { color: var(--accent); white-space: nowrap; }
+    .project-tools .project-name { font-family: var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+    :root[data-scope="project"] .project-tools { display: flex; }
+    .only-project { display: none; }
+    :root[data-scope="project"] .only-project { display: inline; }
+    :root[data-scope="registry"] .layout { grid-template-columns: minmax(0, 1fr); }
+    :root[data-scope="registry"] nav.views,
+    :root[data-scope="registry"] .filter-bar label[for="flt-group"],
+    :root[data-scope="registry"] #flt-group,
+    :root[data-scope="registry"] #flt-note,
+    :root[data-scope="registry"] #btn-clear-group { display: none; }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
     .grid-2 {
@@ -492,6 +507,7 @@
       <span class="brand-badge">s1ops</span>
       <h1>System 1 Typed Decision LLMOps Workbench</h1>
     </div>
+    <div class="project-tools"><a href="/p/">All projects</a><span class="project-name" id="project-name"></span></div>
     <div class="header-tools">
       <div class="meta-bar" id="overview-meta">Loading workspace...</div>
       <button type="button" class="tool" id="btn-theme" title="Color theme: system, light or dark">Theme: system</button>
@@ -633,6 +649,10 @@
     <section id="tab-review" class="tab-pane" role="tabpanel" aria-labelledby="nav-review">
       <div id="review-container">Loading the review sheet...</div>
     </section>
+
+    <section id="tab-projects" class="tab-pane" aria-label="Projects">
+      <div id="projects-container">Loading the projects...</div>
+    </section>
   </main>
     </div>
   </div>
@@ -645,8 +665,37 @@
       return String(v ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
     }
 
+    // Which page this is, from its address: the list of a registry's projects (/p/), one project's
+    // workbench (/p/<id>/; the id is a decimal string and is never read as a number, which could
+    // not hold every one), or the workbench of one workspace (any other address).
+    function pageScope(pathname) {
+      const path = String(pathname || "");
+      if (path === "/p/") return {kind: "registry"};
+      const found = /^\/p\/([1-9][0-9]{0,18})\/$/.exec(path);
+      return found ? {kind: "project", id: found[1]} : {kind: "workspace"};
+    }
+
+    // Where a request goes: a project's page asks its own project, except on the registry's routes.
+    function requestUrl(url, pathname) {
+      const scope = pageScope(pathname);
+      if (scope.kind !== "project" || String(url).startsWith("/api/registry/")) return url;
+      return "/p/" + scope.id + url;
+    }
+
+    // A project's address; null for anything but a registration number written plainly.
+    function projectUrl(id) {
+      return typeof id === "string" && /^[1-9][0-9]{0,18}$/.test(id) ? "/p/" + id + "/" : null;
+    }
+
+    // The header's words for the project a page shows: its name and slug as listed, or that the
+    // list does not hold it. Text for `textContent`, never markup.
+    function projectLabel(id, projects) {
+      const found = (Array.isArray(projects) ? projects : []).find(p => p && p.id === id);
+      return found ? String(found.name) + " (" + String(found.slug) + ")" : "Not found: #" + id;
+    }
+
     async function fetchJson(url) {
-      const res = await fetch(url);
+      const res = await fetch(requestUrl(url, location.pathname));
       if (!res.ok) {
         let detail = `${res.status} ${res.statusText}`;
         try {
@@ -706,13 +755,15 @@
       else lo.value = hi.value;
     }
 
-    // What a failed request means for the viewer: a workspace file to fix (400, 422), nothing to show
-    // (404), a server bug (5xx), or no server at all (no status: the request never got an answer).
+    // What a failed request means for the viewer: a file or directory to fix (400, 422), nothing to show
+    // (404), a project registry another process held (503), a server bug (any other 5xx), or no
+    // server at all (no status: the request never got an answer).
     function errorKind(err) {
       const code = err && typeof err.status === "number" ? err.status : null;
       if (code === null) return "network";
       if (code === 404) return "empty";
       if (code === 403) return "forbidden";
+      if (code === 503) return "busy";
       if (code >= 500) return "server";
       return "input";
     }
@@ -730,8 +781,9 @@
         return `<div class="card state-card">${head}<strong>Nothing to show.</strong> ${esc(err.message)}</div>`;
       }
       const hint = {
-        input: "A workspace file could not be used: fix the file named above, then Refresh.",
-        forbidden: "The review sheet is served to this computer only (a loopback address and Host, no proxy headers): open the workbench at http&#58;//127.0.0.1 or localhost on this computer.",
+        input: "A file or directory could not be used: fix the one named above, then Refresh.",
+        forbidden: "The review sheet, and every page of <code>s1 web --db</code>, is served to this computer only (a loopback address and Host, no proxy headers): open the workbench at http&#58;//127.0.0.1 or localhost on this computer.",
+        busy: "The project registry was busy (another process was writing it): Refresh to try again.",
         server: "The server failed on this request; the terminal running <code>s1 web</code> has the traceback.",
         network: "No answer from the server: is <code>s1 web</code> still running?",
       }[kind];
@@ -765,6 +817,8 @@
     }
 
     // Each view's loader and container, whether the group filter applies, and why not when it does not.
+    // `projects` is a registry's list (`s1 web --db`, at /p/): no hash names it (`viewNames`), and it
+    // is the one view of that page (`stateFromLocation`).
     function viewDefs() {
       return {
         overview: {loader: loadOverview, container: "overview-container", group: false, note: "the overview counts the whole workspace"},
@@ -776,6 +830,7 @@
         drift: {loader: loadDrift, container: "drift-container", group: false, note: "pick a question in the view; the summary counts every question, labeled or not"},
         checkpoints: {loader: loadCheckpoints, container: "checkpoints-container", group: false, note: "pick a checkpoint in the view; a checkpoint is a model name across every records file"},
         review: {loader: loadReview, container: "review-container", group: false, note: "the review sheet asks one question; no group applies"},
+        projects: {loader: loadProjects, container: "projects-container", group: false, note: "a project is a workspace; a group belongs to one"},
       };
     }
 
@@ -860,6 +915,13 @@
       const query = params.toString();
       if (st.view === d.view && !query) return "";
       return "#/" + st.view + (query ? "?" + query : "");
+    }
+
+    // The state an address names: its hash's, except on a registry's page, which has one view that
+    // no hash, edited link or Back can leave.
+    function stateFromLocation(hash, pathname) {
+      if (pageScope(pathname).kind === "registry") return {...defaultState(), view: "projects"};
+      return parseHash(hash);
     }
 
     // Where the chosen group stands: "none" (no group), "invalid" (part of a triple, or a primitive
@@ -3880,6 +3942,50 @@
       window.scrollTo({top: Math.max(0, top)});
     }
 
+    // --- projects ----------------------------------------------------------------------------------
+    // The projects of the registry `s1 web --db` serves (/api/registry/projects), each row as served.
+    // An id is a decimal string: shown, sorted (the kit's natural order) and passed on as text.
+    function projectsTable(d) {
+      return {
+        spec: {id: "projects:all", caption: "Registered projects", file: "projects", columns: [
+          {key: "id", name: "ID", kind: "text"},
+          {key: "open", name: "Open", kind: "button", act: "project-open", text: "Open", labelKey: "name", data: {id: "id"}},
+          {key: "name", name: "Name", kind: "text"},
+          {key: "slug", name: "Slug", kind: "text"},
+          {key: "workspace_path", name: "Workspace directory", kind: "text", wide: true},
+        ]},
+        rows: Array.isArray(d.projects) ? d.projects : [],
+      };
+    }
+
+    // No table where there is nothing to list.
+    function projectsTables(d) {
+      const t = projectsTable(d || {});
+      return t.rows.length ? {[t.spec.id]: t} : {};
+    }
+
+    function renderProjects(d, opts) {
+      const o = opts || {};
+      const t = projectsTable(d || {});
+      const file = d && d.registry && typeof d.registry.path === "string" ? d.registry.path : null;
+      const where = file === null ? "" : ` Registry file: <code>${esc(file)}</code>.`;
+      const how = "Register a workspace directory with <code>s1 project add SLUG --workspace DIR --db FILE</code>, then Refresh.";
+      if (!t.rows.length) {
+        return `<div class="card state-card"><strong>No project is registered.</strong> ${how}${where}</div>`;
+      }
+      return `<div class="card"><h3>Projects of this registry</h3>
+        <div class="sub">Open shows a project's workbench: its own workspace directory, read on every request. ${how}${where}</div>
+        ${tableHtml(t.spec, t.rows, o.tstate)}</div>`;
+    }
+
+    async function loadProjects(ctx = {}) {
+      const d = await fetchJson("/api/registry/projects");
+      if (isStale(ctx)) return;
+      // Kept only once it is on screen, as every view's payload.
+      document.getElementById("projects-container").innerHTML = renderProjects(d, ctx.opts ? ctx.opts() : {});
+      if (ctx.keep) ctx.keep(d);
+    }
+
     // --- blind sheet review ------------------------------------------------------------------------
     // Answering the review sheet `s1 web --sheet` serves (/api/sheet), one item at a time; the answers
     // stay in this browser until the completed sheet is downloaded for `s1 labelaudit estimate`.
@@ -3987,7 +4093,9 @@
 
     function reviewEmptyHtml() {
       return `<div class="card state-card"><strong>No review sheet is served.</strong> Start the workbench with
-        <code>s1 web --sheet PATH</code>, giving a sheet written by <code>s1 labelaudit sheet</code>, to answer it here.</div>`;
+        <code>s1 web --sheet PATH</code>, giving a sheet written by <code>s1 labelaudit sheet</code>, to answer it here.
+        <span class="only-project">A workbench opened from a project registry (<code>s1 web --db</code>) serves no review sheet:
+        use <code>s1 web --workspace DIR --sheet PATH</code>.</span></div>`;
     }
 
     function renderReview(sheet, answers, item) {
@@ -4576,7 +4684,7 @@
     }
 
     function onHashChange() {
-      STATE = parseHash(location.hash);
+      STATE = stateFromLocation(location.hash, location.pathname);
       render();
     }
 
@@ -4724,6 +4832,7 @@
       if (STATE.view === "compare" && d) return compareTables(d);
       if (STATE.view === "lint" && d) return lintTables(d);
       if (STATE.view === "checkpoints" && d) return checkpointTables(d);
+      if (STATE.view === "projects" && d) return projectsTables(d);
       if (STATE.view === "overview") return overviewTables();
       return {};
     }
@@ -4908,13 +5017,39 @@
       commit({...STATE, view: tabs[next].dataset.view}, "push");
     }
 
+    // The header's name of the project a page shows. The list is read on its own, so the name is the
+    // list's answer at that read, not reconciled with what the views were answered; only the answer to
+    // the latest Refresh is written.
+    function loadProjectName(id) {
+      const gen = generation;
+      const el = document.getElementById("project-name");
+      el.textContent = "Project #" + id;
+      return fetchJson("/api/registry/projects")
+        .then(d => { if (gen === generation) el.textContent = projectLabel(id, d.projects); })
+        .catch(err => { if (gen === generation) el.textContent = "Project #" + id + " (project list unavailable: " + err.message + ")"; });
+    }
+
+    // What a page loads around its views: nothing for a registry's list (its view asks for it), the
+    // header counts and the labeled groups for a workbench, and for a project's also its name.
+    function loadShell(scope) {
+      if (scope.kind === "registry") return;
+      loadMeta();
+      loadGroups();
+      if (scope.kind === "project") loadProjectName(scope.id);
+    }
+
+    // Once, at startup: the stylesheet shows and hides by scope.
+    function applyScope(scope) {
+      document.documentElement.dataset.scope = scope.kind;
+      if (scope.kind === "registry") document.getElementById("overview-meta").textContent = "Project registry";
+    }
+
     function refresh() {
       generation += 1;
       policySeq += 1;
       loadedSig = {};
       viewData = {};
-      loadMeta();
-      loadGroups();
+      loadShell(pageScope(location.pathname));
       render();
     }
 
@@ -4933,6 +5068,10 @@
       if (el.dataset.act === "open-group") openGroup(el.dataset.qid, el.dataset.model, el.dataset.prim);
       if (el.dataset.act === "ov-check") checkRoute(el.dataset.route);
       if (el.dataset.act === "ov-check-all") checkAllRoutes();
+      if (el.dataset.act === "project-open") {
+        const url = projectUrl(el.dataset.id);
+        if (url) location.assign(url);
+      }
       if (el.dataset.act === "ov-open" && viewNames().includes(el.dataset.view)) {
         commit({...STATE, view: el.dataset.view}, "push");
         document.getElementById("nav-" + el.dataset.view).focus();
@@ -4978,9 +5117,12 @@
     document.addEventListener("mousemove", moveTip);
     window.addEventListener("popstate", onHashChange);
     window.addEventListener("hashchange", onHashChange);
-    STATE = parseHash(location.hash);
-    loadMeta();
-    loadGroups();
+    // Back returns to a list or a project's page as the browser kept it (the focus on the Open button
+    // that was pressed, each table's sort and filter): like every view, it shows what was read at its
+    // "Loaded" time until Refresh.
+    applyScope(pageScope(location.pathname));
+    STATE = stateFromLocation(location.hash, location.pathname);
+    loadShell(pageScope(location.pathname));
     render();
   </script>
 </body>

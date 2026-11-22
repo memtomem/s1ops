@@ -28,6 +28,7 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.requests import HTTPConnection
 
 from s1ops import __version__
 from s1ops.contracts._validation import UNDECODABLE
@@ -96,11 +97,12 @@ def _proxied(name: str) -> bool:
     return name in ("forwarded", "via", "x-real-ip") or name.startswith("x-forwarded-")
 
 
-def sheet_request_allowed(request: Request) -> bool:
-    """Whether a request may read the review sheet, which holds state text: from a loopback address,
-    with exactly one Host header naming 127.0.0.1 or localhost (a DNS-rebound name does not; an IPv6
-    authority is refused too), and no header a proxy adds. A local proxy that strips every such header
-    and rewrites Host cannot be told from a local client: the app has no authentication."""
+def loopback_request_allowed(request: HTTPConnection) -> bool:
+    """Whether a request is this computer's own: from a loopback address, with exactly one Host header
+    naming 127.0.0.1 or localhost (a DNS-rebound name does not; an IPv6 authority is refused too), and
+    no header a proxy adds. It guards the review sheet, which holds state text, and everything `s1 web
+    --db` serves (`web/projects.py`). A local proxy that strips every such header and rewrites Host
+    cannot be told from a local client: the app has no authentication."""
     if request.client is None or request.client.host not in LOOPBACK_CLIENTS:
         return False
     hosts = request.headers.getlist("host")
@@ -110,6 +112,10 @@ def sheet_request_allowed(request: Request) -> bool:
     if found is None or (found.group(1) is not None and not 1 <= int(found.group(1)) <= 65535):
         return False
     return not any(_proxied(name.lower()) for name in request.headers.keys())
+
+
+sheet_request_allowed = loopback_request_allowed
+"""The rule under the name it had while the sheet was its only user."""
 
 
 def _decoded(raw: bytes) -> str:
@@ -250,7 +256,7 @@ def create_app(
 
     `sheet_path` is a review sheet from `s1 labelaudit sheet` for the Review view; it is never looked
     for in the workspace, since the sheet holds state text. `GET /api/sheet` answers only loopback
-    requests (`sheet_request_allowed`), but the address the app is served on is the caller's: `s1 web
+    requests (`loopback_request_allowed`), but the address the app is served on is the caller's: `s1 web
     --sheet` refuses any but 127.0.0.1 and localhost."""
     base = Path(workspace_dir) if workspace_dir else Path.cwd()
     if not base.is_dir():
@@ -812,7 +818,7 @@ def create_app(
         """The review sheet to answer, as `read_sheet` reads it: its items' state text, the options, and
         the pieces the page joins with the answers into the completed sheet (`SheetForm.fill`). The
         secret key is never read, so nothing here says which items are flags or what they are labeled."""
-        if not sheet_request_allowed(request):
+        if not loopback_request_allowed(request):
             raise HTTPException(status_code=403, detail=SHEET_REFUSED, headers=NO_STORE)
         if sheet_file is None:
             return JSONResponse({"sheet": None}, headers=NO_STORE)

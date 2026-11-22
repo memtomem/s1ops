@@ -215,6 +215,9 @@ def _check_inputs(args: argparse.Namespace) -> None:
     if getattr(args, "lint_cmd", None) == "check":
         # lint reports an unreadable questions file as a JL000 finding in its own (--format json) report.
         return
+    if getattr(args, "func", None) is _cmd_web:
+        # Which workbench is asked for comes first: a refused combination is said before a missing file is.
+        _check_web_args(args)
     for dest, (what, producer) in _INPUTS.items():
         value = getattr(args, dest, None)
         for one in value if isinstance(value, list) else [value] if value is not None else []:
@@ -1551,9 +1554,35 @@ def _cmd_demo(args: argparse.Namespace) -> int:
 SHEET_HOSTS = ("127.0.0.1", "localhost")
 
 
+def _check_web_args(args: argparse.Namespace) -> None:
+    """What `--db` does not go with; arguments only, no file is looked at."""
+    if args.db is None:
+        return
+    if args.workspace is not None:
+        raise CliError("--db serves the projects of a registry, each from its own directory: it does not take --workspace")
+    if args.sheet is not None:
+        raise CliError("--db does not take --sheet: a review sheet is served with one workspace (`s1 web --workspace DIR --sheet PATH`)")
+    if args.host not in SHEET_HOSTS:
+        # The list holds absolute paths, and every request that is not this computer's is refused anyway.
+        raise CliError(f"--db serves a registry's paths to this computer only: --host must be {' or '.join(SHEET_HOSTS)}, not {args.host!r}")
+
+
 def _cmd_web(args: argparse.Namespace) -> int:
-    if not Path(args.workspace).is_dir():
-        raise CliError(f"workspace directory not found: {args.workspace}")
+    if args.db is not None:
+        import uvicorn
+
+        from s1ops import registry
+        from s1ops.web.projects import create_projects_app
+
+        projects_app = create_projects_app(args.db)
+        # A file that is not a usable registry is one line here, not a page of error cards.
+        registry.check_registry(args.db)
+        uvicorn.run(projects_app, host=args.host, port=args.port)
+        return 0
+
+    workspace = "." if args.workspace is None else args.workspace
+    if not Path(workspace).is_dir():
+        raise CliError(f"workspace directory not found: {workspace}")
 
     import uvicorn
 
@@ -1566,7 +1595,7 @@ def _cmd_web(args: argparse.Namespace) -> int:
             raise CliError(f"--sheet serves state text to this computer only: --host must be {' or '.join(SHEET_HOSTS)}, not {args.host!r}")
         if not stat.S_ISREG(os.stat(args.sheet).st_mode):
             raise CliError(f"review sheet is not a regular file: {args.sheet} (the workbench reads it again on every request)")
-    app = create_app(workspace_dir=args.workspace, sheet_path=args.sheet)
+    app = create_app(workspace_dir=workspace, sheet_path=args.sheet)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
@@ -1999,7 +2028,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # web
     p_web = sub.add_parser("web", help="Launch local System 1 LLMOps Web Workbench (127.0.0.1)", **_FMT)
-    p_web.add_argument("--workspace", default=".", help="directory holding records.jsonl, fits.json, policy.json, ...")
+    p_web.add_argument("--workspace", default=None, help="directory holding records.jsonl, fits.json, policy.json, ... (default: .)")
     p_web.add_argument("--host", default="127.0.0.1", help="bind address")
     p_web.add_argument("--port", type=int, default=8765, help="bind port")
     p_web.add_argument(
@@ -2007,6 +2036,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="review sheet from `s1 labelaudit sheet` to answer in the Review view; it holds state text, so it is served "
         "to this computer only (--host 127.0.0.1 or localhost), and never looked for in the workspace",
+    )
+    p_web.add_argument(
+        "--db",
+        default=None,
+        help="project registry made by `s1 project init`: serve every registered project under /p/<id>/ instead of one "
+        "workspace, to this computer only (--host 127.0.0.1 or localhost); takes neither --workspace nor --sheet",
     )
     p_web.set_defaults(func=_cmd_web)
 

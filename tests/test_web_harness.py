@@ -16,12 +16,14 @@ import shutil
 import pytest
 from fastapi.testclient import TestClient
 
+from s1ops import registry
 from s1ops.cli import main as cli_main
 from s1ops.contracts.schemas import save_policies
 from s1ops.demo import generate_workspace
 from s1ops.eval.compare import compare_records
 from s1ops.improve.trainrun import load_trainrun
 from s1ops.web.app import STATIC_DIR, create_app
+from s1ops.web.projects import create_projects_app
 from tests.test_checkpoints import build_workspace, policy_entry
 from tests.test_web_render import DECLARATION, _all_functions, _declarations, _node, _script
 
@@ -212,6 +214,17 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
     review_answered = copy.deepcopy(review)
     review_answered["sheet"]["items"][0]["answer"] = review_answered["sheet"]["options"][0]
     review_answered["sheet"]["question_id"] = None
+    # A registry of two projects and an empty one, each read by a loopback client (the registry's
+    # workbench refuses every other).
+    db, empty_db = root / "projects.db", root / "empty.db"
+    registry.init_registry(db)
+    registry.init_registry(empty_db)
+    registry.add_project(db, "alpha", str(root / "w"), "Alpha tickets")
+    registry.add_project(db, "beta", str(ck))
+    local = {"client": ("127.0.0.1", 50000), "base_url": "http://127.0.0.1:8765"}
+    projects = get(TestClient(create_projects_app(db), **local), "/api/registry/projects")
+    projects_empty = get(TestClient(create_projects_app(empty_db), **local), "/api/registry/projects")
+    assert [p["slug"] for p in projects["projects"]] == ["alpha", "beta"] and projects_empty["projects"] == []
     audit_filled = get(client, "/api/audit")
     for g in audit_filled["groups"]:
         g["warnings"] = g["warnings"] or ["a warning"]
@@ -236,6 +249,8 @@ def payloads(tmp_path_factory) -> dict[str, dict[str, dict]]:
         "checkpoints-demo": {"/api/checkpoints": get(client, "/api/checkpoints")},
         "review": {"/api/sheet": review},
         "review-answered": {"/api/sheet": review_answered},
+        "projects": {"/api/registry/projects": projects},
+        "projects-empty": {"/api/registry/projects": projects_empty},
     }
 
 
@@ -274,6 +289,8 @@ LOADERS = {
     "checkpoints-demo": "loadCheckpoints",
     "review": "loadReview",
     "review-answered": "loadReview",
+    "projects": "loadProjects",
+    "projects-empty": "loadProjects",
 }
 
 
@@ -421,13 +438,15 @@ CONTAINERS = {
     "loadDrift": "drift-container",
     "loadCheckpoints": "checkpoints-container",
     "loadReview": "review-container",
+    "loadProjects": "projects-container",
 }
 
 
 def test_the_error_containers_are_the_pages_own() -> None:
     # The views' table in the page (`viewDefs`), which the shell runs each loader from.
     defs = re.findall(r'^        \w+: \{loader: (\w+), container: "([^"]+)"', _script(), re.M)
-    assert len(defs) == 9
+    # The nine views of a workbench and the projects list of a registry's page.
+    assert len(defs) == 10
     assert CONTAINERS == dict(defs)
     assert set(CONTAINERS) == set(LOADERS.values())
 

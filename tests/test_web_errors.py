@@ -24,7 +24,7 @@ _TEXT_FIELDS = (
     "inverse_source", "direction_after", "metric", "series", "lane", "caption",
     "title", "evidence", "evidence_url", "criterion", "primary_pred", "shadow_pred",
     "checkpoint", "trainrun_id", "path", "file", "split", "created_at", "sha256", "first_trained_hit",
-    "state", "header", "answer", "file_name",
+    "state", "header", "answer", "file_name", "slug", "workspace_path",
 )
 _SAFE_INTERPOLATIONS = {
     "res.status",  # numeric HTTP status, only ever reaches the page via showError's esc()

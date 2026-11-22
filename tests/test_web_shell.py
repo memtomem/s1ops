@@ -332,9 +332,10 @@ process.stdout.write(JSON.stringify(written.c.innerHTML));
 @pytest.mark.parametrize(
     "status, marker, hint",
     [
-        (400, "ERROR", "fix the file named above, then Refresh"),
-        (422, "ERROR", "fix the file named above, then Refresh"),
+        (400, "ERROR", "A file or directory could not be used: fix the one named above, then Refresh."),
+        (422, "ERROR", "fix the one named above, then Refresh"),
         (500, "ERROR", "has the traceback"),
+        (503, "ERROR", "The project registry was busy"),
         (None, "ERROR", "is <code>s1 web</code> still running?"),
         (404, "Nothing to show.", None),
     ],

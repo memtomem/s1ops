@@ -547,7 +547,8 @@ def test_empty_records_rank_nothing_and_list_no_group(tmp_path) -> None:
     html = _render(d)
     assert '<div class="card">No labeled groups found in workspace.</div>' in html
     assert "The workspace has no records to rank." in _audit(html) and "<table" not in html
-    assert _js("Object.values(slicesTables(d)).map(t => t.rows.length)", prelude=f"const d = {json.dumps(d)};") == [0]
+    # The card draws no table, so none is on offer to sort or export.
+    assert _js("Object.values(slicesTables(d)).map(t => t.rows.length)", prelude=f"const d = {json.dumps(d)};") == []
 
 
 @needs_node
@@ -669,9 +670,10 @@ FAIL_STEPS = """
 
 
 @needs_node
-def test_a_failed_or_unrenderable_response_keeps_nothing(client) -> None:
+def test_a_failed_side_is_kept_with_its_error_and_an_unrenderable_response_keeps_nothing(client) -> None:
     d = _view(client)
-    assert _shell_run(FAIL_STEPS, d) == {"failedError": True, "failedKept": False, "error": True, "kept": False, "tables": 0}
+    # One request failing (the ranking's) is that report's own card; the slices are shown and kept.
+    assert _shell_run(FAIL_STEPS, d) == {"failedError": True, "failedKept": True, "error": True, "kept": False, "tables": 0}
     # Kept before rendering, it would stay behind the error card, for a table action to fail on.
     functions = _mutated(
         '      document.getElementById("slices-container").innerHTML = renderSlices(d, ctx.opts ? ctx.opts() : {});\n      if (ctx.keep) ctx.keep(d);\n',
@@ -713,8 +715,168 @@ def test_an_older_answer_never_replaces_a_newer_one(client) -> None:
     out = _shell_run(STALE_STEPS, _view(client))
     assert out == {"second": ["/api/slices?fdr_q=0.2", "/api/labelaudit?top_k=15"], "shown": True, "still": True, "kept": 0.2, "afterRefresh": False}
     # Without the staleness check the older pair is rendered and kept.
-    functions = _mutated("      if (isStale(ctx)) return;\n      const d = {slices, labels,", "      const d = {slices, labels,")
-    assert _shell_run(STALE_STEPS, _view(client), functions=functions)["kept"] == 0.1
+    assert _shell_run(STALE_STEPS, _view(client), functions=_mutated(*NO_LOADER_GUARD))["kept"] == 0.1
+
+
+# The loader's staleness check, and the shell's around "Loaded", each removed by one mutation.
+NO_LOADER_GUARD = ("      if (isStale(ctx)) return;\n      const d = {\n        slices:", "      const d = {\n        slices:")
+NO_FINALLY_GUARD = (
+    '        if (viewSeq[view] !== seq || generation !== gen) return;\n        document.getElementById(def.container).removeAttribute("aria-busy");',
+    '        document.getElementById(def.container).removeAttribute("aria-busy");',
+)
+
+
+# --- one report failing does not hide the other ------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def failing(ws, tmp_path_factory) -> dict:
+    """The real 400s of each route: a fit file that is not one (the issue's case, which /api/slices
+    never reads) and a features file that is not JSON (which /api/labelaudit never reads)."""
+    out = {}
+    for name, broken in (("labels", "fits.json"), ("slices", "features.jsonl")):
+        root = tmp_path_factory.mktemp(f"broken-{name}")
+        for src in Path(ws["records"]).parent.iterdir():
+            (root / src.name).write_bytes(src.read_bytes())
+        (root / broken).write_text('{"schema": "nope"}' if broken == "fits.json" else "not json\n", encoding="utf-8")
+        c = TestClient(create_app(root))
+        s, la = c.get("/api/slices"), c.get("/api/labelaudit")
+        out[name] = {"slices": s.json(), "labels": la.json(), "status": (s.status_code, la.status_code), "file": str(root / broken)}
+    assert out["labels"]["status"] == (200, 400) and out["slices"]["status"] == (400, 200)
+    assert out["labels"]["labels"]["detail"].startswith(out["labels"]["file"] + ": ")
+    assert out["slices"]["slices"]["detail"].startswith(out["slices"]["file"] + ": ")
+    return out
+
+
+SETTLE_STEPS = """
+  runView("slices");
+  const [s, l] = pending.splice(0, 2);
+  const fail = body => Object.assign(new Error(body.detail), {status: 400});
+  if (payload.slices.detail) s.reject(fail(payload.slices)); else s.resolve(payload.slices);
+  if (payload.labels.detail) l.reject(fail(payload.labels)); else l.resolve(payload.labels);
+  await tick(); await tick();
+  out.html = shown();
+  out.kept = "slices" in viewData;
+  out.tables = Object.keys(currentTables()).map(k => k.split(":")[1].replace(/-\\d+$/, ""));
+  rerenderView("slices");
+  out.rerendered = shown() === out.html;
+"""
+
+SLICES_HEAD, LABELS_HEAD = "<h3>Answerability and error slices</h3>", "<h3>Blind Label Audit</h3>"
+
+
+def _error(html: str, detail: str) -> bool:
+    return f'<span class="badge badge-err">ERROR</span> {html_lib.escape(detail, quote=True)}</div>' in html
+
+
+@needs_node
+def test_a_broken_fit_file_hides_only_the_ranking(failing) -> None:
+    payload = {k: failing["labels"][k] for k in ("slices", "labels")}
+    out = _shell_run(SETTLE_STEPS, payload)
+    assert out["html"].count("<h3>Group:") == len(payload["slices"]["groups"]) >= 1
+    assert LABELS_HEAD in out["html"] and _error(out["html"], payload["labels"]["detail"])
+    assert "Blind Label Audit: disagreement candidates" not in out["html"] and SLICES_HEAD not in out["html"]
+    assert out["kept"] is True and out["tables"] == ["answerability", "errors"] * len(payload["slices"]["groups"])
+    assert out["rerendered"] is True
+
+
+@needs_node
+def test_a_broken_features_file_hides_only_the_slices(failing) -> None:
+    payload = {k: failing["slices"][k] for k in ("slices", "labels")}
+    out = _shell_run(SETTLE_STEPS, payload)
+    assert "<h3>Group:" not in out["html"] and "No labeled groups found" not in out["html"]
+    assert SLICES_HEAD in out["html"] and _error(out["html"], payload["slices"]["detail"])
+    assert "Blind Label Audit: disagreement candidates" in out["html"] and LABELS_HEAD not in out["html"]
+    assert out["kept"] is True and out["tables"] == ["flags"] and out["rerendered"] is True
+
+
+@needs_node
+def test_both_failing_show_both_cards_each_named_for_its_report(failing) -> None:
+    same = {"detail": "records.jsonl: cannot read: [Errno 13] Permission denied"}
+    for payload, details in (
+        ({"slices": failing["slices"]["slices"], "labels": failing["labels"]["labels"]},
+         (failing["slices"]["slices"]["detail"], failing["labels"]["labels"]["detail"])),
+        # One message for both (a records file both read): the headings still say which is which.
+        ({"slices": same, "labels": same}, (same["detail"], same["detail"])),
+    ):
+        out = _shell_run(SETTLE_STEPS, payload)
+        assert out["html"].index(SLICES_HEAD) < out["html"].index(LABELS_HEAD)
+        assert all(_error(out["html"], d) for d in details) and out["html"].count("badge-err\">ERROR") == 2
+        assert out["kept"] is True and out["tables"] == [] and out["rerendered"] is True
+
+
+@needs_node
+@pytest.mark.parametrize("reason, shown", [('"a plain string"', "a plain string"), ("undefined", "undefined")], ids=["string", "undefined"])
+def test_a_rejection_that_is_not_an_error_is_still_its_reports_card(client, reason, shown) -> None:
+    out = _shell_run(f"""
+  runView("slices");
+  const [s, l] = pending.splice(0, 2);
+  s.resolve(payload.slices);
+  l.reject({reason});
+  await tick(); await tick();
+  out.html = shown();
+  out.tables = Object.keys(currentTables()).map(k => k.split(":")[1]);
+""", _view(client))
+    # No status: the network wording, with the text the rejection gave.
+    assert LABELS_HEAD in out["html"] and _error(out["html"], shown) and "is <code>s1 web</code> still running?" in out["html"]
+    assert out["html"].count("<h3>Group:") == 1 and out["tables"] == ["answerability", "errors"]
+
+
+@needs_node
+def test_a_ranking_with_no_records_registers_no_table_to_export(tmp_path) -> None:
+    (tmp_path / "records.jsonl").write_text("")
+    d = _view(TestClient(create_app(tmp_path)))
+    out = _shell_run("""
+  viewData.slices = payload;
+  const downloads = [];
+  downloadText = (...a) => downloads.push(a);
+  out.tables = Object.keys(currentTables());
+  exportTable("slices:flags", "json");
+  exportTable("slices:flags", "csv");
+  out.downloads = downloads.length;
+""", d)
+    assert out == {"tables": [], "downloads": 0}
+
+
+STALE_MIXED_STEPS = """
+  const writes = [];
+  Object.defineProperty(el("loaded-at"), "textContent", {set(v) { writes.push(v); }, get() { return writes.length ? writes[writes.length - 1] : ""; }});
+  const old = (p, msg) => p.url.startsWith(msg[0]) ? p.reject(Object.assign(new Error(msg[1]), {status: 400})) : p.resolve(p.url.startsWith("/api/slices") ? payload.slices : payload.labels);
+  // A setting changes while a pair is out; the newer pair answers, then the older one, half failed.
+  runView("slices");
+  const older = pending.splice(0, 2);
+  STATE = {...STATE, fdrq: 0.2};
+  runView("slices");
+  answer();
+  await tick(); await tick();
+  const html = shown(), kept = viewData.slices, tables = Object.keys(currentTables()).join(), loaded = writes.length;
+  older.forEach(p => old(p, ["/api/labelaudit", "an older ranking failed"]));
+  await tick(); await tick();
+  out.settings = [shown() === html, viewData.slices === kept, Object.keys(currentTables()).join() === tables, writes.length === loaded, loaded];
+  // A Refresh outdates a pair too, whichever side fails.
+  generation += 1;
+  loadedSig = {};
+  viewData = {};
+  runView("slices");
+  const late = pending.splice(0, 2);
+  const blank = shown(), before = writes.length;
+  generation += 1;
+  late.forEach(p => old(p, ["/api/slices", "an older slice report failed"]));
+  await tick(); await tick();
+  out.refresh = [shown() === blank, "slices" in viewData, writes.length === before, Object.keys(currentTables()).length === 0];
+"""
+
+
+@needs_node
+def test_an_older_half_failed_pair_never_replaces_a_newer_one(client) -> None:
+    d = _view(client)
+    assert _shell_run(STALE_MIXED_STEPS, d) == {"settings": [True, True, True, True, 1], "refresh": [True, False, True, True]}
+    # Each guard is seen: without the loader's, the older pair is drawn and kept; without the
+    # shell's, "Loaded" is written for it.
+    loader = _shell_run(STALE_MIXED_STEPS, d, functions=_mutated(*NO_LOADER_GUARD))
+    assert loader["settings"][:3] == [False, False, False] and loader["refresh"][:2] == [False, True] and loader["refresh"][3] is False
+    shell = _shell_run(STALE_MIXED_STEPS, d, functions=_mutated(*NO_FINALLY_GUARD))
+    assert shell["settings"][3] is False and shell["refresh"][2] is False
 
 
 # --- the pickers' wiring ---------------------------------------------------------------------------

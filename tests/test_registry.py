@@ -386,15 +386,20 @@ def test_a_registry_a_writer_crashed_in_recovers_on_the_next_command(db: Path, w
     assert registry.add_project(db, "beta", str(ws)).id == 2
 
 
+@pytest.mark.parametrize("command", ["list", "add"])
 @pytest.mark.parametrize("mode", ["hot rollback journal", "WAL with uncheckpointed frames"])
-def test_a_foreign_database_a_writer_crashed_in_is_refused(tmp_path: Path, ws: Path, mode: str) -> None:
+def test_a_foreign_database_a_writer_crashed_in_is_refused(tmp_path: Path, ws: Path, mode: str, command: str) -> None:
+    # Each command gets its own crashed file, so neither sees one the other already opened.
     path = tmp_path / "other.db"
     if mode == "hot rollback journal":
         _crash_mid_write(path)
+        sidecar = tmp_path / "other.db-journal"
     else:
         _crash_mid_write(path, "PRAGMA journal_mode = WAL", commit_first=True)
-    for call in (lambda: registry.list_projects(path), lambda: registry.add_project(path, "alpha", str(ws))):
-        assert str(path) in _refused("unusable", call)
+        sidecar = tmp_path / "other.db-wal"
+    assert sidecar.stat().st_size > 0
+    call = (lambda: registry.list_projects(path)) if command == "list" else (lambda: registry.add_project(path, "alpha", str(ws)))
+    assert _refused("unusable", call) == f"not a project registry: {path} (make one with `s1 project init`)"
 
 
 @pytest.mark.skipif(sys.platform == "darwin", reason="APFS refuses a file name that is not UTF-8")

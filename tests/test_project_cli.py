@@ -1,5 +1,5 @@
 """`s1 project`: init, add, list, rename and remove over a registry file; each refusal is one `s1:` line
-and exit 1, and a refused command leaves the file as it was."""
+and exit 1, and a refused command leaves a registry as it was."""
 
 from __future__ import annotations
 

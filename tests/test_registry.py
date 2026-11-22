@@ -7,6 +7,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -345,6 +346,58 @@ def test_a_path_that_is_not_a_regular_file_is_refused_and_nothing_is_created(tmp
     assert "not a regular file" in _refused("unusable", registry.list_projects, fifo)
 
 
+def _crash_mid_write(path: Path, *pragmas: str, commit_first: bool = False) -> None:
+    """A writer that dies without closing: a hot rollback journal, or (in WAL mode) committed frames
+    still in the -wal file, which a read-write close would checkpoint into the main file."""
+    import subprocess
+    import sys
+
+    script = (
+        "import os, sqlite3, sys\n"
+        "c = sqlite3.connect(sys.argv[1], isolation_level=None)\n"
+        + "".join(f"c.execute({p!r})\n" for p in pragmas)
+        + "c.execute('PRAGMA cache_size = 1')\n"
+        "c.execute('CREATE TABLE IF NOT EXISTS t(x)')\n"
+        "c.execute('INSERT INTO t VALUES (zeroblob(5000))')\n"
+        + ("" if commit_first else "c.execute('BEGIN')\n")
+        + "for _ in range(200): c.execute('INSERT INTO t VALUES (zeroblob(5000))')\n"
+        "os._exit(0)\n"
+    )
+    subprocess.run([sys.executable, "-c", script, str(path)], check=True)
+
+
+def _files(path: Path) -> dict[str, bytes]:
+    """The database and its journal or WAL, by name. The -shm file is an index SQLite rebuilds; not data."""
+    return {p.name: p.read_bytes() for p in path.parent.iterdir() if p.name.startswith(path.name) and not p.name.endswith("-shm")}
+
+
+@pytest.mark.parametrize("mode", ["hot rollback journal", "WAL with uncheckpointed frames", "a newer registry with a hot journal"])
+def test_a_refused_database_a_writer_crashed_in_is_left_as_it_was(tmp_path: Path, ws: Path, mode: str) -> None:
+    # A read-write open would roll the journal back or checkpoint the WAL on close; the file is identified
+    # through a read-only connection first, which can do neither.
+    path = tmp_path / "other.db"
+    if mode == "hot rollback journal":
+        _crash_mid_write(path)
+    elif mode == "WAL with uncheckpointed frames":
+        _crash_mid_write(path, "PRAGMA journal_mode = WAL", commit_first=True)
+    else:
+        _raw(path, f"PRAGMA application_id = {registry.APPLICATION_ID}", "PRAGMA user_version = 2", registry._SCHEMA)
+        _crash_mid_write(path)
+    before = _files(path)
+    assert len(before) == 2, sorted(before)   # the database and its journal or WAL
+    for call in (lambda: registry.list_projects(path), lambda: registry.add_project(path, "alpha", str(ws))):
+        _refused("unusable", call)
+        assert _files(path) == before
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="APFS refuses a file name that is not UTF-8")
+def test_a_registry_name_that_is_not_utf8_round_trips(tmp_path: Path, ws: Path) -> None:
+    path = os.fsdecode(os.fsencode(str(tmp_path)) + b"/r\xff.db")
+    registry.init_registry(path)
+    registry.add_project(path, "alpha", str(ws))
+    assert [p.slug for p in registry.list_projects(path)] == ["alpha"]
+
+
 def test_a_hand_edited_row_is_refused_not_a_type_error(db: Path, ws: Path) -> None:
     registry.add_project(db, "alpha", str(ws))
     for statement in (
@@ -434,7 +487,9 @@ def test_a_write_holds_the_write_lock_from_its_first_read(db: Path, ws: Path, mo
     registry.add_project(db, "beta", str(ws))
     registry.remove_project(db, slug="beta")
     registry.list_projects(db)
-    assert seen == ["held", "held", "held", "free"]
+    # Each call identifies the file through a read-only connection (no lock), then opens its transaction:
+    # a write holds the write lock from BEGIN, before the schema is read again; a read does not.
+    assert seen == ["free", "held"] * 3 + ["free", "free"]
 
 
 def test_a_call_keeps_the_locks_another_connection_in_this_process_holds(db: Path, ws: Path) -> None:

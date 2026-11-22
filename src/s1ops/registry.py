@@ -6,10 +6,10 @@ Every call opens its own connection to an existing file (`mode=rw`, so a mistype
 one) and runs in one transaction: `BEGIN IMMEDIATE` for a write, whose checks and change commit
 together, a plain `BEGIN` for a read. A file is used only when it holds exactly what `init_registry`
 writes (its application id, its schema version, and its schema objects, compared as SQLite stores
-them), so a foreign database, a newer one, or one whose table lost a constraint is refused before
-anything in it is read or written. (Opening any SQLite file rolls back a transaction a crashed writer
-left in its journal; that happens here as in every SQLite client, before the file can be identified.)
-Every `sqlite3.Error` leaves as a `RegistryError`.
+them), so a foreign database, a newer one, or one whose table lost a constraint is refused through a
+read-only connection, before any connection that could change it is opened (a read-write one would roll
+back a crashed writer's journal or checkpoint a WAL file). Every `sqlite3.Error` leaves as a
+`RegistryError`.
 
 A project's `id` is its registration number: SQLite's `AUTOINCREMENT` never reuses one, and nothing
 changes a registration's directory, so an id names one directory for as long as it exists, and a slug
@@ -216,18 +216,43 @@ def _check_schema(conn: sqlite3.Connection, db: str | os.PathLike[str]) -> None:
         raise RegistryError("unusable", f"project registry's id counter is not one `s1 project` keeps: {db}")
 
 
+def _uri(full: str, mode: str) -> str:
+    # "file://" and an empty authority: the path is absolute, and one that starts with "//" would otherwise
+    # be read as an authority. Quoted from its bytes, so a name that is not UTF-8 (held as surrogate escapes)
+    # opens the file `os.stat` found.
+    return "file://" + urllib.parse.quote_from_bytes(os.fsencode(full)) + f"?mode={mode}"
+
+
+def _identify(full: str, db: str | os.PathLike[str]) -> None:
+    """Refuse a file that is not a registry through a read-only connection, before any connection that could
+    change it: a read-write one would roll back a crashed writer's journal or checkpoint a WAL file on
+    close, and both would change a file this refuses. A read-only connection does neither (SQLite refuses
+    the open instead, which is a refusal here too)."""
+    try:
+        conn = sqlite3.connect(_uri(full, "ro"), uri=True, isolation_level=None, timeout=BUSY_TIMEOUT_S)
+    except sqlite3.Error as e:
+        raise _error(db, e) from None
+    with contextlib.closing(conn):
+        try:
+            conn.execute("BEGIN")
+            _check_schema(conn, db)
+            conn.execute("COMMIT")
+        except sqlite3.Error as e:
+            raise _error(db, e) from None
+
+
 @contextlib.contextmanager
 def _transaction(db: str | os.PathLike[str], *, write: bool) -> Iterator[sqlite3.Connection]:
-    # "file://" and an empty authority: the path is absolute, and one that starts with "//" would
-    # otherwise be read as an authority.
-    uri = "file://" + urllib.parse.quote(_check_file(db)) + "?mode=rw"
+    full = _check_file(db)
+    _identify(full, db)
     try:
-        conn = sqlite3.connect(uri, uri=True, isolation_level=None, timeout=BUSY_TIMEOUT_S)
+        conn = sqlite3.connect(_uri(full, "rw"), uri=True, isolation_level=None, timeout=BUSY_TIMEOUT_S)
     except sqlite3.Error as e:
         raise _error(db, e) from None
     with contextlib.closing(conn):
         try:
             conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
+            # Again inside this transaction: the file may have been replaced since it was identified.
             _check_schema(conn, db)
             yield conn
             conn.execute("COMMIT")

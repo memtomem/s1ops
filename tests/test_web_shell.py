@@ -219,7 +219,9 @@ def _live_nav(html: str) -> str:
     """The views' nav block, after comments are dropped (a commented-out block is not the live one); the page
     has one nav and one tablist."""
     live = re.sub(r"<!--.*?-->", "", html, flags=re.S)
-    assert live.count("<nav") == 1 and len(re.findall(r"""\brole\s*=\s*["']?tablist\b""", live)) == 1
+    navs = re.findall(r"<nav\b", live, re.I)
+    tablists = re.findall(r"""(?<![\w-])role\s*=\s*["']?tablist\b""", live, re.I)
+    assert len(navs) == 1 and len(tablists) == 1
     nav = re.search(r'    <nav class="views" role="tablist".*?</nav>', live, re.S)
     assert nav is not None
     return nav.group(0)
@@ -233,9 +235,12 @@ def test_the_views_are_grouped_under_hidden_section_labels() -> None:
         HTML.replace(nav, nav + '\n    <nav role="tablist" class="views"><button role="tab">x</button></nav>', 1),
         HTML.replace(nav, nav + "\n    <div role='tablist'><button role='tab'>x</button></div>", 1),
         HTML.replace(nav, nav + "\n    <div role=tablist><button role=tab>x</button></div>", 1),
+        HTML.replace(nav, nav + '\n    <div ROLE="TABLIST"><button role="tab">x</button></div>', 1),
     ):
         with pytest.raises(AssertionError):
             _live_nav(mutant)
+    # An attribute that only ends in "role" is not a second tablist.
+    assert _live_nav(HTML.replace(nav, nav + '\n    <div data-role="tablist"></div>', 1)) == NAV_MARKUP
 
 
 @needs_node

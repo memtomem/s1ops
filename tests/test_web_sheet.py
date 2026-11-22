@@ -187,6 +187,39 @@ def test_a_sheet_not_in_its_writers_form_is_refused_without_quoting_it(made, nam
         assert leaked not in text.replace("Answer: <option>", "")
 
 
+_WEB_FORM = 'item 1: the web reads an answer only as "Answer: <option>" on its own line; fix the item by hand. '
+_ESTIMATE_READS = "Read with its whitespace collapsed, as s1 labelaudit estimate reads it, this item's answer "
+# Edits the web refuses at the answer line, each with what `estimate` makes of that item.
+ANSWER_EDITS = [
+    ("no-space", "\nAnswer:True\n", "True"),
+    ("trailing-space", "\nAnswer: True \n", "True"),
+    ("trailing-tab", "\nAnswer: True\t\n", "True"),
+    ("next-line", "\nAnswer: \nTrue\n", "True"),
+    ("not-an-option", "\nAnswer: maybe\n", None),
+    ("text-below", "\nAnswer: True\nsee notes\n", None),
+]
+
+
+@pytest.mark.parametrize("name, answer, scored", ANSWER_EDITS, ids=[e[0] for e in ANSWER_EDITS])
+def test_the_refusal_says_whether_estimate_reads_the_items_answer_as_an_option(made, name, answer, scored) -> None:
+    # One item, so what `parse_answers` says is about this item alone (a blank item 2 would refuse
+    # the whole sheet whatever item 1 holds).
+    one = made["form"].split("\n## 2\n", 1)[0].rstrip("\n") + "\n"
+    form = one.replace("\nAnswer: \n", answer, 1)
+    assert form != one
+    options = list(read_sheet(one).options)
+    if scored is None:
+        with pytest.raises(ValueError, match=r"^item 1: answer .* is not one of"):
+            parse_answers(form, options)
+        tail = "is not one of the listed options either"
+    else:
+        assert parse_answers(form, options) == {"1": scored}
+        tail = "is one of the listed options"
+    with pytest.raises(SheetFormatError) as caught:
+        read_sheet(form)
+    assert str(caught.value) == _WEB_FORM + _ESTIMATE_READS + tail
+
+
 @pytest.mark.parametrize("key", [True, 1.0, 0, 13, "1"])
 def test_fill_refuses_an_item_the_sheet_does_not_have(made, key) -> None:
     with pytest.raises(ValueError, match="the sheet has no item"):

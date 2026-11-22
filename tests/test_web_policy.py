@@ -436,20 +436,30 @@ def test_the_marked_point_is_the_one_the_server_tuned(clients, payloads) -> None
 
 @needs_node
 def test_the_page_marks_the_servers_point_even_where_the_curve_seems_to_allow_more(tmp_path) -> None:
-    # 29 errors of 100 at budget 0.29: `0.29 * 100` is 28.999999999999996, so the server tunes 0.9
-    # although the 0.8 point's error rate equals the budget. The page marks what the server tuned.
+    # 29 errors of 100 at budget 0.29: the 0.8 point's error rate equals the budget, and the server
+    # tunes it (`select_threshold` compares that rate, not `errors <= 0.29 * 100`, 28.999999999999996).
     rows = _rows((50, {"a": 0.9, "b": 0.1}, "a"), (29, {"a": 0.8, "b": 0.2}, "b"), (21, {"a": 0.8, "b": 0.2}, "a"))
     records = _write(tmp_path / "r.jsonl", rows)
     d = _get(TestClient(create_app(records_path=records)), error_budget=0.29, use_calib=False)
     assert [(p["threshold"], p["error_rate"]) for p in d["threshold_curve"]] == [(0.9, 0.0), (0.8, 0.29)]
-    assert d["tuned_threshold"]["threshold"] == 0.9 == select_threshold([0.9] * 50 + [0.8] * 50, [True] * 50 + [False] * 29 + [True] * 21, budget=0.29)
+    assert d["tuned_threshold"]["threshold"] == 0.8 == select_threshold([0.9] * 50 + [0.8] * 50, [True] * 50 + [False] * 29 + [True] * 21, budget=0.29)
     curve = _js(f"policyCurve({json.dumps(d)})")
-    assert curve["tuned"] == 0 and [r["tuned"] for r in curve["rows"]] == ["tuned", ""]
+    assert curve["tuned"] == 1 and [r["tuned"] for r in curve["rows"]] == ["", "tuned"]
     html = _view(d, inputs={"inp-err-budget": "0.29"})["html"]
-    x = _js("px(curveFrame().x(0.5))")
+    x = _js("px(curveFrame().x(1.0))")
     assert _tuned_marks(html) == [x, x]
     # A two-point curve draws a marker at each point, on each chart's main line.
     assert html.count('<circle class="dot ser-1"') == 4
+    # The page decides nothing itself: handed the same response with only its served threshold set to
+    # 0.9, under the same 0.29 budget and curve, it marks 0.9, never the 0.8 point the curve shows
+    # within budget.
+    served = {**d, "tuned_threshold": {**d["tuned_threshold"], "threshold": 0.9}}
+    assert served["tuned_threshold"] == {"threshold": 0.9, "error_budget": 0.29} and served["threshold_curve"] == d["threshold_curve"]
+    curve = _js(f"policyCurve({json.dumps(served)})")
+    assert curve["tuned"] == 0 and [r["tuned"] for r in curve["rows"]] == ["tuned", ""]
+    html = _view(served, inputs={"inp-err-budget": "0.29"})["html"]
+    x = _js("px(curveFrame().x(0.5))")
+    assert _tuned_marks(html) == [x, x]
 
 
 @needs_node

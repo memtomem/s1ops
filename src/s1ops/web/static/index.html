@@ -2338,7 +2338,7 @@
       const tuned = curve.tuned >= 0 ? curve.rows[curve.tuned] : null;
       const mark = tuned ? [{name: "tuned threshold", cls: "mark", shape: "diamond", noLine: true}] : [];
       const tunedNote = tuned
-        ? `The marked point is the threshold the server tuned (${fmtNum(tuned.threshold, 4)}): the last point where errors ≤ budget × accepted, as s1 policy tune counts it.`
+        ? `The marked point is the threshold the server tuned (${fmtNum(tuned.threshold, 4)}): the last point whose error rate is within the error budget, as s1 policy tune selects it.`
         : "No point is marked: no threshold meets the error budget.";
       const hoverNote = curve.rows.length > curveHoverLimit()
         ? ` Hover reads ${curveHoverLimit()} evenly spaced points and the tuned one; the table below holds all ${curve.rows.length}.`

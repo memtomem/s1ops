@@ -90,7 +90,7 @@ def test_the_demo_threshold_meets_the_budget_the_band_breaks(ws, tmp_path, capsy
     assert (t.mode, t.band_lo, t.band_hi, t.calibrated) == ("error_budget", None, None, calibrated)
     assert t.metrics_on_split["selection"] == "error_budget"
     accepted, errors, rate = _metrics(t)
-    assert 0 < accepted < t.n and errors <= 0.1 * accepted and rate == errors / accepted
+    assert 0 < accepted < t.n and rate == errors / accepted <= 0.1
 
 
 def test_a_tie_at_one_half_is_counted_as_the_rule_answers(tmp_path, capsys) -> None:

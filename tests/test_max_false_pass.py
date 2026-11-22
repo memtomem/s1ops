@@ -28,7 +28,8 @@ def oracle(p, label, rate, use_cp_upper=False, alpha=0.05):
     n_false = sum(not y for y in label)
     for c in sorted(set(p) | {1.0}):
         fp = sum(1 for x, y in zip(p, label) if not y and x >= c)
-        ok = clopper_pearson_upper(fp, n_false, alpha) <= rate if use_cp_upper else fp <= rate * n_false
+        # The reported rate against the cap, as the selector compares it (tests/test_budget_boundary.py).
+        ok = clopper_pearson_upper(fp, n_false, alpha) <= rate if use_cp_upper else fp / n_false <= rate
         if ok:
             tp = sum(1 for x, y in zip(p, label) if y and x >= c)
             return FalsePassCut(cutoff=c, n_true=len(p) - n_false, n_false=n_false, true_pass=tp, false_pass=fp)

@@ -461,7 +461,7 @@ def parse_answers(form: str, options: Sequence[str]) -> dict[str, str]:
         if len(sec.markers) != 1:
             raise ValueError(f"item {n}: expected one line starting with Answer:")
         given = form[sec.markers[0].end() : sec.end]
-        answer = " ".join(given.split())
+        answer = _normalized(given)
         if answer not in allowed:
             raise ValueError(f"item {n}: answer {given.strip()!r} is not one of {sorted(allowed)}")
         if n in out:
@@ -570,9 +570,13 @@ def read_sheet(form: str) -> SheetForm:
         answer_line, _, below = form[marker.end() : sec.end].partition("\n")
         given = answer_line[1:]
         if not answer_line.startswith(" ") or (given and given not in options) or below.strip(" \t\n"):
+            # Whether `parse_answers` would take this item's answer, said of this item and the
+            # options the sheet lists only: `estimate` also refuses a sheet with another item
+            # blank, and checks the key's options, which a 0.6.0 sheet may list split apart.
+            read = "is one of the listed options" if _normalized(form[marker.end() : sec.end]) in options else "is not one of the listed options either"
             raise SheetFormatError(
-                f'item {i}: the web reads an answer only as "Answer: <option>" on its own line; '
-                "fix the item by hand, or score the sheet with s1 labelaudit estimate"
+                f'item {i}: the web reads an answer only as "Answer: <option>" on its own line; fix the item by hand. '
+                f"Read with its whitespace collapsed, as s1 labelaudit estimate reads it, this item's answer {read}"
             )
         cut = marker.end() + 1
         pieces.append(form[pos:cut])

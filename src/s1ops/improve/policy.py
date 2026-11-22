@@ -57,8 +57,10 @@ def select_threshold(
     """Tie-safe threshold selection at error budget `budget`.
 
     Sort by confidence descending (stable); accept equal confidences as one group; return the
-    confidence of the last group at which `errors <= budget * accepted` (or Clopper-Pearson upper
-    bound <= `budget` when `use_cp_upper=True`) and `accepted >= min_accepted`.
+    confidence of the last group at which `errors / accepted <= budget` (or Clopper-Pearson upper
+    bound <= `budget` when `use_cp_upper=True`) and `accepted >= min_accepted`. The rate is the one
+    `threshold_curve` reports, compared as a double: 29 errors of 100 meets a 0.29 budget, which
+    `errors <= budget * accepted` would refuse (`0.29 * 100` is 28.999999999999996).
     `None` means no threshold meets the budget: accept nothing (delegate all).
     """
     if not math.isfinite(budget) or not 0 <= budget <= 1 or min_accepted < 1:
@@ -86,7 +88,7 @@ def select_threshold(
         )
         ok = np.flatnonzero(cp_ok & (accepted >= min_accepted))
     else:
-        ok = np.flatnonzero((errors[ends] <= budget * accepted) & (accepted >= min_accepted))
+        ok = np.flatnonzero((errors[ends] / accepted <= budget) & (accepted >= min_accepted))
     return float(ordered[ends[ok[-1]]]) if len(ok) else None
 
 
@@ -121,7 +123,8 @@ def select_false_pass_cutoff(
 
     For a consumer that acts only on BLOCK (`p < band_lo`) and treats ALLOW and ESCALATE alike.
     Candidates are the observed `p` values and `1.0`; an item at exactly the cutoff passes, as in
-    routing. A candidate is feasible when `false_pass <= max_false_pass * n_false` (or its
+    routing. A candidate is feasible when its reported rate `false_pass / n_false <= max_false_pass`,
+    compared as a double as `select_threshold` compares its rate (or its
     Clopper-Pearson upper bound is `<= max_false_pass` when `use_cp_upper=True`); the smallest
     feasible one passes the most label-true items. `None` means no candidate is feasible.
     """
@@ -144,7 +147,7 @@ def select_false_pass_cutoff(
     if use_cp_upper:
         ok = np.array([clopper_pearson_upper(int(k), len(false_p), alpha) <= max_false_pass for k in false_pass], dtype=bool)
     else:
-        ok = false_pass <= max_false_pass * len(false_p)
+        ok = false_pass / len(false_p) <= max_false_pass
     feasible = np.flatnonzero(ok)
     if not len(feasible):
         return None

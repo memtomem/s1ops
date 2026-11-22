@@ -191,6 +191,58 @@ def test_arrow_keys_wrap_around_the_views() -> None:
     assert _js('nextViewIndex("ArrowRight", 6, 7)') == 0
 
 
+# The views' tablist, exactly. One flat tablist of the nine tabs in step order; each section's name is an
+# `aria-hidden` sibling, and each tab but the overview names its section by `aria-describedby`, so the
+# tablist owns only tabs and the arrow keys (`navKey`, which selects `[role=tab]`) walk all nine. What the
+# accessibility tree makes of it is shown only in a browser (Chrome's: nine tabs, each section name as the
+# description); this pins the markup that was checked there, so any change to it is a reviewed edit here.
+NAV_MARKUP = "\n".join([
+    '    <nav class="views" role="tablist" aria-label="Workbench views" aria-orientation="vertical">',
+    '      <button type="button" role="tab" id="nav-overview" data-view="overview" aria-controls="tab-overview" aria-selected="true" tabindex="0"><span class="nav-step">0</span>Overview</button>',
+    '      <span class="nav-section" id="navsec-route" aria-hidden="true">Calibrate &amp; route</span>',
+    '      <button type="button" role="tab" id="nav-calib" data-view="calib" aria-controls="tab-calib" aria-selected="false" tabindex="-1" aria-describedby="navsec-route"><span class="nav-step">1</span>Calibration &amp; Noise Floor</button>',
+    '      <button type="button" role="tab" id="nav-policy" data-view="policy" aria-controls="tab-policy" aria-selected="false" tabindex="-1" aria-describedby="navsec-route"><span class="nav-step">2</span>Threshold &amp; Escalation Simulator</button>',
+    '      <span class="nav-section" id="navsec-questions" aria-hidden="true">Questions &amp; labels</span>',
+    '      <button type="button" role="tab" id="nav-lint" data-view="lint" aria-controls="tab-lint" aria-selected="false" tabindex="-1" aria-describedby="navsec-questions"><span class="nav-step">3</span>Question Lint &amp; Probe Coherence</button>',
+    '      <button type="button" role="tab" id="nav-slices" data-view="slices" aria-controls="tab-slices" aria-selected="false" tabindex="-1" aria-describedby="navsec-questions"><span class="nav-step">4</span>Slices &amp; Blind Label Audit</button>',
+    '      <span class="nav-section" id="navsec-models" aria-hidden="true">Models over time</span>',
+    '      <button type="button" role="tab" id="nav-compare" data-view="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1" aria-describedby="navsec-models"><span class="nav-step">5</span>Shadow Compare &amp; Judge Audit</button>',
+    '      <button type="button" role="tab" id="nav-drift" data-view="drift" aria-controls="tab-drift" aria-selected="false" tabindex="-1" aria-describedby="navsec-models"><span class="nav-step">6</span>Drift &amp; Canary Monitor</button>',
+    '      <button type="button" role="tab" id="nav-checkpoints" data-view="checkpoints" aria-controls="tab-checkpoints" aria-selected="false" tabindex="-1" aria-describedby="navsec-models"><span class="nav-step">7</span>Checkpoints &amp; Training Runs</button>',
+    '      <span class="nav-section" id="navsec-review" aria-hidden="true">Human review</span>',
+    '      <button type="button" role="tab" id="nav-review" data-view="review" aria-controls="tab-review" aria-selected="false" tabindex="-1" aria-describedby="navsec-review"><span class="nav-step">8</span>Blind Sheet Review</button>',
+    '    </nav>',
+])
+
+
+def _live_nav(html: str) -> str:
+    """The views' nav block, after comments are dropped (a commented-out block is not the live one); the page
+    has one nav and one tablist."""
+    live = re.sub(r"<!--.*?-->", "", html, flags=re.S)
+    navs = re.findall(r"<nav\b", live, re.I)
+    tablists = re.findall(r"""(?<![\w-])role\s*=\s*["']?tablist\b""", live, re.I)
+    assert len(navs) == 1 and len(tablists) == 1
+    nav = re.search(r'    <nav class="views" role="tablist".*?</nav>', live, re.S)
+    assert nav is not None
+    return nav.group(0)
+
+
+def test_the_views_are_grouped_under_hidden_section_labels() -> None:
+    assert _live_nav(HTML) == NAV_MARKUP
+    nav = re.search(r'    <nav class="views".*?</nav>', HTML, re.S).group(0)
+    for mutant in (
+        HTML.replace(nav, "<!--\n" + nav + "\n-->", 1),
+        HTML.replace(nav, nav + '\n    <nav role="tablist" class="views"><button role="tab">x</button></nav>', 1),
+        HTML.replace(nav, nav + "\n    <div role='tablist'><button role='tab'>x</button></div>", 1),
+        HTML.replace(nav, nav + "\n    <div role=tablist><button role=tab>x</button></div>", 1),
+        HTML.replace(nav, nav + '\n    <div ROLE="TABLIST"><button role="tab">x</button></div>', 1),
+    ):
+        with pytest.raises(AssertionError):
+            _live_nav(mutant)
+    # An attribute that only ends in "role" is not a second tablist.
+    assert _live_nav(HTML.replace(nav, nav + '\n    <div data-role="tablist"></div>', 1)) == NAV_MARKUP
+
+
 @needs_node
 def test_the_theme_cycles_system_light_dark() -> None:
     assert _js('["system", "light", "dark", "bogus"].map(nextTheme)') == ["light", "dark", "system", "system"]

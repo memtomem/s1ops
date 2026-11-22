@@ -171,6 +171,16 @@
       font-size: 11px;
       min-width: 1.2em;
     }
+    /* A section's name, above its views. Hidden from the accessibility tree: each tab of the section
+       names it as its description, so the tablist owns only its tabs. No text-transform: the
+       description is computed from the rendered text, so an uppercased label is announced in capitals. */
+    nav.views .nav-section {
+      margin: 14px 12px 4px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      color: var(--muted);
+    }
     .content { min-width: 0; }
     .filter-bar {
       position: sticky;
@@ -464,6 +474,13 @@
         border-bottom: 1px solid var(--border);
       }
       nav.views button { white-space: nowrap; }
+      nav.views .nav-section {
+        align-self: center;
+        margin: 0 4px 0 12px;
+        padding-left: 12px;
+        border-left: 1px solid var(--border);
+        white-space: nowrap;
+      }
       .filter-bar { padding: 8px 16px; }
       main { padding: 16px 16px 40px; }
     }
@@ -484,14 +501,18 @@
   <div class="layout">
     <nav class="views" role="tablist" aria-label="Workbench views" aria-orientation="vertical">
       <button type="button" role="tab" id="nav-overview" data-view="overview" aria-controls="tab-overview" aria-selected="true" tabindex="0"><span class="nav-step">0</span>Overview</button>
-      <button type="button" role="tab" id="nav-calib" data-view="calib" aria-controls="tab-calib" aria-selected="false" tabindex="-1"><span class="nav-step">1</span>Calibration &amp; Noise Floor</button>
-      <button type="button" role="tab" id="nav-policy" data-view="policy" aria-controls="tab-policy" aria-selected="false" tabindex="-1"><span class="nav-step">2</span>Threshold &amp; Escalation Simulator</button>
-      <button type="button" role="tab" id="nav-lint" data-view="lint" aria-controls="tab-lint" aria-selected="false" tabindex="-1"><span class="nav-step">3</span>Question Lint &amp; Probe Coherence</button>
-      <button type="button" role="tab" id="nav-slices" data-view="slices" aria-controls="tab-slices" aria-selected="false" tabindex="-1"><span class="nav-step">4</span>Slices &amp; Blind Label Audit</button>
-      <button type="button" role="tab" id="nav-compare" data-view="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1"><span class="nav-step">5</span>Shadow Compare &amp; Judge Audit</button>
-      <button type="button" role="tab" id="nav-drift" data-view="drift" aria-controls="tab-drift" aria-selected="false" tabindex="-1"><span class="nav-step">6</span>Drift &amp; Canary Monitor</button>
-      <button type="button" role="tab" id="nav-checkpoints" data-view="checkpoints" aria-controls="tab-checkpoints" aria-selected="false" tabindex="-1"><span class="nav-step">7</span>Checkpoints &amp; Training Runs</button>
-      <button type="button" role="tab" id="nav-review" data-view="review" aria-controls="tab-review" aria-selected="false" tabindex="-1"><span class="nav-step">8</span>Blind Sheet Review</button>
+      <span class="nav-section" id="navsec-route" aria-hidden="true">Calibrate &amp; route</span>
+      <button type="button" role="tab" id="nav-calib" data-view="calib" aria-controls="tab-calib" aria-selected="false" tabindex="-1" aria-describedby="navsec-route"><span class="nav-step">1</span>Calibration &amp; Noise Floor</button>
+      <button type="button" role="tab" id="nav-policy" data-view="policy" aria-controls="tab-policy" aria-selected="false" tabindex="-1" aria-describedby="navsec-route"><span class="nav-step">2</span>Threshold &amp; Escalation Simulator</button>
+      <span class="nav-section" id="navsec-questions" aria-hidden="true">Questions &amp; labels</span>
+      <button type="button" role="tab" id="nav-lint" data-view="lint" aria-controls="tab-lint" aria-selected="false" tabindex="-1" aria-describedby="navsec-questions"><span class="nav-step">3</span>Question Lint &amp; Probe Coherence</button>
+      <button type="button" role="tab" id="nav-slices" data-view="slices" aria-controls="tab-slices" aria-selected="false" tabindex="-1" aria-describedby="navsec-questions"><span class="nav-step">4</span>Slices &amp; Blind Label Audit</button>
+      <span class="nav-section" id="navsec-models" aria-hidden="true">Models over time</span>
+      <button type="button" role="tab" id="nav-compare" data-view="compare" aria-controls="tab-compare" aria-selected="false" tabindex="-1" aria-describedby="navsec-models"><span class="nav-step">5</span>Shadow Compare &amp; Judge Audit</button>
+      <button type="button" role="tab" id="nav-drift" data-view="drift" aria-controls="tab-drift" aria-selected="false" tabindex="-1" aria-describedby="navsec-models"><span class="nav-step">6</span>Drift &amp; Canary Monitor</button>
+      <button type="button" role="tab" id="nav-checkpoints" data-view="checkpoints" aria-controls="tab-checkpoints" aria-selected="false" tabindex="-1" aria-describedby="navsec-models"><span class="nav-step">7</span>Checkpoints &amp; Training Runs</button>
+      <span class="nav-section" id="navsec-review" aria-hidden="true">Human review</span>
+      <button type="button" role="tab" id="nav-review" data-view="review" aria-controls="tab-review" aria-selected="false" tabindex="-1" aria-describedby="navsec-review"><span class="nav-step">8</span>Blind Sheet Review</button>
     </nav>
     <div class="content">
       <div class="filter-bar" id="filter-bar">

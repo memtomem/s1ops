@@ -140,8 +140,19 @@ def _fail(message: str, code: int = EXIT_ERROR) -> int:
     return code
 
 
+# Python 3.14's argparse colors help by default and decides by asking `sys.stdout` (`fileno()`,
+# `isatty()`), both when a parser is made and when a help formatter is. `main` is also a library
+# call, which must not ask its host's stream to choose a color, so color is off on the parsers and
+# the formatter. (argparse's width detection, `shutil.get_terminal_size()`, still asks
+# `sys.__stdout__` on every version.)
+_NO_COLOR: dict[str, bool] = {"color": False} if sys.version_info >= (3, 14) else {}
+
+
 class _Parser(argparse.ArgumentParser):
     """Usage errors exit 1, so exit 2 stays reserved for the in-sample refusal."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **{**_NO_COLOR, **kwargs})
 
     def error(self, message: str) -> None:  # type: ignore[override]
         self.exit(EXIT_ERROR, f"s1: {_one_line(f'{message}; see {self.prog} -h')}\n")
@@ -1540,6 +1551,11 @@ def _cmd_web(args: argparse.Namespace) -> int:
 
 class _HelpFormatter(argparse.ArgumentDefaultsHelpFormatter):
     """Show `(default: ...)` only when the default says something; argparse passes this per subparser."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        # Made before the parser's own color setting is applied to it (3.14): uncolored from the start,
+        # unless a caller gives `color`, by keyword or as the fifth positional argument.
+        super().__init__(*args, **({**_NO_COLOR, **kwargs} if len(args) < 5 else kwargs))
 
     def _get_help_string(self, action: argparse.Action) -> str | None:
         if action.default in (None, False, argparse.SUPPRESS):

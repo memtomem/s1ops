@@ -29,7 +29,7 @@
     - 수동 `workflow_dispatch`만 받음 (입력 `index`: `testpypi` | `pypi`). dispatch 자체가 공개 시점을 정하는 관문
     - `guard`: ref가 `refs/tags/vX.Y.Z`이고 X.Y.Z가 `pyproject.toml` version·`s1ops.__version__`과 같아야 함
     - `ci`: 같은 커밋에서 `ci.yml` 전체를 재사용(`workflow_call`), publish job은 checkout 없이 그 run의 `dist` artifact만 업로드. `id-token: write`는 publish job에만 부여
-    - `attestations: false`: 저장소가 비공개인 동안 끔. 서명 단계가 업로드 전에 저장소·워크플로·ref·커밋·run URI를 공개 Rekor 로그에 영구 기록하기 때문 (업로드가 실패해도 남음). 저장소 공개 시 제거
+    - `attestations: false`: 저장소가 비공개인 동안 끔. 서명 단계가 업로드 전에 저장소·워크플로·ref·커밋·run URI를 공개 Rekor 로그에 영구 기록하기 때문 (업로드가 실패해도 남음). 2026-11-23 저장소 공개 후 제거(attestation 켬)
   - [ ] 소유자 1회 설정:
     - GitHub environment `testpypi`, `pypi` 생성
     - TestPyPI·PyPI의 **기존** `s1ops` 프로젝트(yank된 0.0.1이 있으므로 pending publisher가 아님) → Manage → Publishing에서 GitHub publisher 추가: owner `memtomem`, repository `s1ops`, workflow `release.yml`, environment `testpypi` / `pypi`
@@ -38,10 +38,10 @@
   - [x] 첫 실제 릴리스 준비 (2026-10-25 소유자 결정: 패키지만 먼저 공개, 저장소는 비공개 유지. 버전은 0.2.0 대신 0.0.2로 결정. `v0.2.0` 태그로 한 TestPyPI 시도는 publisher 불일치로 업로드 전에 실패해 아무것도 공개되지 않음):
     - 데모 생성기를 패키지로 옮겨 `s1 demo OUT_DIR [--seed N]` 추가 (새 디렉터리나 빈 디렉터리에만 씀, `--force` 없음). `release_check.py`가 wheel·sdist 설치본에서 `s1 demo` + lint까지 실행
     - README를 PyPI용으로 재작성: `pip install s1ops` → `s1 demo` → 파이프라인. 저장소·`docs/` 링크, Mermaid, `$...$` 수식 제거 (PyPI는 렌더링하지 않음)
-    - `[project.urls]` 제거, `release_check.py`가 METADATA·PKG-INFO에 `memtomem/s1ops`가 없는지 검사
-  - [ ] 저장소 공개 시: `release.yml`의 `attestations: false`와 `release_check.py`의 `PRIVATE_REPO` 검사 제거, `[project.urls]` 복원, `docs/*.md`의 로컬 경로 정리
+    - `[project.urls]` 제거, `release_check.py`가 METADATA·PKG-INFO에 `memtomem/s1ops`가 없는지 검사 (2026-11-23 공개 후 `[project.urls]` 복원, 검사 제거)
+  - [x] 저장소 공개 시 (2026-11-23, `chore/public-urls`): `release.yml`의 `attestations: false`와 `release_check.py`의 `PRIVATE_REPO` 검사 제거, `[project.urls]` 복원, `docs/*.md`의 로컬 경로 정리
     - [x] 공개 전 준비 (2026-11-23, `chore/public-prep`): 추적 파일의 로컬 경로·비공개 저장소 이름 정리(`tests/test_public_tree.py`가 고정), `CLA.md`·`CONTRIBUTING.md`·`SECURITY.md`·`CODE_OF_CONDUCT.md`, README `## Stability`·`## License`·beta 표시, classifier `4 - Beta`. 라이선스는 Apache-2.0 그대로(소유자 결정)
-    - [ ] 전환 전 Git 밖 자료(이슈·PR·댓글과 편집 이력, Actions 로그·artifact) 점검 → 소유자가 가시성 전환 → 나머지 항목
+    - [x] 전환 전 Git 밖 자료(이슈·PR·댓글과 편집 이력, Actions 로그·artifact) 점검: 시크릿 0, 이슈 본문의 비공개 저장소 이름은 소유자 결정으로 그대로 → 2026-11-23 가시성 전환 → 나머지 항목(위). 비공개 저장소의 Actions가 결제 문제로 막혀 있어 전환 후 CI를 돌림
 
 ---
 

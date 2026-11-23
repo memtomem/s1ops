@@ -12,24 +12,18 @@ from __future__ import annotations
 
 import argparse
 import ast
-import os
 import re
 import subprocess
 import sys
 import tarfile
 import tempfile
 import tomllib
-import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 TAG_REF = re.compile(r"refs/tags/v(\d+\.\d+\.\d+)")
 # Hatch adds these to every sdist on top of the configured include list.
 HATCH_FORCED = {".gitignore", "PKG-INFO"}
-# The repository is private while the package is public, so no shipped file may name it.
-# Its identity is read at run time (never written here, since this file ships in the sdist).
-# Drop the check, and `attestations: false` in release.yml, when the repository goes public.
-_REMOTE = re.compile(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$")
 # Package data the installed wheel must carry; the web workbench fails without index.html.
 PACKAGE_DATA = ("s1ops/web/static/index.html", "s1ops/py.typed")
 
@@ -148,41 +142,6 @@ def check_install(artifact: Path, version: str) -> None:
         _run([str(venv / "bin" / "s1"), "lint", "check", str(demo / "questions.json")], work)
 
 
-def repo_identity() -> str:
-    """``owner/repo`` from GitHub Actions' GITHUB_REPOSITORY, else from the origin remote URL."""
-    identity = os.environ.get("GITHUB_REPOSITORY", "")
-    if not identity:
-        url = _run(["git", "remote", "get-url", "origin"], ROOT)
-        match = _REMOTE.search(url)
-        if match is None:
-            raise CheckError(f"cannot read owner/repo from origin URL {url!r}")
-        identity = match.group(1)
-    if identity.count("/") != 1:
-        raise CheckError(f"repository identity must be owner/repo, got {identity!r}")
-    return identity
-
-
-def _archive_texts(wheel: Path, sdist: Path) -> dict[str, str]:
-    texts = {}
-    with zipfile.ZipFile(wheel) as zf:
-        for name in zf.namelist():
-            texts[f"{wheel.name}:{name}"] = zf.read(name).decode("utf-8", "replace")
-    with tarfile.open(sdist) as tar:
-        for member in tar.getmembers():
-            handle = tar.extractfile(member) if member.isfile() else None
-            if handle is not None:
-                texts[f"{sdist.name}:{member.name}"] = handle.read().decode("utf-8", "replace")
-    return texts
-
-
-def check_no_repo_identity(wheel: Path, sdist: Path, identity: str) -> None:
-    """No file in either artifact, metadata included, may contain the private repo identity."""
-    needle = identity.lower()
-    hits = sorted(where for where, text in _archive_texts(wheel, sdist).items() if needle in text.lower())
-    if hits:
-        raise CheckError(f"artifacts name the private repository {identity}: {hits[:5]}")
-
-
 def check_dist(dist: Path) -> str:
     version = check_version(None)
     wheels = sorted(dist.glob("*.whl"))
@@ -191,7 +150,6 @@ def check_dist(dist: Path) -> str:
     if ([w.name for w in wheels], [s.name for s in sdists]) != expected:
         raise CheckError(f"{dist}: expected {expected}, found {[p.name for p in wheels + sdists]}")
     check_sdist_manifest(sdists[0], version, expected_sdist_files())
-    check_no_repo_identity(wheels[0], sdists[0], repo_identity())
     for artifact in (wheels[0], sdists[0]):
         check_install(artifact.resolve(), version)
     return version

@@ -38,6 +38,11 @@ langfuse = ["langfuse>=2.0"]
 typesafe = ["typesafe-sdk>=0.7.1,<0.8"]
 openai = ["openai>=3.32,<4"]  # decisions.create(prompt_cache_options=...) is in 3.32+
 
+[project.urls]
+Homepage = "https://github.com/memtomem/s1ops"
+Repository = "https://github.com/memtomem/s1ops"
+Issues = "https://github.com/memtomem/s1ops/issues"
+
 [project.scripts]
 s1 = "s1ops.cli:console_main"
 s1ops = "s1ops.cli:console_main"

@@ -23,7 +23,7 @@ uv run s1 web --workspace examples/data --host 127.0.0.1 --port 8765
 
 The full end-to-end CLI pipeline over the demo workspace (lint → fit → apply → audit → policy tune → slice → labelaudit → compare/judge → drift → probe/gate → export) is spelled out in README's Quickstart §3; later steps consume `fits.json`/`policy.json` produced by earlier ones.
 
-No linter or type checker is configured in `pyproject.toml`. CI (`.github/workflows/ci.yml`) runs the locked suite on Python 3.11–3.14 and `scripts/release_check.py` on the built wheel and sdist; `release.yml` publishes by manual dispatch on a `vX.Y.Z` tag (procedure in `docs/NEXT_STEPS_PLAN.md` Track 1). The repository is private while the package is public, so package metadata must not name it.
+No linter or type checker is configured in `pyproject.toml`. CI (`.github/workflows/ci.yml`) runs the locked suite on Python 3.11–3.14 and `scripts/release_check.py` on the built wheel and sdist; `release.yml` publishes by manual dispatch on a `vX.Y.Z` tag (procedure in `docs/NEXT_STEPS_PLAN.md` Track 1). The repository and the package are both public (the repository since 2026-11-23), so releases are published with PyPI attestations and the metadata links the repository (`[project.urls]`).
 
 ## Architecture
 

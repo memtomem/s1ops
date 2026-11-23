@@ -1,6 +1,6 @@
 # System 1 LLMOps 비교 검토 및 네이밍·아키텍처 분석 보고서
 
-본 문서는 `s1ops` 저장소 설계 과정에서 수행한 **1) 기존 System 2 LLMOps 도구(Langfuse, Arize Phoenix 등)와의 구조적 차이점 검토**, **2) System 1 실증 연구(`jev-utils`, `jev-system1`)에서 드러난 핵심 실패 모드와 방어 설계**, **3) 패키지/CLI 네이밍 및 글로벌 레지스트리 충돌 실측 결과**를 기록합니다.
+본 문서는 `s1ops` 저장소 설계 과정에서 수행한 **1) 기존 System 2 LLMOps 도구(Langfuse, Arize Phoenix 등)와의 구조적 차이점 검토**, **2) System 1 실증 연구(이전 내부 프로토타입)에서 드러난 핵심 실패 모드와 방어 설계**, **3) 패키지/CLI 네이밍 및 글로벌 레지스트리 충돌 실측 결과**를 기록합니다.
 
 ---
 
@@ -43,19 +43,19 @@ System 1의 아이덴티티(**서브 100ms 반응성, 반사신경(Reflex), 직�
 | `synapse-ops` | 시냅스 신호 전달 | `404` | `404` | Matrix 홈서버(`element-hq/synapse`), Apache Synapse, Azure Synapse 등과 이름 중복도가 높음 |
 
 ### 2.2 최종 채택 사양 (`s1ops`)
-- **GitHub 저장소**: `memtomem/s1ops` (비공개, 로컬 경로: `/Users/pdstudio/Work/s1ops`). 최초 채택안은 `pandas-studio/s1ops`였으나 2026-10-25 `tracegraph`·`syncmill` 등 관련 도구와 같은 `memtomem` 계정으로 변경
+- **GitHub 저장소**: `memtomem/s1ops`. 2026-10-25 `tracegraph`·`syncmill` 등 관련 도구와 같은 `memtomem` 계정으로 정함
 - **PyPI 패키지**: `s1ops` (`pip install s1ops` / `uv add s1ops`)
 - **Python 임포트**: `import s1ops` 및 단축 별칭 `import s1` 동시 지원
 - **CLI 명령어**: `s1` 및 `s1ops` 동시 등록 (`$ s1 audit`, `$ s1 fit`, `$ s1 policy tune`, `$ s1 web` 등)
-- **향후 Node/TS 패키지**: unscoped `s1ops` (2026-10-26 결정, PyPI 이름과 같게; 이전 안 `@pandas-studio/sys1` → `@memtomem/sys1`). TS SDK 자체는 보류, [NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md) Track 4
+- **향후 Node/TS 패키지**: unscoped `s1ops` (2026-10-26 결정, PyPI 이름과 같게; 이전 안 `@memtomem/sys1`). TS SDK 자체는 보류, [NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md) Track 4
 
 ---
 
-## 3. 관련 저장소 연동 구조 (`pandas-studio` 생태계)
+## 3. 관련 저장소 연동 구조
 
-- **`jev-utils` (`/Users/pdstudio/work/jev-utils`)**:
+- **이전 내부 프로토타입**:
   - `jev-calib`, `jev-lint`, `jev-labelaudit`, `jev-shadow`, `jev-escalate`, `jev-ops`, `jev-answerable`, `jev-judge`에 흩어져 있던 프로토타입의 수학적 불변식과 데이터 계약을 `s1ops` 단일 SDK 및 CLI로 통합 계승했습니다.
-- **`decision-plane` (`/Users/pdstudio/Work/agent-harness/decision-plane`)**:
+- **런타임 게이트 소비자**:
   - 런타임 라우터/게이트 역할. `s1ops`가 오프라인에서 컴파일한 `fits.json`과 `policy.json` (`policy_sha256` 지문 포함)을 소비해 온라인 트래픽을 제어하는 연동을 계획 중이며, 2026-10-26 기준 미구현([NEXT_STEPS_PLAN.md](NEXT_STEPS_PLAN.md) Track 4).
-- **`tracegraph` (`/Users/pdstudio/Work/agent-harness/tracegraph`)**:
+- **`tracegraph`**:
   - `s1 export phoenix`가 출력하는 `safe-v1` OpenInference JSONL 스팬(단일 통화 비용 가드, `OK`/`ERROR`/`UNSET` 상태 정규화)의 수집·시각화 연동을 계획 중. 2026-10-26 기준 `s1.*` 속성 처리는 없고, 그대로 수집되는지는 검증하지 않음.

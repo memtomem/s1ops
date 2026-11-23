@@ -1,5 +1,9 @@
 # `s1ops` — Dedicated System 1 LLMOps Platform & SDK
 
+[![PyPI](https://img.shields.io/pypi/v/s1ops)](https://pypi.org/project/s1ops/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Status: beta](https://img.shields.io/badge/status-beta-orange)](#stability)
+
 > **The dedicated System 1 LLMOps SDK for sub-100ms reflexive inference (`noul` / `choice` / `score`).**
 >
 > **Install**: `pip install s1ops` · **Python**: 3.11+, `import s1ops` / `import s1` · **CLI**: `s1` / `s1ops`
@@ -160,7 +164,7 @@ s1 export phoenix s1-demo/records_categorical.jsonl -o s1-demo/phoenix_categoric
 
 **After the review.** The reviewer can answer in the workbench instead of an editor (`s1 web --sheet SHEET`, the Blind Sheet Review view) and download the completed sheet. When the reviewer has written an answer under every item, `s1 labelaudit estimate SHEET --key KEY` scores the sheet against the key, and `s1 labelaudit patch RECORDS --sheet SHEET --key KEY -o RELABELED.jsonl` applies it: where the reviewer answered otherwise than the label, every labeled record of that item and question takes the answer, whichever model answered it and a failed probe's row as well, as a noul boolean, a choice option or a score level. Records of other questions, unlabeled records and items that were not on the sheet are copied as they are, without a top-level `state`. The sheet, the key and the records must be of one review. A sheet that asks another question than the key's (its `Question ID:` block), or answers an item the key does not have, exits 1, as does a key that lists one item twice; so does a reviewed item that is missing from the records or carries a label the review was not of. Nothing is written then. Two sheets of one question cannot be told apart this way, so keep each sheet with its own key. A second run over the patched file changes nothing more (`records_already`). The summary lists each correction by id with its old and new label. One reviewer's answer becomes the label, so decide from `estimate` whether that reviewer should; flagged items are the ones a model disagreed with, so a patch moves labels toward the models, which the control arm is there to measure. Fits and policies made from the old labels are not changed and no longer describe the file: run `s1 fit` and `s1 policy tune` again. Labels in a states file are not changed either, so a new `s1 probe` from it writes the old ones.
 
-**Reviewing in Langfuse.** A review can also be done in a Langfuse annotation queue over the observations of `s1 export langfuse`. Give the queue a score config named `s1.<question_id>.label` for each question, the reviewer's answer: BOOLEAN for a noul question, CATEGORICAL over the options for a choice question, and NUMERIC (or CATEGORICAL) over the levels for a score question. s1ops makes no network call, so fetch the scores yourself, e.g. `GET /api/public/v3/scores?name=s1.<question_id>.label&fields=subject` (join the pages into one JSON list, or keep one response), and then run `s1 labelaudit pull RECORDS --export EXPORT.json --scores SCORES.json -o RELABELED.jsonl`. A score on an exported observation, or on its trace (one trace is one item), reviews that item and question, and the answer is applied as `patch` applies a sheet's, to the same records and with the same refusals, taking the item's label in the records as the one the review was of. Scores of other names are not read, and label scores on observations and traces the export does not hold are left out and counted (`scores_elsewhere`); a file with none for this export exits 1. Two scores of one item and question that answer differently exit 1, as does an answer the question cannot take (a NUMERIC on a noul question, an option it does not have), a score without its `subject` and a label score on a session. The Langfuse queue shows the model's answer next to the observation, so this review is not blind: there is no control arm, and `estimate` does not apply to it.
+**Reviewing in Langfuse (beta, see [Stability](#stability)).** A review can also be done in a Langfuse annotation queue over the observations of `s1 export langfuse`. Give the queue a score config named `s1.<question_id>.label` for each question, the reviewer's answer: BOOLEAN for a noul question, CATEGORICAL over the options for a choice question, and NUMERIC (or CATEGORICAL) over the levels for a score question. s1ops makes no network call, so fetch the scores yourself, e.g. `GET /api/public/v3/scores?name=s1.<question_id>.label&fields=subject` (join the pages into one JSON list, or keep one response), and then run `s1 labelaudit pull RECORDS --export EXPORT.json --scores SCORES.json -o RELABELED.jsonl`. A score on an exported observation, or on its trace (one trace is one item), reviews that item and question, and the answer is applied as `patch` applies a sheet's, to the same records and with the same refusals, taking the item's label in the records as the one the review was of. Scores of other names are not read, and label scores on observations and traces the export does not hold are left out and counted (`scores_elsewhere`); a file with none for this export exits 1. Two scores of one item and question that answer differently exit 1, as does an answer the question cannot take (a NUMERIC on a noul question, an option it does not have), a score without its `subject` and a label score on a session. The Langfuse queue shows the model's answer next to the observation, so this review is not blind: there is no control arm, and `estimate` does not apply to it.
 
 **Live probes.** `s1 probe --backend systemone` sends each state and question to `POST /v1/systemone` (key in `TYPESAFE_API_KEY`, endpoint in `TYPESAFE_BASE_URL` or `--base-url`); `--backend openai` sends them to OpenAI's `POST /v1/decisions` (`OPENAI_API_KEY`, `OPENAI_BASE_URL`) with prompt caching disabled. Both need `--model`; only the offline mock has a default. A response that reports a cache write has no known price and is settled at its full reservation; cached reads, which are discounted, are charged at the full input price, an upper bound. A question that API cannot take as written — a Noul with `criteria`, object (rather than string or input-part list) instructions, or option and level counts outside its limits — is refused before anything is reserved, rather than sent in a different form under the same `question_id`. A refused answer is recorded with `error_code: "refusal"`. `/v1/systemone` resolves an alias to the version that answered (`jev-latest` came back as `jev-1.14.0`), so a silent upgrade shows in `model_served`; `/v1/decisions` returned the alias `gpt-6-luna` itself, so a model change behind it is visible only as distribution drift. `model_served` is whatever the server reports: a compatible server that echoes the request records the name you passed, and one that names every checkpoint alike leaves a checkpoint change visible only as distribution drift too, since drift's model comparison and the exit 3 of `s1 apply` and `s1 gate` compare names. The APIs report billable input tokens, not dollars, so `--usd-per-input-token` is required. Every attempt reserves its worst case first (`--worst-usd-per-token`, plus `--reserve-overhead-tokens` for the prompt tokens a server bills on top of the state and question: 300 for systemone and 200 for openai by default: a short state was billed up to 216 and 98 tokens more than estimated, and about 236 and 118 extrapolated to an empty one) and is settled as measured, or, when the request may have been billed without a usable reported cost (timeout, connection error, HTTP error), at its full reservation. Timeouts, connection errors, 408, 429 and 5xx are retried up to `--max-retries` times. An item that still fails is written as a record with `model_served: null` and an `error_code`, which `s1 drift` counts as a failure. Records are written as they arrive, so a run stopped by `--cap-usd` or by a measured cost above its reservation keeps what it paid for. Error messages carry only an error code, never server text, since a server may echo the request.
 
@@ -177,6 +181,8 @@ The extension is stripped before hashing, so the question keeps the `question_id
 
 ### 4. Launch the Local Web Workbench
 
+**Beta.** The web workbench can still change; see [Stability](#stability).
+
 ```bash
 s1 web --workspace s1-demo --host 127.0.0.1 --port 8765
 ```
@@ -192,6 +198,8 @@ Open `http://127.0.0.1:8765`. The sidebar groups the views under four sections: 
 8. **Blind Sheet Review** (`s1 web --sheet s1-demo/blind_sheet.md`, `GET /api/sheet`): answer a sheet from `s1 labelaudit sheet` one item at a time, by mouse or keys (`j` / `k` move, `1`–`9` answer, `u` clears, `n` finds the next unanswered item), then download the completed sheet for `s1 labelaudit estimate` and `patch`. The answers stay in this browser until then (keyed by the sheet's bytes: editing the file starts a new draft, and an identical copy shares one). The sheet holds state text, so it is served to this computer only: `--sheet` needs `--host 127.0.0.1` or `localhost`, and the route refuses any request that is not from a loopback address, names another Host, or carries a proxy header. It is never looked for in the workspace, and the view requests nothing else, so the key's labels and the ranking stay out of sight. The web reads a sheet as `s1 labelaudit sheet` writes it: an item's answer stays on its `Answer: ` line with nothing below it, or the item is refused, naming it (a note above the line is kept with the state). `estimate` still scores an answer moved to the next line; neither takes a note under the answer. A sheet asks options joined with `, `, so a choice question with an option holding `, ` cannot be put on one (`patch` and `pull` still take it).
 
 ### 5. Keep Several Projects in a Registry
+
+**Beta.** The project registry can still change; see [Stability](#stability).
 
 A project is a name for one workspace directory. `s1 project` keeps them in a SQLite file (standard library only):
 
@@ -269,6 +277,8 @@ print(decision.action, decision.escalated, decision.p_calibrated)  # -> 'ESCALAT
 ---
 
 ## Fine-Tuning Around an External Trainer
+
+**Beta:** `s1 trainset`, its manifest and run record files, `--training-run` and the Checkpoints view can still change; see [Stability](#stability). `--training-manifest` and `s1 promote` are not beta.
 
 s1ops starts no training. It writes down what a checkpoint will train on and refuses to fit or evaluate that checkpoint on those items. The trainer is yours; [Kev](https://github.com/jaredpalmer/kev)'s `kev.train --data` takes the rows the recipe below writes.
 
@@ -384,6 +394,19 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
 
 ---
 
+## Stability
+
+s1ops is beta (`0.x`). The CLI pipeline of the Quickstart, the Python SDK and `DecisionGate`, and the formats of records, `fits.json` and `policy.json` keep their behavior within a minor version: a change that breaks compatibility, or a file an older reader refuses, is named in the release notes of the version that makes it (the version bump's pull request).
+
+These are **beta**: their commands, output and files can still change without such a note.
+
+- **Project registry**: `s1 project` and its SQLite file. Serving every project from one `s1 web`, and managing them from the web, are planned.
+- **Fine-tuning helpers**: `s1 trainset export` / `record`, the training manifest and training-run record files, `--training-run`, and the workbench's Checkpoints view. `s1 policy tune --training-run` writes `trainrun_id` into each policy whose model a run record names, and a reader at 0.11.1 or earlier refuses a `policy.json` holding that field.
+- **Langfuse label pull**: `s1 labelaudit pull`.
+- **The web workbench**: `s1 web`, its views, and the `/api/*` routes they read.
+
+---
+
 ## Development
 
 From a source checkout (the sdist includes the test suite), all tests run without API keys or calls to external services (a few backend tests talk to an HTTP server on `127.0.0.1`):
@@ -392,3 +415,9 @@ From a source checkout (the sdist includes the test suite), all tests run withou
 uv sync --all-extras
 uv run pytest -v
 ```
+
+---
+
+## License
+
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), the text in `LICENSE`.

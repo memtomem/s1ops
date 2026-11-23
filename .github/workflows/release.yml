@@ -57,10 +57,6 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
-          # Off while the repository is private: signing writes the repo, workflow, ref,
-          # commit and run URIs to the public Rekor log before the upload, even if the
-          # upload then fails. Remove this line when the repository goes public.
-          attestations: false
 
   publish-pypi:
     if: inputs.index == 'pypi'
@@ -78,6 +74,3 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
-        with:
-          # Off while the repository is private; see publish-testpypi.
-          attestations: false

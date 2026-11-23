@@ -2,8 +2,9 @@
 
 ## Reporting Vulnerabilities
 
-Please report security issues by email to **contact@dapada.co.kr**. Do NOT open public issues for
-vulnerabilities. We aim to acknowledge security reports within 2 business days.
+Please report security issues via [GitHub private advisory](https://github.com/memtomem/s1ops/security/advisories/new)
+or by email to **contact@dapada.co.kr**. Do NOT open public issues for vulnerabilities. We aim to
+acknowledge security reports within 2 business days.
 
 ## Supported Versions
 

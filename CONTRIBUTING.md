@@ -7,6 +7,10 @@ Everyone taking part is expected to follow the [Code of Conduct](CODE_OF_CONDUCT
 ## Development Setup
 
 ```bash
+# Clone
+git clone https://github.com/memtomem/s1ops.git
+cd s1ops
+
 # Install (requires Python 3.11+ and uv; Node.js too, or the web page's renderer tests are skipped)
 uv sync --all-extras
 
@@ -63,7 +67,7 @@ For questions about the CLA, contact contact@dapada.co.kr.
 
 ## Reporting Issues
 
-Open an issue with:
+Open an issue at https://github.com/memtomem/s1ops/issues with:
 - Steps to reproduce
 - Expected vs actual behavior
 - Environment (OS, Python version, s1ops version)

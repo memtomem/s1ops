@@ -1,7 +1,7 @@
 # `s1ops` — Dedicated System 1 LLMOps Platform & SDK
 
 [![PyPI](https://img.shields.io/pypi/v/s1ops)](https://pypi.org/project/s1ops/)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://www.apache.org/licenses/LICENSE-2.0)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/memtomem/s1ops/blob/main/LICENSE)
 [![Status: beta](https://img.shields.io/badge/status-beta-orange)](#stability)
 
 > **The dedicated System 1 LLMOps SDK for sub-100ms reflexive inference (`noul` / `choice` / `score`).**
@@ -422,4 +422,4 @@ uv run pytest -v
 
 ## License
 
-[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), the text in `LICENSE`.
+[Apache License 2.0](https://github.com/memtomem/s1ops/blob/main/LICENSE). Contributions are accepted under the terms of the [Contributor License Agreement](https://github.com/memtomem/s1ops/blob/main/CLA.md); see [CONTRIBUTING](https://github.com/memtomem/s1ops/blob/main/CONTRIBUTING.md).

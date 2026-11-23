@@ -15,9 +15,9 @@
 
 ### Track 1. GitHub 원격 저장소(`memtomem/s1ops`) 연결 및 배포 파이프라인 구성
 
-- **목표**: 로컬 Git 저장소(`/Users/pdstudio/Work/s1ops`)를 `memtomem/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
+- **목표**: 로컬 Git 저장소를 `memtomem/s1ops` 원격 저장소와 연결하고 CI 테스트 워크플로우를 구성합니다.
 - **세부 작업**:
-  - [x] 비공개 저장소 `memtomem/s1ops` 생성 및 `main` Push (2026-10-25). `origin`은 SSH alias `git@github.com-memtomem:memtomem/s1ops.git`; `gh` 활성 계정이 `tsdata`이므로 `gh` 호출은 `GH_TOKEN=$(gh auth token --user memtomem)`로 실행
+  - [x] 비공개 저장소 `memtomem/s1ops` 생성 및 `main` Push (2026-10-25). `gh` 호출은 저장소 쓰기 권한이 있는 계정으로 인증해서 실행
   - [x] PyPI·TestPyPI 이름 확보 (2026-10-25): 코드 없는 `s1ops 0.0.1`을 올리고 두 곳 모두 yank. pip는 yank된 버전을 건너뛰지만 `uv`는 고정하지 않은 `s1ops`에도 0.0.1을 고르므로, 첫 실제 릴리스 전까지 uv 사용자는 빈 패키지를 받음
   - [x] `.github/workflows/ci.yml` 추가 (2026-10-25, PR #2 run 40169216043 녹색: 3.11–3.13 각 92 passed, `package` job `release_check: dist ok`):
     - Python 3.11–3.13 매트릭스 (`eval/judge.py`가 쓰는 `cohen_kappa_score(replace_undefined_by=...)`가 scikit-learn 1.9부터 있고, 1.9는 Python 3.11 이상 필요), `uv sync --all-extras --locked` (lock이 낡으면 실패)
@@ -33,12 +33,15 @@
   - [ ] 소유자 1회 설정:
     - GitHub environment `testpypi`, `pypi` 생성
     - TestPyPI·PyPI의 **기존** `s1ops` 프로젝트(yank된 0.0.1이 있으므로 pending publisher가 아님) → Manage → Publishing에서 GitHub publisher 추가: owner `memtomem`, repository `s1ops`, workflow `release.yml`, environment `testpypi` / `pypi`
-  - 릴리스 절차: `vX.Y.Z` 태그 push → `GH_TOKEN=$(gh auth token --user memtomem) gh workflow run release.yml --ref vX.Y.Z -f index=testpypi` (`--ref`는 태그 이름도 받음). TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
+  - 릴리스 절차: `vX.Y.Z` 태그 push → 저장소 쓰기 권한이 있는 계정으로 인증한 `gh`로 `gh workflow run release.yml --ref vX.Y.Z -f index=testpypi` (`--ref`는 태그 이름도 받음). TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
+  - 릴리스 노트: 버전 bump PR 본문에 적음. README `## Stability`가 약속하는 대로, Quickstart의 CLI 파이프라인·SDK·`DecisionGate`·레코드/`fits.json`/`policy.json` 형식의 호환성 변경과 이전 reader가 거부하게 되는 형식을 반드시 적음 (beta 목록의 기능은 예외)
   - [x] 첫 실제 릴리스 준비 (2026-10-25 소유자 결정: 패키지만 먼저 공개, 저장소는 비공개 유지. 버전은 0.2.0 대신 0.0.2로 결정. `v0.2.0` 태그로 한 TestPyPI 시도는 publisher 불일치로 업로드 전에 실패해 아무것도 공개되지 않음):
     - 데모 생성기를 패키지로 옮겨 `s1 demo OUT_DIR [--seed N]` 추가 (새 디렉터리나 빈 디렉터리에만 씀, `--force` 없음). `release_check.py`가 wheel·sdist 설치본에서 `s1 demo` + lint까지 실행
     - README를 PyPI용으로 재작성: `pip install s1ops` → `s1 demo` → 파이프라인. 저장소·`docs/` 링크, Mermaid, `$...$` 수식 제거 (PyPI는 렌더링하지 않음)
     - `[project.urls]` 제거, `release_check.py`가 METADATA·PKG-INFO에 `memtomem/s1ops`가 없는지 검사
   - [ ] 저장소 공개 시: `release.yml`의 `attestations: false`와 `release_check.py`의 `PRIVATE_REPO` 검사 제거, `[project.urls]` 복원, `docs/*.md`의 로컬 경로 정리
+    - [x] 공개 전 준비 (2026-11-23, `chore/public-prep`): 추적 파일의 로컬 경로·비공개 저장소 이름 정리(`tests/test_public_tree.py`가 고정), `CLA.md`·`CONTRIBUTING.md`·`SECURITY.md`·`CODE_OF_CONDUCT.md`, README `## Stability`·`## License`·beta 표시, classifier `4 - Beta`. 라이선스는 Apache-2.0 그대로(소유자 결정)
+    - [ ] 전환 전 Git 밖 자료(이슈·PR·댓글과 편집 이력, Actions 로그·artifact) 점검 → 소유자가 가시성 전환 → 나머지 항목
 
 ---
 
@@ -138,10 +141,10 @@
 
 ---
 
-### Track 4. TypeScript 경량 런타임 SDK (`s1ops` npm) 및 `agent-harness` 연동
+### Track 4. TypeScript 경량 런타임 SDK (`s1ops` npm) 및 다운스트림 연동
 
-- **목표**: Python(`s1ops`)에서 오프라인으로 컴파일한 `fits.json`과 `policy.json`을 Node.js / Edge 런타임이나 `agent-harness` 생태계(`decision-plane`, `tracegraph`)에서 즉시 소비할 수 있도록 연결합니다.
-- **소유자 결정 (2026-10-26): TS SDK 보류.** 알려진 TS 소비자가 없고 `decision-plane`·`tracegraph`는 둘 다 Python. 아래 세 결정은 착수 시 적용할 사전 결정. 착수 조건: Python 없이 `fits.json`/`policy.json`을 평가해야 하는 실사용처가 생기고, 그 런타임(Node / Edge 엔진), 필요한 primitive·calibrator, 동기·비동기 API가 정해질 때
+- **목표**: Python(`s1ops`)에서 오프라인으로 컴파일한 `fits.json`과 `policy.json`을 Node.js / Edge 런타임이나 다운스트림 Python 소비자(런타임 게이트, `tracegraph`)에서 즉시 소비할 수 있도록 연결합니다.
+- **소유자 결정 (2026-10-26): TS SDK 보류.** 알려진 TS 소비자가 없고 알려진 소비자(런타임 게이트, `tracegraph`)는 모두 Python. 아래 세 결정은 착수 시 적용할 사전 결정. 착수 조건: Python 없이 `fits.json`/`policy.json`을 평가해야 하는 실사용처가 생기고, 그 런타임(Node / Edge 엔진), 필요한 primitive·calibrator, 동기·비동기 API가 정해질 때
 - **세부 설계**:
   - [ ] **`packages/ts` 스캐폴딩** (보류)
     - 외부 무거운 의존성 없이 `fits.json`(`temperature` / `platt` / `isotonic`)과 `policy.json`(`s1-policy/1`, `policy_sha256` 검증)을 로드하는 TypeScript `DecisionGate` 클래스 구현
@@ -150,11 +153,11 @@
     - **parity는 두 층**: (A) 보정된 분포의 라우팅은 bit 동일을 CI 게이트로 강제하며 두 단계를 따로 대조: ① choice/score 재정규화(`records.parse_record`, `gate._normalized`·`gate._calibrated`가 `probability_total` = `math.fsum`로 나눔; noul은 `(1 - p, p)`로 만들 뿐 재정규화하지 않음) — JS에 CPython `math.fsum`과 같은 결과의 정확 합산 필요, ② 이미 정규화된 같은 입력에 대한 `routing.route`(비교만 함, tie-safe). `route` 안에서 다시 정규화하면 경계 판정이 달라짐. (B) 보정 포함 평가는 `temperature`·`platt`의 `exp`/`log`가 엔진마다 마지막 비트가 다를 수 있어 "지원 런타임에서 검증"만 약속(허용 오차 비교는 threshold 경계의 결정을 바꾸므로 쓰지 않음). 기준값은 Python 3.11이 만든 golden vector + 경계값 생성 테스트, 지원 런타임별로 실행
     - `policy_sha256`은 해시 대상 바이트 규칙(필드, 키 순서, 숫자 직렬화)을 먼저 명세하고 두 언어가 같은 바이트를 만드는지 테스트
     - **배포: 인증 방식 미정.** private repo에서 npm trusted publishing(OIDC)이 되는지, provenance가 repo 경로를 공개하는지 확인한 뒤 OIDC / 토큰 선택. 버전은 Python과 독립(호환성은 지원하는 `s1-policy/1`·`routing_rule`·fits 형식 표로), `ts-vX.Y.Z` 태그 + 수동 dispatch(태그·`package.json`·검증 커밋 일치), `files` 허용 목록과 `npm pack` 결과물 전체를 검사하는 repo 이름 노출 게이트
-  - [ ] **`agent-harness` 연동 어댑터**: 2026-10-26 확인 — 둘 다 아직 s1ops 아티팩트를 소비하지 않음. `decision-plane`(`jev-toolgate`)의 runtime 의존성은 `typesafe-sdk`뿐이고 `policy_sha256`이라는 필드는 없음(evals receipt의 `baseline_`/`hypothesis_`/`strata_policy_sha256`은 rules 파일 바이트의 해시, `s1-policy/1`과 무관). `tracegraph`의 OTLP 어댑터는 OpenInference 종류(`openinference.span.kind`)와 그래프·실행 메타데이터(`graph.node.*`, `syncmill.run_id`, 예외 속성)를 읽지만 `s1.*` 속성은 다루지 않음. 연동은 Python(PyPI `s1ops`)으로
-    - `decision-plane` (소유자 결정 2026-10-26: 목표 재정의): **raw p 임계값 `ask_at`(기본 0.3, `jev_toolgate/worker.py`·`policy.py`)을 s1ops 보정 라우팅(`fits.json` + `policy.json` → `routing.route`)으로 교체**. decision-plane에는 별도의 라우팅 정책 로더가 없고, 붙일 자리는 이 판정
-      - 연동 조건: **판정 매핑을 명시.** 이름이 반대 방향이라 그대로 연결하면 위험 판단이 뒤집힘. decision-plane은 `p_risky ≥ ask_at`이면 ASK(모델 단독 DENY는 `deny_at`으로만, 기본 꺼짐)인데, s1ops noul `route`는 높은 p에 `ALLOW`(예측 참), 낮은 p에 `BLOCK`, 불확실하면 `ESCALATE`를 냄(`error_budget`·band 모두). 질문이 "위험한가"일 때 매핑: `ALLOW`(위험 예측) → ASK(DENY는 명시적으로 켰을 때만), `BLOCK`(안전 예측) → ALLOW, `ESCALATE` → ASK. 결정적 규칙의 하한과 판정 실패 시 ASK(`judgment_failed`)는 그대로 유지. 지금은 세 질문의 raw p 최댓값 하나로 판정(`worker.py`)하므로, 질문별 보정·라우팅 결과를 합치는 규칙(예: 하나라도 ASK면 ASK)도 정해야 함
-      - 전제 조건(`feat/light-gate`에서 해결): **가볍고 실패 시 닫히는 noul gate 경로.** 훅이 도구 호출마다 worker 자식 프로세스를 띄우므로(`hook.py`, `DEFAULT_DEADLINE_S = 5.0`) import 시간이 매 호출에 붙음. 실측(2026-10-26, 데워진 캐시): `DecisionGate`·`load_policies`·`load_fits` import 531–642 ms → 171–180 ms(`s1ops/__init__` 지연 import, `scipy.optimize`·`sklearn`을 `_fit_params` 안으로). 소유자 결정(2026-10-26): numpy·`scipy.special`은 유지. 순수 Python 변환은 입력의 0.03–13 %에서 마지막 비트가 달랐고, 튜닝된 임계값은 `>=`로 정확히 비교하므로 `s1 apply`와 같은 코드를 씀. 같은 브랜치에서 실패 시 닫히도록: fit 없는 보정 noul 정책 거부, `fit_sha256` 기록·대조, band 범위 검사, 그룹 키 중복 거부
-      - 알려진 한계(선행 조건 아님): `model_served` 검사는 이미 있음(`backend.py`의 `"served a different model"`). 하지만 Kev는 요청한 모델 이름을 그대로 `model`로 돌려주므로(decision-plane README) policy의 `model_served`와 비교해도 설정의 이름 불일치만 잡고 checkpoint 교체는 못 잡음
+  - [ ] **다운스트림 연동 어댑터**: 2026-10-26 확인 — 확인한 두 소비자(런타임 게이트, `tracegraph`) 모두 아직 s1ops 아티팩트를 소비하지 않음. `tracegraph`의 OTLP 어댑터는 OpenInference 종류(`openinference.span.kind`)와 그래프·실행 메타데이터(`graph.node.*`, `syncmill.run_id`, 예외 속성)를 읽지만 `s1.*` 속성은 다루지 않음. 연동은 Python(PyPI `s1ops`)으로
+    - 런타임 게이트 소비자 (소유자 결정 2026-10-26: 목표 재정의): **raw p 임계값 판정을 s1ops 보정 라우팅(`fits.json` + `policy.json` → `routing.route`)으로 교체**
+      - 연동 조건: **판정 매핑을 명시.** s1ops noul `route`는 높은 p에 `ALLOW`(예측 참), 낮은 p에 `BLOCK`, 불확실하면 `ESCALATE`를 냄(`error_budget`·band 모두). 질문이 "위험한가"처럼 참이 위험을 뜻하면 `ALLOW`가 위험 판정이므로, 이름만 보고 연결하면 판단이 뒤집힘. 질문 여러 개의 결과를 합치는 규칙(예: 하나라도 위험이면 위험)은 소비자가 정함
+      - 전제 조건(`feat/light-gate`에서 해결): **가볍고 실패 시 닫히는 noul gate 경로.** 호출마다 프로세스를 새로 띄우는 소비자는 import 시간이 매 호출에 붙음. 실측(2026-10-26, 데워진 캐시): `DecisionGate`·`load_policies`·`load_fits` import 531–642 ms → 171–180 ms(`s1ops/__init__` 지연 import, `scipy.optimize`·`sklearn`을 `_fit_params` 안으로). 소유자 결정(2026-10-26): numpy·`scipy.special`은 유지. 순수 Python 변환은 입력의 0.03–13 %에서 마지막 비트가 달랐고, 튜닝된 임계값은 `>=`로 정확히 비교하므로 `s1 apply`와 같은 코드를 씀. 같은 브랜치에서 실패 시 닫히도록: fit 없는 보정 noul 정책 거부, `fit_sha256` 기록·대조, band 범위 검사, 그룹 키 중복 거부
+      - 알려진 한계(선행 조건 아님): `model_served` 검사는 이미 있음(`backend.py`의 `"served a different model"`). 하지만 요청한 모델 이름을 그대로 `model`로 돌려주는 서버(예: Kev)에서는 policy의 `model_served`와 비교해도 설정의 이름 불일치만 잡고 checkpoint 교체는 못 잡음
     - `tracegraph`: `s1 export phoenix`가 출력하는 `safe-v1` OpenInference 스팬(`s1.question_id`, `s1.policy_sha256`, `s1.policy_action` — 위임 여부는 `== "ESCALATE"`) 수집 및 시각화 연동
   - [x] **Closed-Loop Annotation Pull (`s1 labelaudit pull`)**: 파일 입력으로 구현(아래 파인튜닝 지원 항목). 자동 루프(가져오기 → fit → tune)는 호출하는 쪽의 몫:
     - Langfuse Annotation Queue에서 검수 완료된 항목을 가져와 로컬 골드셋 패치 → `s1 fit` → `s1 policy tune` 재컴파일 루프 자동화

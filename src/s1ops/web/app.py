@@ -302,10 +302,15 @@ def create_app(
                 return found
         return []
 
+    # No generated API pages: FastAPI's /docs and /redoc load scripts from a CDN, which would run on the
+    # workbench's origin, where `/api/sheet` serves state text to a loopback browser.
     app = FastAPI(
         title="s1ops Workbench",
         description="System 1 Typed Decision Model LLMOps Workbench",
         version=__version__,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
 
     def _get_records(use_calib: bool = False) -> list[Record]:

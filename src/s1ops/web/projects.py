@@ -14,7 +14,10 @@ it each time, so a project added, renamed or removed by `s1 project` shows on th
 
 A write is a `POST`, `PATCH` or `DELETE` on the registry's own routes. Beyond being this computer's, it
 must not name another site (`_own_request`: a page of another origin on this computer is still another
-site), and a body is read only as `application/json`, counted as it arrives, and never quoted back.
+site), and a body is read only as `application/json` and counted as it arrives. What this file refuses
+(the guard, a body's type, size, text and keys, a relative path) is said without a word of the body. A
+refusal the registry makes is the registry's sentence, which names a slug or a path only after its
+rules passed it: a taken slug and a directory that cannot be read come back in the answer.
 """
 
 from __future__ import annotations
@@ -126,8 +129,8 @@ async def _json_object(request: Request, required: frozenset[str], optional: fro
     """A write's body: a JSON object holding the `required` keys and any of the `optional` ones, read
     here and nowhere else. The type is checked by hand (the oldest FastAPI supported reads an untyped
     body as JSON, and what another site's page can send without asking is `text/plain`), and the bytes
-    are counted before they are kept (`Request.body()` holds everything first). No message quotes the
-    body: a key or a value may hold what a response cannot (an escaped lone surrogate)."""
+    are counted before they are kept (`Request.body()` holds everything first). No refusal made here
+    quotes the body: a key or a value may hold what a response cannot (an escaped lone surrogate)."""
     if request.headers.getlist("content-type") != ["application/json"]:
         raise _Refused(415, BODY_TYPE)
     kept = bytearray()

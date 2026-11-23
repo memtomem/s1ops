@@ -899,7 +899,8 @@ def test_the_project_line_and_the_list_pane_are_in_the_page() -> None:
     # In this order: the form that adds, the list, the one line a change's outcome is written to,
     # and the two dialogs (tests/test_web_project_writes.py).
     order = ['<form id="form-project-add"', '<div id="projects-container">',
-             '<p id="projects-result" class="project-result" role="status" tabindex="-1"></p>',
+             '<p id="projects-result" class="project-result" role="status" aria-label="Result of the last change" tabindex="0">'
+             "No change sent yet: the registry's answer to one is written here.</p>",
              '<dialog id="dlg-project-rename"', '<dialog id="dlg-project-remove"']
     assert [pane.count(piece) for piece in order] == [1] * 5
     assert sorted(order, key=pane.index) == order

@@ -249,20 +249,30 @@
     button.tool[aria-disabled="true"] { opacity: 0.55; cursor: default; }
     /* The line stays in view wherever the list is scrolled to (a change made from a row far down
        says its wait and its outcome here, and the focus may stay on that row): it sits under the
-       list and sticks to the window's lower edge. Empty, it takes no room but stays in the page: a
-       status is announced only when the element was already there before its text changed. */
+       list and sticks to the window's lower edge. It takes the same room from the start, whatever
+       it says: a sentence longer than that room is scrolled inside it (so it is in the tab order),
+       and nothing that was in view comes to lie under it when a change is answered. A row the
+       focus moves to is kept above it (`scroll-padding-bottom`). It is never taken out of the page:
+       a status is announced only when the element was already there before its text changed. */
+    :root[data-scope="registry"] {
+      --project-result-height: 80px;
+      scroll-padding-bottom: calc(var(--project-result-height) + 8px);
+    }
     .project-result {
       position: sticky;
       bottom: 0;
       z-index: 1;
+      height: var(--project-result-height);
       margin: 0;
       padding: 10px 0;
+      overflow-y: auto;
       background: var(--bg);
       border-top: 1px solid var(--border);
       font-size: 13px;
       overflow-wrap: anywhere;
     }
-    .project-result:empty { padding: 0; border-top: 0; }
+    .project-result:focus-visible { outline-offset: -2px; }
+    .project-result:not([data-kind]) { color: var(--muted); }
     .project-result[data-kind="refused"], .project-result[data-kind="unconfirmed"] { color: var(--err); }
     .project-result[data-kind="waiting"] { color: var(--muted); }
     dialog.project-dialog {
@@ -722,7 +732,7 @@
         <div class="project-actions"><button type="submit" class="tool project-submit">Add project</button></div>
       </form>
       <div id="projects-container">Loading the projects...</div>
-      <p id="projects-result" class="project-result" role="status" tabindex="-1"></p>
+      <p id="projects-result" class="project-result" role="status" aria-label="Result of the last change" tabindex="0">No change sent yet: the registry's answer to one is written here.</p>
       <dialog id="dlg-project-rename" class="project-dialog" aria-labelledby="dlg-project-rename-title" aria-describedby="dlg-project-rename-what">
         <form class="project-form" data-project-form="project-rename" novalidate>
           <h3 id="dlg-project-rename-title">Rename a project</h3>

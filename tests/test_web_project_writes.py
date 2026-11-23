@@ -1,6 +1,7 @@
 """`s1 web --db` writing its registry: a project added, renamed and removed through the registry's own
 routes; the rule that a write names no other site; the body, read as `application/json` only, counted
-as it arrives and never quoted back; and that a write waiting for the file's lock holds no one else up."""
+as it arrives and quoted by none of this file's refusals; and that a write waiting for the file's lock
+holds no one else up."""
 
 from __future__ import annotations
 
@@ -75,6 +76,24 @@ def wrote(monkeypatch) -> list[str]:
     for name in WRITES:
         real = getattr(registry, name)
         monkeypatch.setattr(registry, name, lambda *a, _name=name, _real=real, **k: (calls.append(_name), _real(*a, **k))[1])
+    return calls
+
+
+@pytest.fixture
+def opened(monkeypatch) -> list[bool]:
+    """Every opening of the registry file, a read as well as a write (`write`, as the registry asked for
+    it): the three writes above are not the only calls that open it. A test empties the list after its
+    own reads and before the request it is about."""
+    calls: list[bool] = []
+    real = registry._transaction
+
+    @contextlib.contextmanager
+    def recorded(db, *, write: bool):
+        calls.append(write)
+        with real(db, write=write) as conn:
+            yield conn
+
+    monkeypatch.setattr(registry, "_transaction", recorded)
     return calls
 
 
@@ -228,13 +247,15 @@ FOREIGN = [
     ("POST", LIST), ("PATCH", ONE), ("DELETE", ONE), ("HEAD", LIST), ("OPTIONS", LIST), ("OPTIONS", ONE), ("PUT", LIST),
     ("POST", "/p/1/"), ("DELETE", "/p/1/api/overview"), ("POST", "/p/"), ("POST", "/"),
 ])
-def test_a_request_naming_another_site_is_refused_before_anything_is_read(reg, wrote, method, path, headers) -> None:
+def test_a_request_naming_another_site_is_refused_before_anything_is_read(reg, wrote, opened, method, path, headers) -> None:
     before = _rows(reg["db"])
+    opened.clear()
     got = _send(reg["app"], method, path, headers=(*JSON, *headers), chunks=None)
     assert (got["status"], _detail(got)) == (403, WRITE_REFUSED)
     assert {k: got["headers"].get(k) for k in FRAMES} == FRAMES
     assert not any(name.startswith("access-control") for name in got["headers"])
-    assert wrote == [] and _rows(reg["db"]) == before
+    assert wrote == [] and opened == []  # neither a write nor a read of the registry
+    assert _rows(reg["db"]) == before
 
 
 @pytest.mark.parametrize("headers", [OWN, (), (("origin", ORIGIN),), (("sec-fetch-site", "same-origin"),)], ids=["page", "neither", "origin", "site"])
@@ -266,13 +287,13 @@ def test_a_get_is_answered_whatever_site_it_names(reg) -> None:
     assert not any(name.startswith("access-control") for name in got["headers"])
 
 
-def test_this_computer_only_comes_before_the_write_rule(reg, wrote) -> None:
+def test_this_computer_only_comes_before_the_write_rule(reg, wrote, opened) -> None:
     for kwargs in ({"host": "evil.example:8765", "headers": (*JSON, ("origin", "http://evil.example:8765"))},
                    {"client": ("10.0.0.5", 50000), "headers": (*JSON, *OWN)},
                    {"headers": (*JSON, *OWN, ("x-forwarded-for", "127.0.0.1"))}):
         got = _send(reg["app"], "POST", LIST, chunks=None, **kwargs)
         assert (got["status"], _detail(got)) == (403, REGISTRY_REFUSED), kwargs
-    assert wrote == []
+    assert wrote == [] and opened == []
 
 
 def test_no_method_of_the_registrys_routes_answers_with_a_permission_for_another_site(reg) -> None:
@@ -295,12 +316,14 @@ def test_no_method_of_the_registrys_routes_answers_with_a_permission_for_another
     (("content-type", "application/x-www-form-urlencoded"),), (("content-type", "text/plain;charset=UTF-8"),),
 ], ids=["none", "text", "charset", "list", "twice", "two", "case", "form", "no-cors"])
 @pytest.mark.parametrize(("method", "path"), [("POST", LIST), ("PATCH", ONE)])
-def test_a_body_that_is_not_typed_as_json_is_refused_unread(reg, wrote, method, path, types) -> None:
+def test_a_body_that_is_not_typed_as_json_is_refused_unread(reg, wrote, opened, method, path, types) -> None:
     before = _rows(reg["db"])
+    opened.clear()
     got = _send(reg["app"], method, path, headers=(*types, *OWN), chunks=None)
     assert (got["status"], _detail(got)) == (415, BODY_TYPE)
     assert {k: got["headers"].get(k) for k in FRAMES} == FRAMES
-    assert wrote == [] and _rows(reg["db"]) == before
+    assert wrote == [] and opened == []
+    assert _rows(reg["db"]) == before
 
 
 def _padded(n: int, **fields) -> bytes:
@@ -500,12 +523,13 @@ def test_a_write_inside_the_registry_holds_no_other_request_up(reg, monkeypatch,
     test's own, so nothing depends on SQLite's timing: the list is answered while the write is held
     there, and only then is the write let through. A handler that called the registry on the event loop
     would sit at the barrier with the loop, and the list could not be answered until it gave up."""
-    entered, release, left = threading.Event(), threading.Event(), threading.Event()
+    entered, release, left, expired = (threading.Event() for _ in range(4))
     real = getattr(registry, name)
 
     def held(*args, **kwargs):
         entered.set()
-        release.wait(10)  # bounded: a write on the event loop ends the test as a failure, not as a hang
+        if not release.wait(10):  # bounded: a write on the event loop ends the test as a failure, not as a hang
+            expired.set()
         try:
             return real(*args, **kwargs)
         finally:
@@ -517,14 +541,19 @@ def test_a_write_inside_the_registry_holds_no_other_request_up(reg, monkeypatch,
 
     async def both() -> tuple[dict, bool, dict]:
         write = asyncio.create_task(_call(app, method, path, headers=JSON, chunks=chunks))
-        while not entered.is_set() and not write.done():
-            await asyncio.sleep(0.005)
-        listed = await _call(app, "GET", LIST)
-        held_meanwhile = entered.is_set() and not release.is_set() and not left.is_set() and not write.done()
-        release.set()
+        try:
+            while not entered.is_set() and not write.done():
+                await asyncio.sleep(0.005)
+            listed = await _call(app, "GET", LIST)
+            held_meanwhile = entered.is_set() and not release.is_set() and not left.is_set() and not write.done()
+        finally:
+            release.set()
         return listed, held_meanwhile, await write
 
     listed, held_meanwhile, written = asyncio.run(both())
+    # The barrier was opened by the test. Had it given up by itself (the write on the event loop, or a
+    # list that took ten seconds), "held meanwhile" below would be about a call that was let through.
+    assert not expired.is_set()
     assert listed["status"] == 200 and len(json.loads(listed["body"])["projects"]) == 2
     assert held_meanwhile  # the write was inside its registry call, and had not left it, when the list was answered
     assert written["status"] == (201 if method == "POST" else 200) and _rows(reg["db"]) != before
@@ -1046,14 +1075,28 @@ def test_the_forms_and_dialogs_are_the_pages_own_markup() -> None:
     assert "innerHTML" not in flow and "${" not in flow
 
 
-def test_the_result_line_stays_in_the_page_when_it_is_empty() -> None:
+def test_the_result_line_is_always_in_the_page_and_always_takes_the_same_room() -> None:
     # A status is announced only when the element was already there before its text changed, so the
-    # empty line may take no room but is never taken out (`display: none` would).
+    # line is never taken out (`display: none` would).
     css = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
     rules = re.findall(r"[^{}]*\.project-result[^{}]*\{[^}]*\}", css)
-    assert len(rules) >= 4 and not any("display" in rule or "visibility" in rule for rule in rules)
-    empty = next(rule for rule in rules if ".project-result:empty" in rule)
-    assert "padding: 0" in empty and "border-top: 0" in empty
+    assert len(rules) >= 5 and not any("display" in rule or "visibility" in rule for rule in rules)
     # It is in view wherever the list is scrolled to: a change made from a row far down is answered here.
     line = next(rule for rule in rules if re.search(r"\.project-result \{", rule))
     assert "position: sticky" in line and "bottom: 0" in line
+    # One height whatever it says, a longer sentence scrolled inside it: an answer never puts the line
+    # over what was in view. No other rule (an empty line, a kind of sentence) gives it another size.
+    assert "height: var(--project-result-height);" in line and "overflow-y: auto;" in line
+    assert "min-height" not in line and "max-height" not in line
+    for rule in rules:
+        if rule is not line:
+            assert not re.search(r"\b(height|padding|border|margin|position|font-size)\b", rule.split("{", 1)[1]), rule
+            assert ":empty" not in rule
+    # A row the focus moves to is kept above the line, by that same length.
+    scope = re.search(r':root\[data-scope="registry"\] \{([^}]*)\}', css).group(1)
+    assert re.search(r"--project-result-height: \d+px;", scope)
+    assert "scroll-padding-bottom: calc(var(--project-result-height) + 8px);" in scope
+    # A sentence scrolled inside it has to be reached by the keyboard: the line is a Tab stop, with a
+    # name and, before any change, a sentence of its own (never an empty stop).
+    assert PAGE.count('<p id="projects-result" class="project-result" role="status" aria-label="Result of the last change" tabindex="0">'
+                      "No change sent yet: the registry's answer to one is written here.</p>") == 1

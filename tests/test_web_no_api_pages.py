@@ -3,6 +3,8 @@ which would run on the workbench's origin, where `/api/sheet` serves state text 
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -22,8 +24,11 @@ def test_no_generated_api_page_is_served(client, path):
     assert client.get(path).status_code == 404
 
 
-def test_no_response_names_a_script_cdn(client):
+def test_the_page_loads_nothing_from_another_origin(client):
     page = client.get("/")
     assert page.status_code == 200
-    for host in ("cdn.jsdelivr.net", "unpkg.com", "cdnjs.cloudflare.com"):
-        assert host not in page.text
+    # Scripts and styles are inline: no tag or rule names a source, and no absolute URL appears at all.
+    assert re.findall(r"<script\b[^>]*\bsrc\s*=", page.text, re.IGNORECASE) == []
+    assert re.findall(r"<link\b[^>]*\bhref\s*=", page.text, re.IGNORECASE) == []
+    assert re.findall(r"@import\b", page.text, re.IGNORECASE) == []
+    assert re.findall(r"(?:https?:)?//[A-Za-z0-9.-]+\.[A-Za-z]{2,}", page.text) == []

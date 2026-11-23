@@ -396,7 +396,7 @@ with open("train.jsonl", "w", encoding="utf-8") as f:
 
 ## Stability
 
-s1ops is beta (`0.x`). The CLI pipeline of the Quickstart, the Python SDK and `DecisionGate`, and the formats of records, `fits.json` and `policy.json` keep their behavior within a minor version: a change that breaks compatibility, or a file an older reader refuses, is named in the release notes of the version that makes it (the version bump's pull request).
+s1ops is beta (`0.x`). The CLI pipeline of the Quickstart, the Python SDK and `DecisionGate`, and the formats of records, `fits.json` and `policy.json` change with a note: a change that breaks compatibility, or a file an older reader refuses, is named in the release notes of the version that makes it (the version bump's pull request).
 
 These are **beta**: their commands, output and files can still change without such a note.
 

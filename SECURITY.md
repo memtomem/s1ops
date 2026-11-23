@@ -20,7 +20,8 @@ s1ops is beta (`0.x`); only the latest published minor receives security fixes.
 
 - The records, ledger entries, probe output and exports s1ops writes identify an item by
   `(dataset, item_id)` (records and exports also by `state_sha256`); s1ops adds no state text of
-  its own to them.
+  its own to them. What a backend answers with, such as the model name it reports, is written as
+  the backend sent it, so a server that echoes its input there puts that text in the record.
 - Commands that copy input rows (`s1 apply`, `s1 labelaudit patch`) drop the row's top-level
   `state` key only: text you put under another key, or nested in metadata, is copied as it is. The
   ledger refuses a top-level `state` metadata key.
@@ -40,9 +41,10 @@ s1ops is beta (`0.x`); only the latest published minor receives security fixes.
 
 ### Network
 
-- s1ops makes no network call except a live `s1 probe` (`--backend systemone` / `openai`) to the
-  server you name, through that backend's SDK; the SDK's HTTP client may follow a redirect the
-  server answers with. `s1 labelaudit pull` reads a Langfuse response you fetched yourself.
+- s1ops makes no network call except a live `s1 probe` (`--backend systemone` / `openai`), through
+  that backend's SDK, to the endpoint configured by `--base-url`, else `TYPESAFE_BASE_URL` /
+  `OPENAI_BASE_URL`, else the SDK's own hosted default. The SDK's HTTP client may follow a redirect
+  the server answers with. `s1 labelaudit pull` reads a Langfuse response you fetched yourself.
 - Spend on a live backend is reserved before each request and settled after it, under a file lock;
   a measured cost above its reservation halts the run.
 

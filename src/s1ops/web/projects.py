@@ -16,8 +16,8 @@ A write is a `POST`, `PATCH` or `DELETE` on the registry's own routes. Beyond be
 must not name another site (`_own_request`: a page of another origin on this computer is still another
 site), and a body is read only as `application/json` and counted as it arrives. What this file refuses
 (the guard, a body's type, size, text and keys, a relative path) is said without a word of the body. A
-refusal the registry makes is the registry's sentence, which names a slug or a path only after its
-rules passed it: a taken slug and a directory that cannot be read come back in the answer.
+refusal the registry makes is the registry's sentence, the one `s1 project` prints, and may hold what
+was sent: a taken slug, or the path of a directory that is missing or cannot be read.
 """
 
 from __future__ import annotations

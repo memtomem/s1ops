@@ -1079,17 +1079,25 @@ def test_the_result_line_is_always_in_the_page_and_always_takes_the_same_room() 
     # A status is announced only when the element was already there before its text changed, so the
     # line is never taken out (`display: none` would).
     css = PAGE[PAGE.index("<style>"):PAGE.index("</style>")]
-    rules = re.findall(r"[^{}]*\.project-result[^{}]*\{[^}]*\}", css)
-    assert len(rules) >= 5 and not any("display" in rule or "visibility" in rule for rule in rules)
+    rules = re.findall(r"[^{}]*[.#]projects?-result[^{}]*\{[^}]*\}", css)
+    assert len(rules) >= 6 and not any("display" in rule or "visibility" in rule for rule in rules)
     # It is in view wherever the list is scrolled to: a change made from a row far down is answered here.
     line = next(rule for rule in rules if re.search(r"\.project-result \{", rule))
     assert "position: sticky" in line and "bottom: 0" in line
     # One height whatever it says, a longer sentence scrolled inside it: an answer never puts the line
-    # over what was in view. No other rule (an empty line, a kind of sentence) gives it another size.
+    # over what was in view. Of the rules that name the line by its class or id, no other (an empty
+    # line, a kind of sentence) gives it another size; the heights a browser computes in each state
+    # are the browser check's (project_writes_check.py, the scroll tag), not this test's.
     assert "height: var(--project-result-height);" in line and "overflow-y: auto;" in line
     assert "min-height" not in line and "max-height" not in line
+    # The one exception is a window too short for a row between the bar above and the line: there the
+    # line does not stick, and nothing is kept clear of it.
+    short = ('    @media (max-height: 320px) {\n      :root[data-scope="registry"] { scroll-padding-bottom: 0; }\n'
+             "      .project-result { position: static; }\n    }\n")
+    assert css.count(short) == 1 and css.count("@media (max-height") == 1
+    unstuck = next(rule for rule in rules if "position: static" in rule)
     for rule in rules:
-        if rule is not line:
+        if rule is not line and rule is not unstuck:
             assert not re.search(r"\b(height|padding|border|margin|position|font-size)\b", rule.split("{", 1)[1]), rule
             assert ":empty" not in rule
     # A row the focus moves to is kept above the line, by that same length.

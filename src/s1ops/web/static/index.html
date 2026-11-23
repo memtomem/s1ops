@@ -271,6 +271,12 @@
       font-size: 13px;
       overflow-wrap: anywhere;
     }
+    /* A window too short to show a row between the bar above and the line: there the line does not
+       stick, and is read under the list as any paragraph. */
+    @media (max-height: 320px) {
+      :root[data-scope="registry"] { scroll-padding-bottom: 0; }
+      .project-result { position: static; }
+    }
     .project-result:focus-visible { outline-offset: -2px; }
     .project-result:not([data-kind]) { color: var(--muted); }
     .project-result[data-kind="refused"], .project-result[data-kind="unconfirmed"] { color: var(--err); }

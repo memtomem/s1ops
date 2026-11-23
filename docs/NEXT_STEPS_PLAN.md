@@ -182,9 +182,9 @@
 
 범위: 프로젝트만 여러 개(조직·사용자·로그인 없음), 로컬 전용, 목록은 SQLite, 관리는 CLI와 웹 양쪽, 네비게이션은 프로젝트 > 섹션 > 뷰. 웹 URL의 프로젝트 키는 재사용되지 않는 등록 번호(`id`)이고 slug는 CLI의 이름.
 
-- [ ] A. 워크벤치 뷰 9개를 섹션 4개로 묶음(탭 순서·번호 유지)
+- [x] A. 워크벤치 뷰 9개를 섹션 4개로 묶음(탭 순서·번호 유지)
 - [x] B. `s1ops/registry.py`와 `s1 project init|add|list|rename|remove`: `init_registry`가 쓴 스키마(`sqlite_master` 그대로)와 스탬프가 아니면 거부, 쓰기는 `BEGIN IMMEDIATE` 한 트랜잭션, 모든 `sqlite3.Error`는 `RegistryError`
-- [ ] C. `s1 web --db`: `/p/<id>/`로 기존 `create_app`에 위임, 프로젝트 전환기, 읽기 전용 Projects 뷰
+- [x] C. `s1 web --db`(`web/projects.py`): `/p/<id>/api/...`를 요청마다 그 프로젝트 디렉터리의 `create_app`에 위임(캐시 없음), `/p/`는 읽기 전용 프로젝트 목록(`GET /api/registry/projects`, 번호는 10진 문자열). 페이지는 레지스트리를 읽지 않고 쓰인 그대로의 주소(`/p/`, `/p/<id>/`)에서만 응답. 헤더에는 `All projects` 링크와 현재 프로젝트 이름만 두고 전환은 목록에서(소유자 결정 2026-11-22: select 없음). 모든 요청은 loopback 전용, 모든 응답에 프레이밍 금지 헤더, 서버 접두 경로는 거부. `--workspace`·`--sheet`와 함께 쓸 수 없음
 - [ ] D. 웹 쓰기(추가·이름 변경·제거): 레지스트리 엔드포인트에 한해 POST/PATCH/DELETE, loopback + same-origin 가드, 프레이밍 금지
 
 ### 후보: 로드 시 `policy_sha256` 대조

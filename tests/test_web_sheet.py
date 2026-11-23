@@ -716,7 +716,7 @@ def test_a_403_says_the_sheet_is_for_this_computer_only() -> None:
           "\nprocess.stdout.write(JSON.stringify(box.innerHTML));")
     html = _node(js)
     assert "served to this computer only (a loopback address and Host, no proxy headers)" in html
-    assert "fix the file named above" not in html
+    assert "fix the one named above" not in html
 
 
 def test_only_the_review_requests_the_sheet_and_it_requests_nothing_else() -> None:

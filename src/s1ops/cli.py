@@ -1599,7 +1599,7 @@ _H_TRAINING_MANIFEST = (
     "training manifest from `s1 trainset export`, repeatable: refuse (exit 2) a selected group whose model trained on any of its items"
 )
 _H_TRAINING_RUN = (
-    "training-run record from `s1 trainset record`, repeatable: the printed report gains the `trainrun_id` of the run "
+    "(beta) training-run record from `s1 trainset record`, repeatable: the printed report gains the `trainrun_id` of the run "
     "that produced each model it names (null when no record names it). A record whose checkpoint answered no input record exits 1"
 )
 _H_USE_CALIB = "use the calibrated probabilities written by `s1 apply` instead of the raw ones"
@@ -1779,11 +1779,11 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="records JSONL to write, every input row with corrected labels; item `state` is never written (safe-v1). Fits and policies made from the old labels are not changed: fit and tune again",
     )
-    p_lal = sub_la.add_parser(
-        "pull",
-        help="Apply reviews made in a Langfuse annotation queue to the records' labels: a score `s1.<question_id>.label` on an exported observation is the reviewer's answer. Reads files only; fetching the scores is yours",
-        **_FMT,
+    _h = (
+        "(beta) Apply reviews made in a Langfuse annotation queue to the records' labels: a score `s1.<question_id>.label` "
+        "on an exported observation is the reviewer's answer. Reads files only; fetching the scores is yours"
     )
+    p_lal = sub_la.add_parser("pull", help=_h, description=_h, **_FMT)
     p_lal.add_argument("records", help=f"the records the export was made from: {_H_RECORDS}")
     p_lal.add_argument("--export", required=True, help="the `s1 export langfuse` file whose observations were reviewed")
     p_lal.add_argument(
@@ -1811,7 +1811,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument(
         "--training-run",
         action="append",
-        help="training-run record from `s1 trainset record`, repeatable: each question's report gains `primary_trainrun_id` and "
+        help="(beta) training-run record from `s1 trainset record`, repeatable: each question's report gains `primary_trainrun_id` and "
         "`shadow_trainrun_id`, the run that produced that side's model (null when no record names it). A record whose checkpoint answered no record in either file exits 1",
     )
     p_cmp.set_defaults(func=_cmd_compare)
@@ -1831,7 +1831,7 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="training manifest from `s1 trainset export`, repeatable; one must be for the candidate. A step exits 2 on an item its model trained on",
     )
-    p_pro.add_argument("--training-run", action="append", help="training-run record from `s1 trainset record`, repeatable: its `trainrun_id` goes into the report and policy.json, as `s1 compare` and `s1 policy tune` write it")
+    p_pro.add_argument("--training-run", action="append", help="(beta) training-run record from `s1 trainset record`, repeatable: its `trainrun_id` goes into the report and policy.json, as `s1 compare` and `s1 policy tune` write it")
     p_pro.add_argument(
         "-o",
         "--output",
@@ -1844,7 +1844,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_pro.set_defaults(func=_cmd_promote)
 
     # trainset
-    p_ts = sub.add_parser("trainset", help="Training sets for an external trainer (s1ops starts no training)", **_FMT)
+    _h = "(beta) Training sets for an external trainer (s1ops starts no training)"
+    p_ts = sub.add_parser("trainset", help=_h, description=_h, **_FMT)
     sub_ts = p_ts.add_subparsers(dest="trainset_cmd", required=True)
     p_tse = sub_ts.add_parser("export", help="Write the items and labels a checkpoint will train on (ids only, no state or wording)", **_FMT)
     p_tse.add_argument("records", help=_H_RECORDS)
@@ -1942,7 +1943,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_el.add_argument(
         "--training-run",
         action="append",
-        help="training-run record from `s1 trainset record`, repeatable: the export gains `training_runs`, each record as written "
+        help="(beta) training-run record from `s1 trainset record`, repeatable: the export gains `training_runs`, each record as written "
         "(digests, counts, trainer settings and metrics), and `metadata.trainrun_id` on every observation its checkpoint answered. "
         "A record whose checkpoint answered no input record exits 1",
     )
@@ -1970,7 +1971,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_led.set_defaults(func=_cmd_ledger)
 
     # project
-    p_proj = sub.add_parser("project", help="Keep a registry of projects: named workspace directories", **_FMT)
+    _h = "(beta) Keep a registry of projects: named workspace directories"
+    p_proj = sub.add_parser("project", help=_h, description=_h, **_FMT)
     sub_proj = p_proj.add_subparsers(dest="project_cmd", required=True)
     db_help = "project registry made by `s1 project init`"
     p_pi = sub_proj.add_parser("init", help="Create an empty project registry", **_FMT)
@@ -1998,7 +2000,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_demo.set_defaults(func=_cmd_demo)
 
     # web
-    p_web = sub.add_parser("web", help="Launch local System 1 LLMOps Web Workbench (127.0.0.1)", **_FMT)
+    _h = "(beta) Launch local System 1 LLMOps Web Workbench (127.0.0.1)"
+    p_web = sub.add_parser("web", help=_h, description=_h, **_FMT)
     p_web.add_argument("--workspace", default=".", help="directory holding records.jsonl, fits.json, policy.json, ...")
     p_web.add_argument("--host", default="127.0.0.1", help="bind address")
     p_web.add_argument("--port", type=int, default=8765, help="bind port")

@@ -1,4 +1,4 @@
-"""The noul gate for a per-call consumer (decision-plane's hook): a light import path, and a fail-closed
+"""The noul gate for a per-call consumer such as a tool-call hook: a light import path, and a fail-closed
 load and evaluation, so a policy is routed only through the fit it was tuned through."""
 
 from __future__ import annotations

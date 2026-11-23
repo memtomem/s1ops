@@ -1,6 +1,6 @@
 """A registry of projects: each a slug, a display name and one workspace directory, kept in a SQLite
-file that `s1 project` reads and writes (the workbench is to read it too, as `s1 web --db`). It holds no records, labels or
-state text, only where each workspace is.
+file that `s1 project` and the workbench of `s1 web --db` read and write. It holds no records, labels
+or state text, only where each workspace is.
 
 Every call opens its own connection to an existing file (`mode=rw`, so a mistyped path never creates
 one) and runs in one transaction: `BEGIN IMMEDIATE` for a write, whose checks and change commit
@@ -143,8 +143,9 @@ def _workspace_dir(path: str) -> str:
     _refuse(path_problem(full))
     try:
         st = os.stat(full)
-    except OSError as e:
-        raise RegistryError("invalid", f"workspace directory cannot be read: {full}: {e.strerror or e}") from None
+    except (OSError, UnicodeEncodeError) as e:  # a path this host's filesystem encoding cannot hold
+        why = getattr(e, "strerror", None) or e
+        raise RegistryError("invalid", f"workspace directory cannot be read: {full}: {why}") from None
     if not stat.S_ISDIR(st.st_mode):
         raise RegistryError("invalid", f"workspace is not a directory: {full}")
     return full

@@ -2044,7 +2044,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--db",
         default=None,
         help="project registry made by `s1 project init`: serve every registered project under /p/<id>/ instead of one "
-        "workspace, to this computer only (--host 127.0.0.1 or localhost); takes neither --workspace nor --sheet",
+        "workspace, and a list that adds, renames and removes projects, to this computer only (--host 127.0.0.1 or "
+        "localhost); takes neither --workspace nor --sheet",
     )
     p_web.set_defaults(func=_cmd_web)
 

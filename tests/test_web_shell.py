@@ -417,7 +417,7 @@ def _unnamed_controls(html: str) -> list[str]:
 
 def test_every_control_has_an_accessible_name() -> None:
     html = (STATIC_DIR / "index.html").read_text()
-    assert len(re.findall(r"<(?:input|select|textarea)\b[^>]*>", html)) >= 12
+    assert len(re.findall(r"<(?:input|select|textarea)\b[^>]*>", html)) >= 16
     assert _unnamed_controls(html) == []
     # The check sees a control that lost its name, by either route.
     assert len(_unnamed_controls(html.replace('<label for="inp-cost-s2">', "<label>"))) == 1

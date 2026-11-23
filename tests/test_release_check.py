@@ -64,4 +64,3 @@ def test_version_guard_rejects_ref(ref: str) -> None:
 
 def test_version_guard_accepts_matching_tag() -> None:
     assert check_version(f"refs/tags/v{__version__}") == __version__
-

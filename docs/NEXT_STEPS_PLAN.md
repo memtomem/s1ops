@@ -30,7 +30,7 @@
     - `guard`: ref가 `refs/tags/vX.Y.Z`이고 X.Y.Z가 `pyproject.toml` version·`s1ops.__version__`과 같아야 함
     - `ci`: 같은 커밋에서 `ci.yml` 전체를 재사용(`workflow_call`), publish job은 checkout 없이 그 run의 `dist` artifact만 업로드. `id-token: write`는 publish job에만 부여
     - `attestations: false`: 저장소가 비공개인 동안 끔. 서명 단계가 업로드 전에 저장소·워크플로·ref·커밋·run URI를 공개 Rekor 로그에 영구 기록하기 때문 (업로드가 실패해도 남음). 2026-11-23 저장소 공개 후 제거(attestation 켬)
-  - [ ] 소유자 1회 설정:
+  - [x] 소유자 1회 설정 (완료: 두 environment가 있고, 0.14.0까지 `release.yml`의 trusted publishing으로 배포됨):
     - GitHub environment `testpypi`, `pypi` 생성
     - TestPyPI·PyPI의 **기존** `s1ops` 프로젝트(yank된 0.0.1이 있으므로 pending publisher가 아님) → Manage → Publishing에서 GitHub publisher 추가: owner `memtomem`, repository `s1ops`, workflow `release.yml`, environment `testpypi` / `pypi`
   - 릴리스 절차: `vX.Y.Z` 태그 push → 저장소 쓰기 권한이 있는 계정으로 인증한 `gh`로 `gh workflow run release.yml --ref vX.Y.Z -f index=testpypi` (`--ref`는 태그 이름도 받음). TestPyPI로 먼저 확인한 뒤 PyPI. 실패한 run을 publish job만 재실행하면 이전에 검증된 artifact를 다시 올림 (현재 태그를 새로 검증하지 않음)
@@ -39,7 +39,7 @@
     - 데모 생성기를 패키지로 옮겨 `s1 demo OUT_DIR [--seed N]` 추가 (새 디렉터리나 빈 디렉터리에만 씀, `--force` 없음). `release_check.py`가 wheel·sdist 설치본에서 `s1 demo` + lint까지 실행
     - README를 PyPI용으로 재작성: `pip install s1ops` → `s1 demo` → 파이프라인. 저장소·`docs/` 링크, Mermaid, `$...$` 수식 제거 (PyPI는 렌더링하지 않음)
     - `[project.urls]` 제거, `release_check.py`가 METADATA·PKG-INFO에 `memtomem/s1ops`가 없는지 검사 (2026-11-23 공개 후 `[project.urls]` 복원, 검사 제거)
-  - [x] 저장소 공개 시 (2026-11-23, `chore/public-urls`): `release.yml`의 `attestations: false`와 `release_check.py`의 `PRIVATE_REPO` 검사 제거, `[project.urls]` 복원, `docs/*.md`의 로컬 경로 정리
+  - [x] 저장소 공개 시 (2026-11-23, `chore/public-urls`): `release.yml`의 `attestations: false`와 `release_check.py`의 저장소 이름 검사(`check_no_repo_identity`) 제거, `[project.urls]` 복원, `docs/*.md`의 로컬 경로 정리
     - [x] 공개 전 준비 (2026-11-23, `chore/public-prep`): 추적 파일의 로컬 경로·비공개 저장소 이름 정리(`tests/test_public_tree.py`가 고정), `CLA.md`·`CONTRIBUTING.md`·`SECURITY.md`·`CODE_OF_CONDUCT.md`, README `## Stability`·`## License`·beta 표시, classifier `4 - Beta`. 라이선스는 Apache-2.0 그대로(소유자 결정)
     - [x] 전환 전 Git 밖 자료(이슈·PR·댓글과 편집 이력, Actions 로그·artifact) 점검: 시크릿 0, 이슈 본문의 비공개 저장소 이름은 소유자 결정으로 그대로 → 2026-11-23 가시성 전환 → 나머지 항목(위). 비공개 저장소의 Actions가 결제 문제로 막혀 있어 전환 후 CI를 돌림
 
@@ -152,7 +152,7 @@
     - **레이아웃: 이 repo의 `packages/ts`**. `routing_rule`·`s1-policy/1`·해시 규칙이 바뀌는 커밋에서 Python과 TS를 함께 검증
     - **parity는 두 층**: (A) 보정된 분포의 라우팅은 bit 동일을 CI 게이트로 강제하며 두 단계를 따로 대조: ① choice/score 재정규화(`records.parse_record`, `gate._normalized`·`gate._calibrated`가 `probability_total` = `math.fsum`로 나눔; noul은 `(1 - p, p)`로 만들 뿐 재정규화하지 않음) — JS에 CPython `math.fsum`과 같은 결과의 정확 합산 필요, ② 이미 정규화된 같은 입력에 대한 `routing.route`(비교만 함, tie-safe). `route` 안에서 다시 정규화하면 경계 판정이 달라짐. (B) 보정 포함 평가는 `temperature`·`platt`의 `exp`/`log`가 엔진마다 마지막 비트가 다를 수 있어 "지원 런타임에서 검증"만 약속(허용 오차 비교는 threshold 경계의 결정을 바꾸므로 쓰지 않음). 기준값은 Python 3.11이 만든 golden vector + 경계값 생성 테스트, 지원 런타임별로 실행
     - `policy_sha256`은 해시 대상 바이트 규칙(필드, 키 순서, 숫자 직렬화)을 먼저 명세하고 두 언어가 같은 바이트를 만드는지 테스트
-    - **배포: 인증 방식 미정.** private repo에서 npm trusted publishing(OIDC)이 되는지, provenance가 repo 경로를 공개하는지 확인한 뒤 OIDC / 토큰 선택. 버전은 Python과 독립(호환성은 지원하는 `s1-policy/1`·`routing_rule`·fits 형식 표로), `ts-vX.Y.Z` 태그 + 수동 dispatch(태그·`package.json`·검증 커밋 일치), `files` 허용 목록과 `npm pack` 결과물 전체를 검사하는 repo 이름 노출 게이트
+    - **배포: 인증 방식 미정.** 저장소가 공개되었으므로(2026-11-23) npm trusted publishing(OIDC)과 provenance를 쓸 수 있는지 확인한 뒤 OIDC / 토큰 선택. 버전은 Python과 독립(호환성은 지원하는 `s1-policy/1`·`routing_rule`·fits 형식 표로), `ts-vX.Y.Z` 태그 + 수동 dispatch(태그·`package.json`·검증 커밋 일치), `files` 허용 목록과 `npm pack` 결과물 전체를 검사하는 게이트(허용 목록 밖의 파일이 실리지 않는지)
   - [ ] **다운스트림 연동 어댑터**: 2026-10-26 확인 — 확인한 두 소비자(런타임 게이트, `tracegraph`) 모두 아직 s1ops 아티팩트를 소비하지 않음. `tracegraph`의 OTLP 어댑터는 OpenInference 종류(`openinference.span.kind`)와 그래프·실행 메타데이터(`graph.node.*`, `syncmill.run_id`, 예외 속성)를 읽지만 `s1.*` 속성은 다루지 않음. 연동은 Python(PyPI `s1ops`)으로
     - 런타임 게이트 소비자 (소유자 결정 2026-10-26: 목표 재정의): **raw p 임계값 판정을 s1ops 보정 라우팅(`fits.json` + `policy.json` → `routing.route`)으로 교체**
       - 연동 조건: **판정 매핑을 명시.** s1ops noul `route`는 높은 p에 `ALLOW`(예측 참), 낮은 p에 `BLOCK`, 불확실하면 `ESCALATE`를 냄(`error_budget`·band 모두). 질문이 "위험한가"처럼 참이 위험을 뜻하면 `ALLOW`가 위험 판정이므로, 이름만 보고 연결하면 판단이 뒤집힘. 질문 여러 개의 결과를 합치는 규칙(예: 하나라도 위험이면 위험)은 소비자가 정함

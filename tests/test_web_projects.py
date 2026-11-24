@@ -252,8 +252,7 @@ def test_only_get_reaches_a_project_and_is_refused_before_the_registry_is_opened
         assert client.request(method, url, follow_redirects=False).status_code == 404, url
     # Without the slash the request never reaches the project: the router redirects any key and method.
     assert client.request(method, "/p/01", follow_redirects=False).status_code == 307
-    # The registry's own routes are GET only too.
-    assert client.request(method, "/api/registry/projects").status_code == 405
+    # The list's page is GET only too (the registry's own routes: tests/test_web_project_writes.py).
     assert client.request(method, "/p/").status_code == 405
 
 
@@ -654,8 +653,9 @@ let location = {pathname: "/p/3/"};
 })();
 """ % _all_functions(exclude=())
     assert _node(js) == ["/p/3/api/groups", "/api/registry/projects", "/api/groups", "/api/registry/projects"]
-    # Nothing else in the page requests anything.
-    assert PAGE.count("fetch(") == 1
+    # Nothing else in the page requests anything, but the one sender of a change to the registry
+    # (`sendJson`: tests/test_web_project_writes.py).
+    assert PAGE.count("fetch(") == 2
 
 
 @needs_node
@@ -789,7 +789,7 @@ TABLE_STEPS = r"""
   document.querySelectorAll = sel => sel === ".tk" ? [box] : [];
   const downloads = [];
   downloadText = (name, text) => downloads.push([name, text]);
-  const ids = () => Array.from(box.body.innerHTML.matchAll(/data-id="(\d+)"/g)).map(m => m[1]);
+  const ids = () => Array.from(box.body.innerHTML.matchAll(/data-act="project-open" data-id="(\d+)"/g)).map(m => m[1]);
   sortTable("projects:all", "id"); sortTable("projects:all", "id");
   out.byIdDown = ids();
   sortTable("projects:all", "slug");
@@ -841,7 +841,7 @@ def test_ids_past_what_a_number_holds_stay_apart_in_the_list() -> None:
     querySelector(sel) { return sel === ".tk-body" ? this.body : this.count; }, querySelectorAll: () => []};
   document.querySelectorAll = sel => sel === ".tk" ? [box] : [];
   sortTable("projects:all", "id"); sortTable("projects:all", "id");
-  out.down = Array.from(box.body.innerHTML.matchAll(/data-id="(\d+)"/g)).map(m => m[1]);
+  out.down = Array.from(box.body.innerHTML.matchAll(/data-act="project-open" data-id="(\d+)"/g)).map(m => m[1]);
 """
     out = _shell_run(steps, d)
     assert out["opened"] == [f"/p/{big}/" for big in BIG]
@@ -892,11 +892,18 @@ def _wiring() -> str:
 
 def test_the_project_line_and_the_list_pane_are_in_the_page() -> None:
     assert '<div class="project-tools"><a href="/p/">All projects</a><span class="project-name" id="project-name"></span></div>' in PAGE
-    assert '<section id="tab-projects" class="tab-pane" aria-label="Projects">\n      <div id="projects-container">' in PAGE
-    # No tab opens the list, and it adds no control of its own to the page.
+    pane = PAGE[PAGE.index('<section id="tab-projects" class="tab-pane" aria-label="Projects">'):PAGE.index("</main>")]
+    # No tab opens the list, and no picker changes project (the list is the switcher).
     assert PAGE.count('role="tab"') == 9 and 'data-view="projects"' not in PAGE
-    pane = PAGE[PAGE.index('<section id="tab-projects"'):PAGE.index("</main>")]
-    assert "<select" not in pane and "<input" not in pane and "<button" not in pane
+    assert "<select" not in pane
+    # In this order: the form that adds, the list, the one line a change's outcome is written to,
+    # and the two dialogs (tests/test_web_project_writes.py).
+    order = ['<form id="form-project-add"', '<div id="projects-container">',
+             '<p id="projects-result" class="project-result" role="status" aria-label="Result of the last change" tabindex="0">'
+             "No change sent yet: the registry's answer to one is written here.</p>",
+             '<dialog id="dlg-project-rename"', '<dialog id="dlg-project-remove"']
+    assert [pane.count(piece) for piece in order] == [1] * 5
+    assert sorted(order, key=pane.index) == order
 
 
 def test_the_stylesheet_shows_each_scope_its_own() -> None:

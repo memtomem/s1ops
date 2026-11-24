@@ -230,6 +230,71 @@
     :root[data-scope="registry"] #flt-group,
     :root[data-scope="registry"] #flt-note,
     :root[data-scope="registry"] #btn-clear-group { display: none; }
+    /* A registry's list: the form that adds a project, the one line every change's outcome is
+       written to, and the two dialogs a row's Rename and Remove open. */
+    .project-form .project-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: center; margin-bottom: 12px; }
+    .project-form label { font-size: 12px; color: var(--muted); }
+    .project-form input[type="text"] {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-size: 13px;
+      font-family: var(--mono);
+      min-width: 0;
+      width: 100%;
+    }
+    .project-form .project-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    button.tool[aria-disabled="true"] { opacity: 0.55; cursor: default; }
+    /* The line stays in view wherever the list is scrolled to (a change made from a row far down
+       says its wait and its outcome here, and the focus may stay on that row): it sits under the
+       list and sticks to the window's lower edge. It takes the same room from the start, whatever
+       it says: a sentence longer than that room is scrolled inside it (so it is in the tab order),
+       and nothing that was in view comes to lie under it when a change is answered. A row the
+       focus moves to is kept above it (`scroll-padding-bottom`). It is never taken out of the page:
+       a status is announced only when the element was already there before its text changed. */
+    :root[data-scope="registry"] {
+      --project-result-height: 80px;
+      scroll-padding-bottom: calc(var(--project-result-height) + 8px);
+    }
+    .project-result {
+      position: sticky;
+      bottom: 0;
+      z-index: 1;
+      height: var(--project-result-height);
+      margin: 0;
+      padding: 10px 0;
+      overflow-y: auto;
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    /* A window too short to show a row between the bar above and the line: there the line does not
+       stick, and is read under the list as any paragraph. */
+    @media (max-height: 320px) {
+      :root[data-scope="registry"] { scroll-padding-bottom: 0; }
+      .project-result { position: static; }
+    }
+    .project-result:focus-visible { outline-offset: -2px; }
+    .project-result:not([data-kind]) { color: var(--muted); }
+    .project-result[data-kind="refused"], .project-result[data-kind="unconfirmed"] { color: var(--err); }
+    .project-result[data-kind="waiting"] { color: var(--muted); }
+    dialog.project-dialog {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px;
+      width: min(520px, calc(100vw - 32px));
+    }
+    dialog.project-dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
+    dialog.project-dialog h3 { margin: 0 0 8px; font-size: 15px; }
+    dialog.project-dialog p { margin: 0 0 12px; font-size: 13px; overflow-wrap: anywhere; }
+    @media (max-width: 560px) {
+      .project-form .project-fields { grid-template-columns: minmax(0, 1fr); }
+    }
     .tab-pane { display: none; }
     .tab-pane.active { display: block; }
     .grid-2 {
@@ -660,7 +725,44 @@
     </section>
 
     <section id="tab-projects" class="tab-pane" aria-label="Projects">
+      <form id="form-project-add" class="card project-form" data-project-form="project-add" novalidate>
+        <h3>Add a project</h3>
+        <div class="project-fields">
+          <label for="inp-project-slug">Slug</label>
+          <input type="text" id="inp-project-slug" autocomplete="off" autocapitalize="none" spellcheck="false">
+          <label for="inp-project-path">Workspace directory (absolute path on this computer)</label>
+          <input type="text" id="inp-project-path" autocomplete="off" autocapitalize="none" spellcheck="false">
+          <label for="inp-project-name">Name (optional: the slug when empty)</label>
+          <input type="text" id="inp-project-name" autocomplete="off" autocapitalize="none" spellcheck="false">
+        </div>
+        <div class="project-actions"><button type="submit" class="tool project-submit">Add project</button></div>
+      </form>
       <div id="projects-container">Loading the projects...</div>
+      <p id="projects-result" class="project-result" role="status" aria-label="Result of the last change" tabindex="0">No change sent yet: the registry's answer to one is written here.</p>
+      <dialog id="dlg-project-rename" class="project-dialog" aria-labelledby="dlg-project-rename-title" aria-describedby="dlg-project-rename-what">
+        <form class="project-form" data-project-form="project-rename" novalidate>
+          <h3 id="dlg-project-rename-title">Rename a project</h3>
+          <p id="dlg-project-rename-what"></p>
+          <div class="project-fields">
+            <label for="inp-project-rename">New name</label>
+            <input type="text" id="inp-project-rename" autocomplete="off" autocapitalize="none" spellcheck="false">
+          </div>
+          <div class="project-actions">
+            <button type="submit" class="tool project-submit">Rename</button>
+            <button type="button" class="tool" data-act="project-dialog-cancel">Cancel</button>
+          </div>
+        </form>
+      </dialog>
+      <dialog id="dlg-project-remove" class="project-dialog" aria-labelledby="dlg-project-remove-title" aria-describedby="dlg-project-remove-what">
+        <form class="project-form" data-project-form="project-remove" novalidate>
+          <h3 id="dlg-project-remove-title">Remove a project from the registry</h3>
+          <p id="dlg-project-remove-what"></p>
+          <div class="project-actions">
+            <button type="button" class="tool" data-act="project-dialog-cancel" autofocus>Cancel</button>
+            <button type="submit" class="tool project-submit">Remove the registration</button>
+          </div>
+        </form>
+      </dialog>
     </section>
   </main>
     </div>
@@ -703,19 +805,50 @@
       return found ? String(found.name) + " (" + String(found.slug) + ")" : "Not found: #" + id;
     }
 
+    // A refused request as an Error: its message is the server's `detail` or, without one, the
+    // status line, and `detail` is set only for a sentence the server itself sent.
+    async function responseError(res) {
+      let detail = `${res.status} ${res.statusText}`;
+      let said = null;
+      try {
+        const body = await res.json();
+        if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+        if (typeof body.detail === "string" && body.detail) said = body.detail;
+      } catch (_) {}
+      const err = new Error(detail);
+      err.status = res.status;
+      if (said !== null) err.detail = said;
+      return err;
+    }
+
     async function fetchJson(url) {
       const res = await fetch(requestUrl(url, location.pathname));
-      if (!res.ok) {
-        let detail = `${res.status} ${res.statusText}`;
-        try {
-          const body = await res.json();
-          if (body.detail) detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
-        } catch (_) {}
-        const err = new Error(detail);
-        err.status = res.status;
-        throw err;
-      }
+      if (!res.ok) throw await responseError(res);
       return res.json();
+    }
+
+    // A project as the registry's routes answer with one: its number as a key, the rest text.
+    function isProject(p) {
+      return Boolean(p) && typeof p === "object" && projectUrl(p.id) !== null
+        && ["slug", "name", "workspace_path"].every(k => typeof p[k] === "string");
+    }
+
+    // A change to the registry (`s1 web --db`): the project the server answers with. An error
+    // without a `status` is a change whose outcome is not known: no answer at all, a redirect (the
+    // answer of another address says nothing about this request, so none is followed), or a 2xx
+    // that does not hold the project.
+    async function sendJson(method, url, body) {
+      const init = body === undefined
+        ? {method, redirect: "error"}
+        : {method, redirect: "error", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)};
+      const res = await fetch(requestUrl(url, location.pathname), init);
+      if (!res.ok) throw await responseError(res);
+      let project = null;
+      try {
+        project = (await res.json()).project;
+      } catch (_) {}
+      if (!isProject(project)) throw new Error("the answer does not hold the project");
+      return project;
     }
 
     // Kappa is null when undefined (both graders constant).
@@ -3959,6 +4092,9 @@
         spec: {id: "projects:all", caption: "Registered projects", file: "projects", columns: [
           {key: "id", name: "ID", kind: "text"},
           {key: "open", name: "Open", kind: "button", act: "project-open", text: "Open", labelKey: "name", data: {id: "id"}},
+          // Named by the slug, which no two projects share (a display name may be given twice).
+          {key: "rename", name: "Rename", kind: "button", act: "project-rename-open", text: "Rename", labelKey: "slug", data: {id: "id"}},
+          {key: "remove", name: "Remove", kind: "button", act: "project-remove-open", text: "Remove", labelKey: "slug", data: {id: "id"}},
           {key: "name", name: "Name", kind: "text"},
           {key: "slug", name: "Slug", kind: "text"},
           {key: "workspace_path", name: "Workspace directory", kind: "text", wide: true},
@@ -3978,12 +4114,12 @@
       const t = projectsTable(d || {});
       const file = d && d.registry && typeof d.registry.path === "string" ? d.registry.path : null;
       const where = file === null ? "" : ` Registry file: <code>${esc(file)}</code>.`;
-      const how = "Register a workspace directory with <code>s1 project add SLUG --workspace DIR --db FILE</code>, then Refresh.";
+      const how = "Register a workspace directory with the form above, or with <code>s1 project add SLUG --workspace DIR --db FILE</code>, then Refresh.";
       if (!t.rows.length) {
         return `<div class="card state-card"><strong>No project is registered.</strong> ${how}${where}</div>`;
       }
       return `<div class="card"><h3>Projects of this registry</h3>
-        <div class="sub">Open shows a project's workbench: its own workspace directory, read on every request. ${how}${where}</div>
+        <div class="sub">Open shows a project's workbench: its own workspace directory, read on every request. Rename changes the display name only; Remove takes the registration out and leaves the directory. ${how}${where}</div>
         ${tableHtml(t.spec, t.rows, o.tstate)}</div>`;
     }
 
@@ -3993,6 +4129,139 @@
       // Kept only once it is on screen, as every view's payload.
       document.getElementById("projects-container").innerHTML = renderProjects(d, ctx.opts ? ctx.opts() : {});
       if (ctx.keep) ctx.keep(d);
+    }
+
+    // Changing the registry from its page: add a project (the form), rename one or remove its
+    // registration (a row's button, then its dialog). The page decides nothing: it sends what was
+    // typed, says what the server answered, in one place, and reads the list again.
+
+    // The request of a change; null (nothing is sent) for a project number that is not one.
+    function projectWriteRequest(act, fields) {
+      if (act === "project-add") {
+        const body = {slug: fields.slug, workspace_path: fields.path};
+        // An empty box is no name given (the server names the project by its slug), not an empty name.
+        if (fields.name !== "") body.name = fields.name;
+        return {method: "POST", url: "/api/registry/projects", body};
+      }
+      if (projectUrl(fields.id) === null) return null;
+      const url = "/api/registry/projects/" + fields.id;
+      if (act === "project-rename") return {method: "PATCH", url, body: {name: fields.name}};
+      if (act === "project-remove") return {method: "DELETE", url};
+      return null;
+    }
+
+    // What a change did, from the project the server answered with. Text for `textContent`.
+    function projectResultText(act, project) {
+      const who = "project #" + project.id + ": " + project.name + " (" + project.slug + ")";
+      if (act === "project-add") return "Added " + who + ".";
+      if (act === "project-rename") return "Renamed " + who + ".";
+      return "Removed " + who + " from the registry. The workspace directory stays: " + project.workspace_path;
+    }
+
+    // A change that did not succeed: `refused` when the server said why with a 4xx or a 503 (it
+    // answers so before it writes, and a busy registry was left as it was), else `unconfirmed`: no
+    // answer, any other failure, or an answer that is not the server's own sentence or project.
+    function projectOutcome(err) {
+      const code = err && typeof err.status === "number" ? err.status : null;
+      const said = Boolean(err) && typeof err.detail === "string";
+      return code !== null && said && ((code >= 400 && code < 500) || code === 503) ? "refused" : "unconfirmed";
+    }
+
+    function projectFailureText(err) {
+      if (projectOutcome(err) === "refused") return "Nothing was changed: " + err.detail;
+      return "No usable answer from the server: the registry may or may not have been changed. Refresh to see it before trying again.";
+    }
+
+    // The one line every change's wait and outcome are written to (a status: announced wherever the
+    // focus is, and kept in view by the stylesheet wherever the list is scrolled to).
+    function setProjectResult(kind, text) {
+      const el = document.getElementById("projects-result");
+      el.textContent = text;
+      if (kind) el.dataset.kind = kind;
+      else delete el.dataset.kind;
+    }
+
+    // A row's Rename or Remove: its dialog, saying which project the kept list (what is on screen)
+    // holds under that number. None opens while a change is out: one change at a time has a
+    // dialog, and that one is closed as the change is sent.
+    function openProjectDialog(kind, id) {
+      if (document.getElementById("tab-projects").dataset.writing) {
+        setProjectResult("waiting", "Still waiting for the registry's answer to the last change.");
+        return;
+      }
+      const d = viewData.projects;
+      const found = d && Array.isArray(d.projects) ? d.projects.find(p => p && p.id === id) : null;
+      if (!found || projectUrl(id) === null) return;
+      const dialog = document.getElementById("dlg-project-" + kind);
+      const who = "Project #" + id + ": " + String(found.name) + " (" + String(found.slug) + ")";
+      dialog.dataset.id = id;
+      document.getElementById("dlg-project-" + kind + "-what").textContent = kind === "remove"
+        ? who + ". Only the registration is removed; the workspace directory stays: " + String(found.workspace_path)
+        : who;
+      if (kind === "rename") document.getElementById("inp-project-rename").value = String(found.name);
+      dialog.showModal();
+    }
+
+    function markProjectWriting(on) {
+      const pane = document.getElementById("tab-projects");
+      if (on) pane.dataset.writing = "1";
+      else delete pane.dataset.writing;
+      pane.querySelectorAll(".project-submit").forEach(b => {
+        if (on) b.setAttribute("aria-disabled", "true");
+        else b.removeAttribute("aria-disabled");
+      });
+    }
+
+    // Send one change; a second is not sent while one is out.
+    async function submitProject(act) {
+      if (document.getElementById("tab-projects").dataset.writing) return;
+      const dialog = act === "project-add" ? null : document.getElementById(act === "project-rename" ? "dlg-project-rename" : "dlg-project-remove");
+      const boxes = ["inp-project-slug", "inp-project-path", "inp-project-name"].map(id => document.getElementById(id));
+      const typed = boxes.map(b => b.value);
+      const req = projectWriteRequest(act, act === "project-add"
+        ? {slug: typed[0], path: typed[1], name: typed[2]}
+        : {id: dialog.dataset.id, name: document.getElementById("inp-project-rename").value});
+      if (!req) return;
+      markProjectWriting(true);
+      // Once sent, a change cannot be taken back: its dialog goes at once, so nothing on screen
+      // offers to cancel it, and the wait is said where the answer will be.
+      if (dialog && dialog.open) dialog.close();
+      setProjectResult("waiting", "Sent: waiting for the registry's answer.");
+      let kind = "unconfirmed";
+      let text = "";
+      try {
+        text = projectResultText(act, await sendJson(req.method, req.url, req.body));
+        kind = "done";
+      } catch (err) {
+        kind = projectOutcome(err);
+        text = projectFailureText(err);
+      } finally {
+        markProjectWriting(false);
+      }
+      settleProject(act, kind, text, boxes, typed);
+    }
+
+    // A change was answered, or was not: its sentence is written, and after a success the list is
+    // read again (no row is changed here). The boxes of the form are emptied only when they still
+    // hold what was sent. The focus moves, to the sentence, only when nothing holds it or what
+    // holds it is about to go: a control of the list a success replaces (where a closed dialog
+    // gave it back to the row's button).
+    function settleProject(act, kind, text, boxes, typed) {
+      setProjectResult(kind, text);
+      const done = kind === "done";
+      if (done && act === "project-add" && boxes.every((b, i) => b.value === typed[i])) boxes.forEach(b => { b.value = ""; });
+      const at = document.activeElement;
+      const list = document.getElementById("projects-container");
+      if (!at || at === document.body || (done && list.contains(at))) {
+        document.getElementById("projects-result").focus();
+      }
+      if (done) reloadProjects();
+    }
+
+    // Read the list again, as a Refresh of this one view.
+    function reloadProjects() {
+      delete loadedSig.projects;
+      if (STATE.view === "projects") runView("projects");
     }
 
     // --- blind sheet review ------------------------------------------------------------------------
@@ -5081,6 +5350,9 @@
         const url = projectUrl(el.dataset.id);
         if (url) location.assign(url);
       }
+      if (el.dataset.act === "project-rename-open") openProjectDialog("rename", el.dataset.id);
+      if (el.dataset.act === "project-remove-open") openProjectDialog("remove", el.dataset.id);
+      if (el.dataset.act === "project-dialog-cancel") el.closest("dialog").close();
       if (el.dataset.act === "ov-open" && viewNames().includes(el.dataset.view)) {
         commit({...STATE, view: el.dataset.view}, "push");
         document.getElementById("nav-" + el.dataset.view).focus();
@@ -5117,6 +5389,13 @@
       if (el && el.dataset.act === "slices-fdrq") commit(parseHash(formatHash({...STATE, fdrq: Number(el.value)})), "replace");
       if (el && el.dataset.act === "slices-topk") commit(parseHash(formatHash({...STATE, topk: Number(el.value)})), "replace");
       if (el && el.dataset.act === "review-answer") reviewAct("answer", reviewOption(el.dataset.i), {act: "review-answer", i: el.dataset.i});
+    });
+    // The registry's three forms: Enter and their button send the change, never the browser's own submit.
+    document.addEventListener("submit", ev => {
+      const act = ev.target && ev.target.dataset ? ev.target.dataset.projectForm : "";
+      if (!["project-add", "project-rename", "project-remove"].includes(act)) return;
+      ev.preventDefault();
+      submitProject(act);
     });
     document.addEventListener("keydown", reviewKey);
     // A table's filter box: one listener for every table.
